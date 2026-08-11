@@ -1,0 +1,33 @@
+# internal planning docs — never public
+docs/build/
+docs/research/
+docs/summary/
+
+# assistant/agent files
+CLAUDE.md
+AGENTS.md
+.claude/
+.mcp.json
+*.claude.md
+
+# environment / secrets
+.env
+.env.*
+!.env.example
+
+# build output
+server/web/dist/*
+!server/web/dist/index.html
+server/drive
+dist/
+node_modules/
+
+# test artifacts
+e2e/fixtures/
+playwright-report/
+test-results/
+coverage/
+*.log
+
+# OS
+.DS_Store
