@@ -16,7 +16,7 @@ export PATH := /opt/homebrew/bin:$(PATH)
 DEV_STACK  := docker compose -p drive --env-file .env
 TEST_STACK := docker compose -p drive-test --env-file .env.test
 
-.PHONY: doctor infra-init infra-init-test dev seed test test-big test-50g e2e \
+.PHONY: doctor infra-init infra-init-test dev seed seed-test test test-big test-50g e2e \
 	build token verify-public spike up down up-test down-test
 
 ## -- stack lifecycle --------------------------------------------------------
@@ -73,13 +73,16 @@ build:
 
 ## -- tests --------------------------------------------------------------
 
+# -p 1: every DB-backed package points at the same drive-test Postgres, and the
+# seed and integration packages reset the schema. Running package tests in
+# parallel tears the schema out from under the others mid-query.
 test: infra-init-test
-	@set -a; . ./.env.test; set +a; go test ./server/...
+	@set -a; . ./.env.test; set +a; go test -p 1 -count=1 ./server/...
 
 e2e: infra-init-test build
 	$(TEST_STACK) exec -T postgres \
 		psql -U drive -d drive -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'
-	$(MAKE) seed
+	$(MAKE) seed-test
 	@set -a; . ./.env.test; set +a; \
 	base="http://localhost$${DRIVE_ADDR}"; \
 	DRIVE_PART_SIZE=10MiB ./server/drive & \
@@ -93,8 +96,12 @@ e2e: infra-init-test build
 	if [ "$$healthy" -ne 1 ]; then echo "e2e: server did not become healthy at $$base within 60s" >&2; exit 1; fi; \
 	cd e2e && E2E_BASE_URL="$$base" npx playwright test --project=chromium --workers=1 --retries=0
 
+# Idempotent: a second run is a no-op once the users exist.
 seed:
-	@echo "make seed: not implemented until Phase 1" >&2; exit 1
+	go run ./server/cmd/seed -env-file .env
+
+seed-test:
+	go run ./server/cmd/seed -env-file .env.test
 
 test-big:
 	@echo "make test-big: not implemented until Phase 2" >&2; exit 1

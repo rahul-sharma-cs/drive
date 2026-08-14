@@ -1,0 +1,306 @@
+// Package api is Drive's HTTP surface: the router, the shared request/response
+// helpers every handler uses, and the middleware chain that authenticates them.
+//
+// The helpers below are the frozen internal contract between the phase's
+// feature files (auth, nodes, trash, search, later uploads and shares). Handlers
+// use them rather than writing JSON by hand, so the wire format stays uniform:
+// snake_case bodies, RFC3339 timestamps, one error envelope, one list envelope.
+package api
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/rahul-sharma-cs/drive/server/internal/config"
+	"github.com/rahul-sharma-cs/drive/server/internal/mail"
+	"github.com/rahul-sharma-cs/drive/server/web"
+)
+
+// Canonical error codes. These are the only values that appear in an error
+// envelope's "code" for a 4xx; the client's state machine switches on them.
+const (
+	CodeInvalid        = "invalid"
+	CodeUnauthorized   = "unauthorized"
+	CodeNotFound       = "not_found"
+	CodeNameConflict   = "name_conflict"
+	CodeCycle          = "cycle"
+	CodeRateLimited    = "rate_limited"
+	CodeSessionExpired = "session_expired"
+	CodeInProgress     = "in_progress"
+	CodeUnsupported    = "unsupported"
+
+	// CodeInternal is the one code outside the canonical list: it is reserved
+	// for 5xx responses (panics), which no client decision depends on.
+	CodeInternal = "internal"
+)
+
+// maxBodyBytes caps every JSON request body.
+const maxBodyBytes = 1 << 20 // 1 MiB
+
+// Pagination bounds for ?cursor=&limit=.
+const (
+	DefaultLimit = 50
+	MaxLimit     = 200
+)
+
+var (
+	// ErrBadJSON is what ReadJSON returns for anything it could not decode;
+	// handlers turn it into 422 {code:"invalid"}.
+	ErrBadJSON = errors.New("malformed JSON body")
+	// ErrBadCursor is returned by DecodeCursor and Page for an opaque cursor
+	// that is not one of ours.
+	ErrBadCursor = errors.New("invalid cursor")
+)
+
+// Server carries everything a handler needs. One instance per process.
+type Server struct {
+	Cfg     *config.Config
+	DB      *pgxpool.Pool
+	Log     *slog.Logger
+	Mail    mail.Sender
+	S3      *s3.Client
+	Presign *s3.PresignClient
+}
+
+// New builds the server. Dependencies are passed in rather than constructed so
+// tests can supply exactly the ones a case touches.
+func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, sender mail.Sender, s3c *s3.Client, presign *s3.PresignClient) *Server {
+	return &Server{Cfg: cfg, DB: pool, Log: log, Mail: sender, S3: s3c, Presign: presign}
+}
+
+// Routes builds the whole handler tree.
+//
+// Chain order is fixed: request id, then the slog request logger (so every
+// line carries request_id), then panic recovery, then -- inside /api only --
+// the X-Drive-Client check and the session loader. The session loader does not
+// reject anonymous requests; RequireAuth does, which is what lets the public
+// share routes share this chain.
+func (s *Server) Routes() http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(s.requestLogger)
+	r.Use(s.recoverer)
+
+	r.Get("/healthz", s.healthz)
+
+	r.Route("/api", func(r chi.Router) {
+		r.Use(RequireClientHeader)
+		r.Use(s.sessionLoader)
+
+		s.mountAuth(r)
+		s.mountNodes(r)
+		s.mountTrash(r)
+		s.mountSearch(r)
+
+		// Unmatched /api paths answer with the JSON envelope, never the SPA.
+		// This is also what keeps the chain above alive: chi skips a mux's
+		// middleware entirely when the mux has no routes at all, and the
+		// feature files register theirs later.
+		unmatched := func(w http.ResponseWriter, r *http.Request) {
+			WriteErr(w, r, http.StatusNotFound, CodeNotFound, "no such endpoint")
+		}
+		r.Handle("/*", http.HandlerFunc(unmatched))
+		r.NotFound(unmatched)
+		r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+			WriteErr(w, r, http.StatusMethodNotAllowed, CodeInvalid, "method not allowed")
+		})
+	})
+
+	// Everything else is the SPA.
+	r.NotFound(s.spaHandler())
+	r.MethodNotAllowed(s.spaHandler())
+
+	return r
+}
+
+// healthz is the readiness probe make e2e and the integration harness wait on.
+// It is unauthenticated and deliberately not under /api.
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	if s.DB == nil {
+		http.Error(w, "no database", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.DB.Ping(ctx); err != nil {
+		LoggerFrom(r.Context()).Warn("healthz: database unreachable", "error", err)
+		http.Error(w, "database unreachable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok\n"))
+}
+
+// spaHandler serves the embedded SPA, falling back to index.html so client-side
+// routes (/s/{token}, /verify, ...) resolve on a hard refresh.
+func (s *Server) spaHandler() http.HandlerFunc {
+	dist, err := fs.Sub(web.Dist, "dist")
+	if err != nil {
+		panic(fmt.Sprintf("embedded SPA: %v", err))
+	}
+	files := http.FileServer(http.FS(dist))
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			WriteErr(w, r, http.StatusNotFound, CodeNotFound, "not found")
+			return
+		}
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		if name == "" {
+			name = "index.html"
+		}
+		if _, err := fs.Stat(dist, name); err != nil {
+			r = r.Clone(r.Context())
+			r.URL.Path = "/"
+		}
+		files.ServeHTTP(w, r)
+	}
+}
+
+// ---------------------------------------------------------------- responses --
+
+// WriteJSON writes v as the response body with the given status.
+func WriteJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	if v == nil {
+		return
+	}
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Default().Error("writing response body", "error", err)
+	}
+}
+
+// ErrorBody is the error envelope: {code, message, details?}.
+type ErrorBody struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Details any    `json:"details,omitempty"`
+}
+
+// WriteErr writes the canonical error envelope.
+func WriteErr(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+	WriteErrDetails(w, r, status, code, msg, nil)
+}
+
+// WriteErrDetails writes the error envelope with a details payload.
+func WriteErrDetails(w http.ResponseWriter, r *http.Request, status int, code, msg string, details any) {
+	if status >= http.StatusInternalServerError {
+		LoggerFrom(r.Context()).Error("request failed", "status", status, "code", code, "message", msg)
+	} else {
+		LoggerFrom(r.Context()).Debug("request rejected", "status", status, "code", code, "message", msg)
+	}
+	WriteJSON(w, status, ErrorBody{Code: code, Message: msg, Details: details})
+}
+
+// List is the list envelope: {"items": [...], "next_cursor": string|null}.
+type List[T any] struct {
+	Items      []T     `json:"items"`
+	NextCursor *string `json:"next_cursor"`
+}
+
+// NewList builds a list envelope, guaranteeing items serializes as [] and not
+// null, and next_cursor as null when there is no further page.
+func NewList[T any](items []T, next string) List[T] {
+	if items == nil {
+		items = []T{}
+	}
+	l := List[T]{Items: items}
+	if next != "" {
+		l.NextCursor = &next
+	}
+	return l
+}
+
+// NodeDTO is the canonical node shape on the wire. Folders carry size null.
+type NodeDTO struct {
+	ID          uuid.UUID  `json:"id"`
+	ParentID    *uuid.UUID `json:"parent_id"`
+	Kind        string     `json:"kind"`
+	Name        string     `json:"name"`
+	Size        *int64     `json:"size"`
+	Mime        *string    `json:"mime"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	TrashedRoot bool       `json:"trashed_root,omitempty"`
+}
+
+// ----------------------------------------------------------------- requests --
+
+// ReadJSON decodes the request body into dst under a 1 MiB cap, rejecting
+// unknown fields and trailing content.
+func ReadJSON(r *http.Request, dst any) error {
+	// A nil ResponseWriter is fine here: MaxBytesReader only uses it to hint
+	// the server that the request was too large, and we answer with our own
+	// envelope anyway.
+	limited := http.MaxBytesReader(nil, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(limited)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return fmt.Errorf("%w: %v", ErrBadJSON, err)
+	}
+	if err := dec.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: unexpected trailing content", ErrBadJSON)
+	}
+	return nil
+}
+
+// Page reads the standard list parameters: an opaque cursor and a limit that
+// defaults to 50 and is clamped at 200.
+func Page(r *http.Request) (cursor string, limit int, err error) {
+	q := r.URL.Query()
+	cursor = q.Get("cursor")
+	limit = DefaultLimit
+
+	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+		n, convErr := strconv.Atoi(raw)
+		if convErr != nil || n < 1 {
+			return "", 0, fmt.Errorf("limit: want a positive integer, got %q", raw)
+		}
+		limit = min(n, MaxLimit)
+	}
+	return cursor, limit, nil
+}
+
+// EncodeCursor packs v into an opaque pagination cursor.
+func EncodeCursor(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		slog.Default().Error("encoding cursor", "error", err)
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// DecodeCursor unpacks a cursor produced by EncodeCursor. Anything else -- a
+// truncated string, a hand-edited one, JSON of the wrong shape -- is
+// ErrBadCursor, which handlers report as 422 {code:"invalid"}.
+func DecodeCursor(s string, dst any) error {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return fmt.Errorf("%w: not base64url", ErrBadCursor)
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return fmt.Errorf("%w: %v", ErrBadCursor, err)
+	}
+	return nil
+}

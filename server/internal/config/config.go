@@ -5,12 +5,20 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// dialTimeout bounds every boot-time reachability probe.
+const dialTimeout = 5 * time.Second
 
 const (
 	KiB int64 = 1 << 10
@@ -98,9 +106,77 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("DRIVE_PART_SIZE: %d is not a multiple of Garage's 10MiB block size", c.PartSize)
 	}
 
-	// Phase 1: connectivity + ownership checks — DB reachable and identified as
-	// ours via the goose_db_version marker (a non-empty database without it
-	// aborts), S3 endpoint reachable, SMTP reachable.
+	return nil
+}
+
+// ValidateRuntime checks that the services the config points at are actually
+// reachable, naming the offending variable. It is separate from Validate so
+// pure-value tests stay fast and offline.
+//
+// The "is this our database" check is not here: it is goose's marker table, and
+// it lives in internal/db next to the migration run it guards.
+func (c *Config) ValidateRuntime(ctx context.Context) error {
+	if err := dialDSN(ctx, c.DBDSN); err != nil {
+		return fmt.Errorf("DRIVE_DB_DSN: %w", err)
+	}
+	if err := reachHTTP(ctx, c.S3Endpoint); err != nil {
+		return fmt.Errorf("DRIVE_S3_ENDPOINT: %w", err)
+	}
+	if err := dialTCP(ctx, c.SMTPAddr); err != nil {
+		return fmt.Errorf("DRIVE_SMTP_ADDR: %w", err)
+	}
+	return nil
+}
+
+// dialDSN opens a TCP connection to the Postgres host in the DSN. It proves
+// reachability without pulling a driver into this package; internal/db does the
+// real connect and ping right after.
+func dialDSN(ctx context.Context, dsn string) error {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return fmt.Errorf("not a valid connection URL: %w", err)
+	}
+	host := u.Host
+	if host == "" {
+		return fmt.Errorf("no host in %q", dsn)
+	}
+	if u.Port() == "" {
+		host = net.JoinHostPort(host, "5432")
+	}
+	return dialTCP(ctx, host)
+}
+
+func dialTCP(ctx context.Context, addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("not a host:port address: %w", err)
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	d := net.Dialer{Timeout: dialTimeout}
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	if err != nil {
+		return fmt.Errorf("unreachable: %w", err)
+	}
+	return conn.Close()
+}
+
+// reachHTTP proves the S3 endpoint answers. Garage replies 403 to an
+// unauthenticated GET /, which is a perfectly good sign of life -- any HTTP
+// status counts, only a transport failure does not.
+func reachHTTP(ctx context.Context, endpoint string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("not a valid URL: %w", err)
+	}
+	client := &http.Client{Timeout: dialTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
 	return nil
 }
 
