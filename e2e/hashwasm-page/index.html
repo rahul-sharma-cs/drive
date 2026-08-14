@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>hash-wasm worker viability</title>
+</head>
+<body>
+<p>hash-wasm worker viability harness — driven by e2e/tests/hashwasm.spec.ts</p>
+<script>
+// The main thread deliberately never imports hash-wasm: the only place the WASM
+// can instantiate is inside the Worker script this page spawns.
+window.__hashRun = async (script, chunkSize) => {
+  const res = await fetch('/fixture.bin');
+  if (!res.ok) throw new Error('fixture fetch failed: ' + res.status);
+  const blob = await res.blob();
+  const worker = new Worker(script);
+  const started = performance.now();
+  try {
+    const msg = await new Promise((resolve, reject) => {
+      worker.onerror = (e) => reject(new Error('worker error event: ' + (e.message || 'unknown')));
+      worker.onmessage = (e) => {
+        if (e.data && e.data.kind === 'error') reject(new Error(e.data.message));
+        else resolve(e.data);
+      };
+      worker.postMessage({ kind: 'hash', id: 1, blob, start: 0, end: blob.size, chunk_size: chunkSize });
+    });
+    return { ...msg, blob_size: blob.size, ms: Math.round(performance.now() - started) };
+  } finally {
+    worker.terminate();
+  }
+};
+</script>
+</body>
+</html>
