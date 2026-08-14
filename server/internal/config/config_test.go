@@ -1,0 +1,137 @@
+package config
+
+import "testing"
+
+func TestParseSize(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    int64
+		wantErr bool
+	}{
+		{in: "100MiB", want: 100 * MiB},
+		{in: "10MiB", want: 10 * MiB},
+		{in: "10mib", want: 10 * MiB},
+		{in: " 10 MiB ", want: 10 * MiB},
+		{in: "104857600", want: 100 * MiB},
+		{in: "512KiB", want: 512 * KiB},
+		{in: "2GiB", want: 2 * GiB},
+		{in: "0", want: 0},
+		{in: "", wantErr: true},
+		{in: "10MB", wantErr: true},
+		{in: "abc", wantErr: true},
+		{in: "-5MiB", wantErr: true},
+	}
+	for _, c := range cases {
+		got, err := ParseSize(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("ParseSize(%q) = %d, want error", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseSize(%q): unexpected error: %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("ParseSize(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+func TestValidatePartSize(t *testing.T) {
+	cases := []struct {
+		size int64
+		ok   bool
+	}{
+		{size: 10 * MiB, ok: true},
+		{size: 100 * MiB, ok: true},
+		{size: 5 * MiB, ok: false},  // meets the S3 floor, not a 10MiB multiple
+		{size: 15 * MiB, ok: false}, // not a 10MiB multiple
+		{size: 1 * MiB, ok: false},  // below the S3 floor
+		{size: 0, ok: false},
+	}
+	for _, c := range cases {
+		cfg := validConfig()
+		cfg.PartSize = c.size
+		err := cfg.Validate()
+		if c.ok && err != nil {
+			t.Errorf("Validate() with part size %d: unexpected error: %v", c.size, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("Validate() with part size %d: want error, got nil", c.size)
+		}
+	}
+}
+
+func TestValidateRequiredValues(t *testing.T) {
+	blank := func(c *Config) *Config { return c }
+	cases := []struct {
+		name string
+		mut  func(*Config) *Config
+	}{
+		{"DRIVE_ADDR", func(c *Config) *Config { c.Addr = ""; return c }},
+		{"DRIVE_BASE_URL", func(c *Config) *Config { c.BaseURL = ""; return c }},
+		{"DRIVE_DB_DSN", func(c *Config) *Config { c.DBDSN = ""; return c }},
+		{"DRIVE_S3_ENDPOINT", func(c *Config) *Config { c.S3Endpoint = ""; return c }},
+		{"DRIVE_S3_BUCKET", func(c *Config) *Config { c.S3Bucket = ""; return c }},
+	}
+	for _, c := range cases {
+		if err := c.mut(validConfig()).Validate(); err == nil {
+			t.Errorf("Validate() with empty %s: want error, got nil", c.name)
+		}
+	}
+	if err := blank(validConfig()).Validate(); err != nil {
+		t.Errorf("Validate() on a valid config: unexpected error: %v", err)
+	}
+}
+
+func TestLoadDefaults(t *testing.T) {
+	// An empty value falls back to the default, so this isolates the test from
+	// whatever the developer's shell exports.
+	for _, k := range []string{"DRIVE_ADDR", "DRIVE_BASE_URL", "DRIVE_DB_DSN", "DRIVE_S3_ENDPOINT",
+		"DRIVE_S3_BUCKET", "DRIVE_SMTP_ADDR", "DRIVE_MAILPIT_API", "DRIVE_PART_SIZE",
+		"DRIVE_PRESIGN_TTL", "DRIVE_TOKEN_PRESIGN_TTL"} {
+		t.Setenv(k, "")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if cfg.PartSize != 100*MiB {
+		t.Errorf("default part size = %d, want %d", cfg.PartSize, 100*MiB)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("defaults must validate: %v", err)
+	}
+}
+
+func TestLoadPartSizeFromEnv(t *testing.T) {
+	t.Setenv("DRIVE_PART_SIZE", "10MiB")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if cfg.PartSize != 10*MiB {
+		t.Errorf("part size = %d, want %d", cfg.PartSize, 10*MiB)
+	}
+
+	t.Setenv("DRIVE_PART_SIZE", "nonsense")
+	if _, err := Load(); err == nil {
+		t.Error("Load() with a bad DRIVE_PART_SIZE: want error, got nil")
+	}
+}
+
+func validConfig() *Config {
+	return &Config{
+		Addr:       ":8080",
+		BaseURL:    "http://localhost:8080",
+		DBDSN:      "postgres://drive:drive@localhost:55432/drive?sslmode=disable",
+		S3Endpoint: "http://localhost:3900",
+		S3Bucket:   "drive-blobs",
+		SMTPAddr:   "localhost:1025",
+		MailpitAPI: "http://localhost:8025",
+		PartSize:   100 * MiB,
+	}
+}

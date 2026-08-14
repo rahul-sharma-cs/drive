@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Drive day-0 spike</title>
+<style>
+  body { font: 14px ui-monospace, Menlo, monospace; margin: 24px; }
+  #dropzone { width: 420px; height: 160px; border: 2px dashed #888; display: grid;
+              place-items: center; margin: 16px 0; color: #555; }
+  pre { background: #f5f5f5; padding: 12px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Drive day-0 spike</h1>
+<div id="dropzone">drop zone</div>
+<pre id="log">idle</pre>
+
+<script>
+// Written by the Go spike harness before Playwright loads this page.
+// Everything here runs in a real page origin (http://localhost:5173) so the
+// presigned PUTs exercise the actual CORS path the upload engine will use.
+
+const logEl = document.getElementById('log');
+function say(s) { logEl.textContent += '\n' + s; }
+
+/** Normalize an S3/Garage ETag exactly as the upload engine must:
+ *  strip a weak-validator prefix, strip surrounding quotes, lowercase. */
+function normalizeETag(raw) {
+  if (raw === null || raw === undefined) return null;
+  return raw.trim().replace(/^W\//, '').replace(/^"/, '').replace(/"$/, '').toLowerCase();
+}
+
+function putPart(part, bytes) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', part.url, true);
+    // One part deliberately carries an explicit Content-Type: that forces a CORS
+    // preflight, which only passes if the bucket rule has AllowedHeaders ["*"].
+    if (part.content_type) xhr.setRequestHeader('Content-Type', part.content_type);
+    xhr.onload = () => {
+      const raw = xhr.getResponseHeader('ETag');
+      const norm = normalizeETag(raw);
+      resolve({
+        part_number: part.part_number,
+        status: xhr.status,
+        sent_content_type: part.content_type || null,
+        etag_raw: raw,
+        etag_readable: raw !== null,
+        etag_normalized: norm,
+        md5_expected: part.md5,
+        md5_match: norm !== null && norm === part.md5,
+        ms: Math.round(performance.now() - started),
+        error: null,
+      });
+    };
+    xhr.onerror = () => resolve({
+      part_number: part.part_number,
+      status: xhr.status || 0,
+      sent_content_type: part.content_type || null,
+      etag_raw: null, etag_readable: false, etag_normalized: null,
+      md5_expected: part.md5, md5_match: false,
+      ms: Math.round(performance.now() - started),
+      error: 'network or CORS failure (xhr.onerror)',
+    });
+    xhr.send(new Uint8Array(bytes));
+  });
+}
+
+async function run() {
+  logEl.textContent = 'running';
+  const out = { parts: [], fatal: null };
+  try {
+    const manifest = await (await fetch('manifest.json', { cache: 'no-store' })).json();
+    for (const part of manifest.parts) {
+      const bytes = await (await fetch(part.file, { cache: 'no-store' })).arrayBuffer();
+      say('PUT part ' + part.part_number + ' (' + bytes.byteLength + ' bytes'
+          + (part.content_type ? ', Content-Type: ' + part.content_type : '') + ')');
+      const r = await putPart(part, bytes);
+      say('  -> status=' + r.status + ' etag=' + r.etag_raw + ' md5_match=' + r.md5_match
+          + (r.error ? ' ERROR=' + r.error : ''));
+      out.parts.push(r);
+    }
+  } catch (e) {
+    out.fatal = String(e && e.stack || e);
+    say('FATAL ' + out.fatal);
+  }
+  window.__SPIKE_PUT_RESULTS__ = out;
+  say('done');
+  return out;
+}
+window.__spikeRun = run;
+
+// ---- CDP folder-drop viability probe -------------------------------------
+// PLAN §Testing 1: if a synthesized drop yields file entries (or nothing)
+// instead of a directory entry, that IS the webkitdirectory fallback trigger.
+// The handler collects entries SYNCHRONOUSLY before any await, per the
+// traverse contract, and drains readEntries() until an empty batch.
+const dz = document.getElementById('dropzone');
+['dragenter', 'dragover'].forEach((t) =>
+  dz.addEventListener(t, (e) => { e.preventDefault(); e.stopPropagation(); }));
+
+dz.addEventListener('drop', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  const dt = e.dataTransfer;
+  // Synchronous collection — DataTransferItems invalidate once the handler yields.
+  const entries = [];
+  const itemKinds = [];
+  if (dt && dt.items) {
+    for (const item of dt.items) {
+      itemKinds.push(item.kind);
+      const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+      if (entry) entries.push(entry);
+    }
+  }
+  const fileCount = dt && dt.files ? dt.files.length : 0;
+
+  (async () => {
+    const result = {
+      item_kinds: itemKinds,
+      dt_file_count: fileCount,
+      entry_count: entries.length,
+      entry_kinds: entries.map((en) => (en.isDirectory ? 'directory' : 'file')),
+      entry_names: entries.map((en) => en.name),
+      directory_children: null,
+      read_entries_batches: null,
+      error: null,
+    };
+    try {
+      const dir = entries.find((en) => en.isDirectory);
+      if (dir) {
+        const reader = dir.createReader();
+        const names = [];
+        let batches = 0;
+        // Drain until an empty batch — Chromium caps each call at 100 entries.
+        for (;;) {
+          const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+          batches++;
+          if (!batch.length) break;
+          for (const c of batch) names.push(c.name);
+          if (batches > 200) break; // runaway guard
+        }
+        result.directory_children = names.length;
+        result.read_entries_batches = batches;
+      }
+    } catch (err) {
+      result.error = String(err && err.message || err);
+    }
+    window.__SPIKE_DROP_RESULT__ = result;
+    say('drop: ' + JSON.stringify(result));
+  })();
+});
+</script>
+</body>
+</html>

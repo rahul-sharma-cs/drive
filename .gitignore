@@ -14,13 +14,18 @@ AGENTS.md
 .env
 .env.*
 !.env.example
+!.env.test
 
 # build output
 server/web/dist/*
 !server/web/dist/index.html
 server/drive
-dist/
+server/drive-mcp
 node_modules/
+
+# day-0 spike fixtures (index.html is committed; the rest is generated)
+server/cmd/spike/public/*.bin
+server/cmd/spike/public/manifest.json
 
 # test artifacts
 e2e/fixtures/

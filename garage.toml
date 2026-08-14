@@ -1,0 +1,18 @@
+metadata_dir = "/var/lib/garage/meta"
+data_dir     = "/var/lib/garage/data"
+db_engine    = "lmdb"
+metadata_auto_snapshot_interval = "6h"   # LMDB power-loss caveat mitigation
+
+replication_factor = 1
+block_size = "10MiB"        # parts must be a multiple of this
+compression_level = 1        # zstd; collapses sparse zeros in the 50 GB test
+
+rpc_bind_addr   = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+# rpc_secret intentionally absent — supplied via GARAGE_RPC_SECRET from .env
+# (fallback if the env var is rejected at spike time: rpc_secret_file bind-mounted from a gitignored path)
+
+[s3_api]
+api_bind_addr = "[::]:3900"
+s3_region     = "garage"     # MUST match the Go SDK Region
+root_domain   = ".s3.garage.localhost"
