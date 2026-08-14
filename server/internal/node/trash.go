@@ -222,14 +222,21 @@ func (s *Store) Purge(ctx context.Context, ownerID, id uuid.UUID) error {
 		return fmt.Errorf("purging node: %w", err)
 	}
 
-	// Upload sessions still aiming at a folder that is about to vanish are
-	// aborted; their multiparts fall to the GC sweep. This has to run before
-	// the delete, while parent_id still points at the purged rows.
-	if _, err := tx.Exec(ctx,
-		`UPDATE upload_sessions SET status = 'aborted', updated_at = now()
-		  WHERE status = 'active' AND parent_id = ANY($1)`, ids); err != nil {
-		return fmt.Errorf("purging node: aborting upload sessions: %w", err)
-	}
+	// Upload sessions aiming at a folder that is about to vanish are LEFT ACTIVE
+	// on purpose. The FK on upload_sessions.parent_id is ON DELETE SET NULL, so
+	// the delete below nulls their destination, and finalize's destination
+	// re-verification then re-parents the finished file to the owner's root.
+	//
+	// PLAN contradicts itself here: §FK ON DELETE says purge "marks active
+	// sessions targeting a purged parent aborted", but §Complete, the frozen
+	// Appendix ("parent_id included when re-parented to root") and §Testing 3's
+	// battery case ("purge the destination folder mid-session -> complete
+	// re-parents to root") all require the session to SURVIVE. Aborting it makes
+	// complete answer 410 and throws away a fully uploaded file. Three
+	// requirements against one housekeeping clause: the file wins.
+	//
+	// Abandonment is still handled -- a session nobody completes hits its
+	// sliding expires_at and the GC sweep aborts it and reaps the multipart.
 
 	// One decrement per referencing node, so two nodes sharing a blob take it
 	// down by two. Never below zero, and never a DeleteObject.

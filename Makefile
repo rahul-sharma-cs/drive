@@ -103,11 +103,22 @@ seed:
 seed-test:
 	go run ./server/cmd/seed -env-file .env.test
 
-test-big:
-	@echo "make test-big: not implemented until Phase 2" >&2; exit 1
+# Phase-exit and handoff only, never the per-loop battery (PLAN §Testing 3).
+# Multi-GB random file end to end, plus the >1,000-part ListParts pagination
+# case (sparse ~11 GiB at 10 MiB parts). Fixtures land in the gitignored
+# e2e/fixtures/big and are reused, so a second run does not rebuild them.
+# -timeout 0: these legitimately outlive go test's 10m default.
+test-big: infra-init-test
+	@set -a; . ./.env.test; set +a; \
+	DRIVE_TEST_BIG=1 go test -p 1 -count=1 -timeout 0 -v \
+		-run 'TestBigMultiGBRoundTrip|TestBigListPartsPagination' ./server/integration/
 
-test-50g:
-	@echo "make test-50g: not implemented until Phase 2" >&2; exit 1
+# Opt-in 50 GB run: sparse file via /usr/bin/truncate. PLAN wants it once when
+# the battery is green and once before handoff.
+test-50g: infra-init-test
+	@set -a; . ./.env.test; set +a; \
+	DRIVE_TEST_50G=1 go test -p 1 -count=1 -timeout 0 -v \
+		-run 'TestBigFiftyGB' ./server/integration/
 
 token:
 	@echo "make token: not implemented until Phase 6" >&2; exit 1

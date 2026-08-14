@@ -107,6 +107,8 @@ func (s *Server) Routes() http.Handler {
 		s.mountNodes(r)
 		s.mountTrash(r)
 		s.mountSearch(r)
+		s.mountUploads(r)
+		s.mountUploadComplete(r)
 
 		// Unmatched /api paths answer with the JSON envelope, never the SPA.
 		// This is also what keeps the chain above alive: chi skips a mux's

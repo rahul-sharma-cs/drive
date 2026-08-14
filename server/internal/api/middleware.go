@@ -166,12 +166,19 @@ func (s *Server) sessionLoader(next http.Handler) http.Handler {
 		if err := s.DB.QueryRow(ctx, q, sum[:]).Scan(
 			&sessionID, &u.ID, &u.Email, &u.DisplayName, &u.EmailVerifiedAt, &rootID,
 		); err != nil {
-			// Either way the request continues anonymously, but only one of
-			// these is normal: an infrastructure failure that logs users out
-			// must be visible in the request log.
 			if !errors.Is(err, pgx.ErrNoRows) {
-				LoggerFrom(ctx).Warn("session lookup failed", "error", err)
+				// The cookie may be perfectly good; we simply could not look it
+				// up. Continuing anonymously turns that into a 401 at
+				// RequireAuth, and 401 means "your credentials are bad" -- a
+				// terminal answer neither client retries, which ends a 50 GB
+				// upload with no recovery path over a transient database
+				// hiccup. 503 says try again, which is the truth.
+				LoggerFrom(ctx).Error("session lookup failed", "error", err)
+				WriteErr(w, r, http.StatusServiceUnavailable, CodeInternal, "internal server error")
+				return
 			}
+			// No such session: a signed-out or stale cookie. The request
+			// continues anonymously; RequireAuth is what refuses it.
 			next.ServeHTTP(w, r)
 			return
 		}

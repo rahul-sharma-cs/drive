@@ -460,9 +460,15 @@ func TestPurgeDeletesTheNodesShares(t *testing.T) {
 	}
 }
 
-// An upload still aiming at a folder that just vanished is aborted, so the GC
-// sweep can clean its multipart up.
-func TestPurgeAbortsUploadSessionsAimedIntoTheSubtree(t *testing.T) {
+// An upload still aiming at a folder that just vanished SURVIVES the purge with
+// its destination nulled, so a complete that lands afterwards can re-parent the
+// finished file to the owner's root instead of throwing it away.
+//
+// This is the resolution of a PLAN contradiction: §FK ON DELETE asked for the
+// session to be aborted, but §Complete, the frozen Appendix and §Testing 3's
+// battery case all require it to survive. Aborting cost the user a fully
+// uploaded file; abandonment is handled by the GC's expiry sweep instead.
+func TestPurgeLeavesUploadSessionsActiveWithDestinationNulled(t *testing.T) {
 	f := newFixture(t)
 	a := f.folder(f.root, "A")
 	b := f.folder(a, "B")
@@ -486,12 +492,17 @@ func TestPurgeAbortsUploadSessionsAimedIntoTheSubtree(t *testing.T) {
 	}
 
 	var status string
+	var parentID *uuid.UUID
 	if err := f.pool.QueryRow(f.ctx,
-		`SELECT status FROM upload_sessions WHERE id = $1`, sessionID).Scan(&status); err != nil {
+		`SELECT status, parent_id FROM upload_sessions WHERE id = $1`, sessionID).
+		Scan(&status, &parentID); err != nil {
 		t.Fatalf("reading upload session: %v", err)
 	}
-	if status != "aborted" {
-		t.Errorf("upload session status = %q, want %q", status, "aborted")
+	if status != "active" {
+		t.Errorf("upload session status = %q, want %q -- aborting it makes complete answer 410 and discards a fully uploaded file", status, "active")
+	}
+	if parentID != nil {
+		t.Errorf("upload session parent_id = %v, want NULL (the FK is ON DELETE SET NULL; finalize re-parents to root off exactly this)", *parentID)
 	}
 }
 

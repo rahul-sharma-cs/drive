@@ -679,3 +679,47 @@ func TestVerificationMailIsCappedPerAddress(t *testing.T) {
 		t.Errorf("%d users created, want 1", users)
 	}
 }
+
+// ------------------------------------------------- session loader failures --
+
+// TestSessionLoaderDBFailureIsRetryable pins the difference between "we do not
+// know who you are" and "we could not find out".
+//
+// sessionLoader used to treat every error from the session query as "no user",
+// so a transient database error reached the client as 401 unauthorized. Neither
+// client retries a 401 -- it means the credentials are bad -- so one hiccup
+// during a 50 GB upload ends it with no recovery path. The answer has to be a
+// retryable 5xx.
+func TestSessionLoaderDBFailureIsRetryable(t *testing.T) {
+	// A pool of this suite's own, closed on purpose: every query through it
+	// fails at acquire time, which is what an unreachable database looks like
+	// from inside a handler. The shared pool must not be touched -- closing it
+	// would take the rest of the package down with it.
+	broken, err := db.Connect(context.Background(), authTestDSN)
+	if err != nil {
+		t.Fatalf("drive-test database: %v", err)
+	}
+	broken.Close()
+
+	h := New(&config.Config{BaseURL: authTestBaseURL}, broken, nil, nil, nil, nil).Routes()
+
+	rec := authDo(t, h, http.MethodGet, "/api/auth/me", nil,
+		&http.Cookie{Name: SessionCookie, Value: "a-cookie-we-cannot-look-up"})
+
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatalf("a database failure answered 401 (body %s); 401 is terminal for both clients", rec.Body)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503 (body %s)", rec.Code, rec.Body)
+	}
+	if got := decodeErr(t, rec.Body.String()).Code; got != CodeInternal {
+		t.Errorf("code = %q, want %q", got, CodeInternal)
+	}
+
+	// An anonymous request is unaffected: no cookie, no lookup, no dependency on
+	// the database at this layer.
+	anon := authDo(t, h, http.MethodGet, "/api/auth/me", nil, nil)
+	if anon.Code != http.StatusUnauthorized {
+		t.Errorf("an anonymous request answered %d, want 401 (body %s)", anon.Code, anon.Body)
+	}
+}
