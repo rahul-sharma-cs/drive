@@ -36,7 +36,8 @@ function putPart(part, bytes) {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', part.url, true);
     // One part deliberately carries an explicit Content-Type: that forces a CORS
-    // preflight, which only passes if the bucket rule has AllowedHeaders ["*"].
+    // preflight, which passes only if the bucket rule allows that header.
+    // Enumerating it is enough — R2 accepts AllowedHeaders ["content-type"].
     if (part.content_type) xhr.setRequestHeader('Content-Type', part.content_type);
     xhr.onload = () => {
       const raw = xhr.getResponseHeader('ETag');

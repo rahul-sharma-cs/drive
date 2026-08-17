@@ -60,7 +60,8 @@ test('presigned part PUTs from a real page origin', async ({ page }) => {
         // Two rules merged into one header shows up either as a duplicated
         // header (CDP joins with \n) or as one comma-joined value.
         acao_value_count: acaoRaw === null ? 0 : acaoRaw.split(/[\n,]/).map((s) => s.trim()).filter(Boolean).length,
-        expose_headers: e.headers['access-control-expose-headers'] ?? null,
+        expose_headers: e.headers['access-control-expose-headers']
+          ?? e.headers['Access-Control-Expose-Headers'] ?? null,
       };
     });
 
@@ -84,7 +85,8 @@ test('presigned part PUTs from a real page origin', async ({ page }) => {
     expect(p.md5_match, `part ${p.part_number} normalized ETag == client MD5`).toBe(true);
   }
   // A part sent with an explicit Content-Type must have gone through a preflight
-  // and still succeeded — that is the AllowedHeaders ["*"] proof.
+  // and still succeeded — the proof that the rule's AllowedHeaders covers what
+  // the engine sends. Enumerating "content-type" suffices; no wildcard needed.
   expect(put.parts.some((p: any) => p.sent_content_type !== null && p.status === 200)).toBe(true);
 
   // The two-rule CORS workaround: every CORS response carries exactly one origin.

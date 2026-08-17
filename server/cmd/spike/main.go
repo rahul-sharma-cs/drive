@@ -1,10 +1,15 @@
 // Command spike is the day-0 spike (PLAN §Testing 1).
 //
 // It answers one question before any protocol code is written: can a browser
-// PUT presigned multipart parts straight into Garage, read the ETag back, and
-// can the server then reconcile and finalize that upload? A green run is the
-// "direct" verdict; a red run after the full triage order is what forces relay
-// mode.
+// PUT presigned multipart parts straight into the object store, read the ETag
+// back, and can the server then reconcile and finalize that upload? A green run
+// is the "direct" verdict; a red run after the full triage order is what forces
+// relay mode.
+//
+// It runs against whichever store the -env-file points at — Garage locally,
+// Cloudflare R2 with the deployment env file. Where the two answer differently
+// (Range-GET disposition overrides, expired-presign surface, upload-id
+// stability) the report records both rather than assuming either.
 //
 // It lives inside the server module on purpose: Go's internal-package rule
 // means a top-level e2e harness could never import internal/blob, and the whole
@@ -180,7 +185,9 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	parts := []manifestPart{
 		{PartNumber: 1, File: "part-1.bin", Size: part1Size, ContentType: ""},
 		// The final part carries an explicit Content-Type: that forces a CORS
-		// preflight, which only passes with AllowedHeaders ["*"].
+		// preflight, which passes only if the bucket rule allows that header.
+		// Enumerating it ("content-type") is enough — measured against R2 on
+		// 2026-08-17; the wildcard this comment used to demand was Garage-era.
 		{PartNumber: 2, File: "part-2.bin", Size: part2Size, ContentType: "application/octet-stream"},
 	}
 	var whole bytes.Buffer
@@ -623,7 +630,7 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	if len(rep.FailedNames) > 0 {
 		return fmt.Errorf("%d checks failed: %s", len(rep.FailedNames), strings.Join(rep.FailedNames, ", "))
 	}
-	fmt.Println("SPIKE GREEN — direct browser->Garage uploads are viable; relay fallback NOT required.")
+	fmt.Printf("SPIKE GREEN — direct browser->store uploads are viable against %s; relay fallback NOT required.\n", cfg.S3Endpoint)
 	fmt.Printf("report: %s\n", filepath.Join(outDir, "spike-report.json"))
 	return nil
 }
@@ -836,11 +843,10 @@ func fetch(url string, headers map[string]string) (*http.Response, []byte, error
 	return resp, body, err
 }
 
-// normalizeETag mirrors the upload engine: strip a weak prefix and surrounding
-// quotes, then lowercase. An unnormalized compare always fails.
-func normalizeETag(raw string) string {
-	return strings.ToLower(strings.Trim(strings.TrimPrefix(strings.TrimSpace(raw), "W/"), `"`))
-}
+// normalizeETag is the production function, not a copy of it: the point of
+// these checks is that what the store returns survives the normalizer the
+// server actually runs. An unnormalized compare always fails.
+func normalizeETag(raw string) string { return upload.NormalizeETag(raw) }
 
 // renderable reports whether a browser would render this Content-Type inline —
 // the thing that must never be true for user-supplied bytes on a shared origin.
