@@ -57,6 +57,8 @@ type Config struct {
 	PresignTTL      time.Duration
 	TokenPresignTTL time.Duration
 	LogLevel        string
+	Argon2Limit     int
+	AuthRatePerMin  int
 }
 
 // Load reads the configuration from the process environment.
@@ -85,6 +87,18 @@ func Load() (*Config, error) {
 	}
 
 	var err error
+	// How many Argon2 operations may run at once. Each holds 19 MiB, so this is
+	// a memory ceiling before it is a rate limit; tune it down on a small
+	// container rather than removing it.
+	if cfg.Argon2Limit, err = parseCount(env("DRIVE_ARGON2_LIMIT", "")); err != nil {
+		return nil, fmt.Errorf("DRIVE_ARGON2_LIMIT: %w", err)
+	}
+	// Requests per minute allowed on /api/auth from one client address; the
+	// burst is twice it. There is deliberately no value that turns the bucket
+	// off -- a suite that would trip it raises the number instead.
+	if cfg.AuthRatePerMin, err = parseCount(env("DRIVE_AUTH_RATE_PER_MIN", "")); err != nil {
+		return nil, fmt.Errorf("DRIVE_AUTH_RATE_PER_MIN: %w", err)
+	}
 	if cfg.PartSize, err = ParseSize(env("DRIVE_PART_SIZE", "100MiB")); err != nil {
 		return nil, fmt.Errorf("DRIVE_PART_SIZE: %w", err)
 	}
@@ -246,6 +260,24 @@ func ParseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid size %q: must not be negative", s)
 	}
 	return n * unit, nil
+}
+
+// parseCount reads a non-negative integer setting. An empty value is 0, which
+// every caller reads as "unset": a limit falls back to its own default and a cap
+// means unlimited. Which of the two is documented at each field.
+func parseCount(s string) (int, error) {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(t)
+	if err != nil {
+		return 0, fmt.Errorf("invalid count %q: want a non-negative integer", s)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("invalid count %q: must not be negative", s)
+	}
+	return n, nil
 }
 
 func env(key, fallback string) string {

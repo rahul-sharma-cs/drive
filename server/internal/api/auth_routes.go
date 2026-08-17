@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -42,6 +41,11 @@ const (
 
 func (s *Server) mountAuth(r chi.Router) {
 	r.Route("/auth", func(r chi.Router) {
+		// The per-IP bucket covers the whole auth surface, /me included: it is
+		// the only place an unauthenticated caller can reach Argon2 or the mail
+		// sender, and a limiter with a hole in it is a limiter with a hole in it.
+		r.Use(s.RateLimitAuth)
+
 		r.Post("/signup", s.authSignup)
 		r.Post("/verify-email", s.authVerifyEmail)
 		r.Post("/login", s.authLogin)
@@ -120,7 +124,15 @@ func (s *Server) authSignup(w http.ResponseWriter, r *http.Request) {
 
 	// Hash before the insert, unconditionally: the work happens for a taken
 	// address too, so response time says nothing either.
-	hash, err := auth.HashPassword(req.Password)
+	//
+	// Through the limiter, so a burst of signups cannot put more Argon2 work in
+	// flight than the process has memory for. Over the bound the answer is 429,
+	// before any database work.
+	hash, err := s.Argon2.Hash(req.Password)
+	if errors.Is(err, auth.ErrBusy) {
+		s.authBusy(w, r)
+		return
+	}
 	if err != nil {
 		s.authFailed(w, r, "hashing the password", err)
 		return
@@ -259,7 +271,11 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	if acct != nil {
 		stored = acct.PasswordHash
 	}
-	ok, err := auth.VerifyPassword(stored, req.Password)
+	ok, err := s.Argon2.Verify(stored, req.Password)
+	if errors.Is(err, auth.ErrBusy) {
+		s.authBusy(w, r)
+		return
+	}
 	if err != nil {
 		s.authFailed(w, r, "verifying the password", err)
 		return
@@ -281,7 +297,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, sess, err := auth.CreateSession(ctx, s.DB, acct.ID, clientIP(r), r.UserAgent())
+	raw, sess, err := auth.CreateSession(ctx, s.DB, acct.ID, ClientIP(r), r.UserAgent())
 	if err != nil {
 		s.authFailed(w, r, "creating the session", err)
 		return
@@ -445,14 +461,14 @@ var decoyHash = sync.OnceValue(func() string {
 	return h
 })
 
-// clientIP returns the peer address for the auth_sessions.ip column, or "" if
-// it is not a host:port we can read.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return ""
-	}
-	return host
+// authBusy refuses a request that could not get an Argon2 slot. It is a 429 and
+// not a 503 because it is a per-caller ceiling, not an outage: the right move is
+// to try again shortly, and the message says so.
+func (s *Server) authBusy(w http.ResponseWriter, r *http.Request) {
+	LoggerFrom(r.Context()).Warn("password work refused: every Argon2 slot is in use",
+		"client_ip", ClientIP(r), "path", r.URL.Path)
+	WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
+		"we are busy right now. Try again in a moment.")
 }
 
 // authFailed logs the real cause and tells the client nothing about it.

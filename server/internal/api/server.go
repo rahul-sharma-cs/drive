@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/rahul-sharma-cs/drive/server/internal/auth"
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 	"github.com/rahul-sharma-cs/drive/server/internal/mail"
 	"github.com/rahul-sharma-cs/drive/server/web"
@@ -76,12 +77,33 @@ type Server struct {
 	Mail    mail.Sender
 	S3      *s3.Client
 	Presign *s3.PresignClient
+
+	// Argon2 bounds how many password hashes or verifications run at once.
+	// Every handler that touches a password goes through it.
+	Argon2 *auth.Limiter
+	// AuthRate is the per-IP token bucket in front of /api/auth.
+	AuthRate *ipLimiter
 }
 
 // New builds the server. Dependencies are passed in rather than constructed so
 // tests can supply exactly the ones a case touches.
+//
+// The two limiters are built here rather than passed: they carry no external
+// dependency, they must be shared by every request in the process, and a test
+// that wants a saturated one can replace the field on the returned Server.
 func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, sender mail.Sender, s3c *s3.Client, presign *s3.PresignClient) *Server {
-	return &Server{Cfg: cfg, DB: pool, Log: log, Mail: sender, S3: s3c, Presign: presign}
+	argon2Limit, authRate := 0, 0
+	if cfg != nil {
+		argon2Limit, authRate = cfg.Argon2Limit, cfg.AuthRatePerMin
+	}
+	if authRate < 1 {
+		authRate = DefaultAuthRatePerMin
+	}
+	return &Server{
+		Cfg: cfg, DB: pool, Log: log, Mail: sender, S3: s3c, Presign: presign,
+		Argon2:   auth.NewLimiter(argon2Limit),
+		AuthRate: newIPLimiter(float64(authRate), burstFor(float64(authRate))),
+	}
 }
 
 // Routes builds the whole handler tree.
