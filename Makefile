@@ -178,7 +178,7 @@ verify-public:
 	else \
 		echo "PASS: no secret-shaped strings found in tracked files"; \
 	fi; \
-	leaked=$$(for f in .env .env.r2 .env.prod; do \
+	leaked=$$(for f in .env .env.r2 .env.prod .env.prod.account; do \
 		[ -f "$$f" ] || continue; \
 		sed -n 's/^[A-Za-z_][A-Za-z0-9_]*=//p' "$$f" \
 		| sed 's/^["'"'"']//; s/["'"'"']$$//' \
