@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -258,4 +259,47 @@ func truncate(b []byte) string {
 		return string(b[:200]) + "..."
 	}
 	return string(b)
+}
+
+// Stripping the overrides out of the signed URL must break it.
+//
+// This is the assertion the safety posture actually rests on: forcing the
+// disposition is worth nothing if whoever receives the redirect can delete the
+// query parameter and get the object served inline. The parameters are signed
+// inputs, so the store has to refuse -- but that is a property of the store's
+// SigV4 implementation, not of ours, which is why it is checked against a real
+// one rather than asserted from the URL's shape.
+func TestStrippingTheOverridesInvalidatesTheSignature(t *testing.T) {
+	p, _ := dlSetup(t)
+	key := putTestObject(t, []byte("<html>not a page</html>"))
+
+	signed, err := p.GetURL(context.Background(), key, "evil.html")
+	if err != nil {
+		t.Fatalf("presigning the download: %v", err)
+	}
+	u, err := url.Parse(signed.URL)
+	if err != nil {
+		t.Fatalf("the signed URL does not parse: %v", err)
+	}
+
+	for _, param := range []string{"response-content-disposition", "response-content-type"} {
+		t.Run("without "+param, func(t *testing.T) {
+			tampered := *u
+			q := tampered.Query()
+			if q.Get(param) == "" {
+				t.Fatalf("%s is not in the signed URL at all", param)
+			}
+			q.Del(param)
+			tampered.RawQuery = q.Encode()
+
+			resp, body := fetchDownload(t, tampered.String(), nil)
+			if resp.StatusCode == http.StatusOK {
+				t.Fatalf("the store served the object with %s removed (Content-Type %q, Content-Disposition %q)",
+					param, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Disposition"))
+			}
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("status %d, want 403 (body %q)", resp.StatusCode, truncate(body))
+			}
+		})
+	}
 }

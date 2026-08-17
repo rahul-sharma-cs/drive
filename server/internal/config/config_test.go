@@ -118,8 +118,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.PartSize != 100*MiB {
 		t.Errorf("default part size = %d, want %d", cfg.PartSize, 100*MiB)
 	}
-	if cfg.S3Region != DefaultS3Region {
-		t.Errorf("default signing region = %q, want %q", cfg.S3Region, DefaultS3Region)
+	// The signing region has no default on purpose: one would make the
+	// Validate requirement below unreachable, and a wrong region does not fail
+	// at boot -- it fails at the first CreateMultipartUpload, inside a user's
+	// upload. blob.New keeps its own fallback for hand-built Config literals.
+	if cfg.S3Region != "" {
+		t.Errorf("signing region = %q, want empty when the variable is unset", cfg.S3Region)
 	}
 	// An environment that sets nothing is a deployment, not a laptop: it gets
 	// the quiet log level, and the dev and test .env files ask for debug.
@@ -247,5 +251,38 @@ func TestValidateRuntimeProbesSMTPOnlyWhenSMTPIsTheSender(t *testing.T) {
 	cfg.ResendKey = "re_live_key"
 	if err := cfg.ValidateRuntime(ctx); err != nil {
 		t.Errorf("ValidateRuntime probed SMTP even though mail goes over Resend: %v", err)
+	}
+}
+
+// The signing-region requirement has to be reachable from a real Load(), not
+// only from a hand-built Config: a default in Load() would make it unreachable
+// in production while leaving the literal-fed table test green.
+func TestUnsetSigningRegionFailsValidationFromLoad(t *testing.T) {
+	t.Setenv("DRIVE_S3_ACCESS_KEY", "key")
+	t.Setenv("DRIVE_S3_SECRET_KEY", "secret")
+	t.Setenv("DRIVE_S3_REGION", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatal("a configuration loaded with no DRIVE_S3_REGION validated")
+	}
+	if !strings.Contains(err.Error(), "DRIVE_S3_REGION") {
+		t.Errorf("error = %q, want it to name DRIVE_S3_REGION", err)
+	}
+
+	t.Setenv("DRIVE_S3_REGION", "auto")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if cfg.S3Region != "auto" {
+		t.Errorf("signing region = %q, want auto", cfg.S3Region)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() with a region set: %v", err)
 	}
 }

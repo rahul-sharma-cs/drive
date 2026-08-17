@@ -178,6 +178,22 @@ verify-public:
 	else \
 		echo "PASS: no secret-shaped strings found in tracked files"; \
 	fi; \
+	leaked=$$(for f in .env .env.r2 .env.prod; do \
+		[ -f "$$f" ] || continue; \
+		sed -n 's/^[A-Za-z_][A-Za-z0-9_]*=//p' "$$f" \
+		| sed 's/^["'"'"']//; s/["'"'"']$$//' \
+		| grep -E '^.{12,}$$' \
+		| grep -v 'generated-by-make-infra-init' \
+		| grep -vE 'localhost|127\.0\.0\.1' \
+		| while IFS= read -r v; do \
+			git grep -lF -- "$$v" 2>/dev/null | sed "s|^|  a value from $$f appears in |"; \
+		done; \
+	done); \
+	if [ -n "$$leaked" ]; then \
+		echo "FAIL: an untracked env file's value is present in a tracked file:"; echo "$$leaked"; fail=1; \
+	else \
+		echo "PASS: no untracked env-file values appear in tracked files"; \
+	fi; \
 	if [ "$$fail" -ne 0 ]; then \
 		echo "verify-public: FAILED"; \
 		exit 1; \

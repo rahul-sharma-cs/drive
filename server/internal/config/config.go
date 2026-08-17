@@ -84,8 +84,16 @@ func Load() (*Config, error) {
 		S3Bucket:    env("DRIVE_S3_BUCKET", "drive-blobs"),
 		S3AccessKey: env("DRIVE_S3_ACCESS_KEY", ""),
 		S3SecretKey: env("DRIVE_S3_SECRET_KEY", ""),
-		// Signing region. Garage's own s3_region locally; "auto" on R2.
-		S3Region:   env("DRIVE_S3_REGION", DefaultS3Region),
+		// Signing region: Garage's own s3_region locally, "auto" on R2.
+		//
+		// Deliberately no default here, unlike almost everything else in this
+		// struct. A default would make the Validate check below unreachable --
+		// the value could never be empty -- and the whole point of requiring it
+		// is that a deployment which forgets it fails at boot instead of at
+		// somebody's first upload, with SignatureDoesNotMatch. blob.New still
+		// falls back to DefaultS3Region, which is what keeps the hand-built
+		// Config literals in the test suites working.
+		S3Region:   env("DRIVE_S3_REGION", ""),
 		SMTPAddr:   env("DRIVE_SMTP_ADDR", "localhost:1025"),
 		MailpitAPI: env("DRIVE_MAILPIT_API", "http://localhost:8025"),
 		// Mail: the sender is chosen by ResendKey's presence. Blank means SMTP
@@ -116,11 +124,17 @@ func Load() (*Config, error) {
 	if cfg.AuthRatePerMin, err = parseCount(env("DRIVE_AUTH_RATE_PER_MIN", "")); err != nil {
 		return nil, fmt.Errorf("DRIVE_AUTH_RATE_PER_MIN: %w", err)
 	}
-	// Messages the whole service may send in a rolling day. Unlike the two
-	// limits above, 0 here means no budget at all -- which is right for a local
+	// Messages the whole service may send in a day. Unlike the two limits
+	// above, 0 here means no budget at all -- which is right for a local
 	// Mailpit and wrong for anything with a vendor quota, so Load defaults it to
 	// a real number and a deployment only ever raises or lowers it.
-	if cfg.EmailDailyCap, err = parseCount(env("DRIVE_EMAIL_DAILY_CAP", "80")); err != nil {
+	//
+	// The default is half a typical 100/day vendor allowance, not all of it,
+	// because the budget's window is anchored to its first event rather than to
+	// a calendar day: a full budget spent at the end of one window and another
+	// at the start of the next can land inside a single vendor day. Half means
+	// even that worst case stays under.
+	if cfg.EmailDailyCap, err = parseCount(env("DRIVE_EMAIL_DAILY_CAP", "45")); err != nil {
 		return nil, fmt.Errorf("DRIVE_EMAIL_DAILY_CAP: %w", err)
 	}
 	if cfg.PartSize, err = ParseSize(env("DRIVE_PART_SIZE", "100MiB")); err != nil {

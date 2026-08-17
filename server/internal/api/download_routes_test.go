@@ -75,11 +75,6 @@ func TestDownloadRedirectsToASignedURLCarryingTheOverrides(t *testing.T) {
 	if q.Get("X-Amz-Signature") == "" {
 		t.Error("the redirect target is not signed")
 	}
-	// The overrides must be inside the signature, or a recipient could strip
-	// them and get the object served inline.
-	if signed := q.Get("X-Amz-SignedHeaders"); signed == "" {
-		t.Error("no signed headers in the presigned URL")
-	}
 	if got, want := q.Get("X-Amz-Expires"), "900"; got != want {
 		t.Errorf("X-Amz-Expires = %q, want %q (the config's PresignTTL)", got, want)
 	}

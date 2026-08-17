@@ -104,11 +104,16 @@ func TestUploadRefusedPastTheUserQuota(t *testing.T) {
 	rec := uploadCreate(t, h, owner, folder, "over.bin", 8192, "fp-"+uuid.NewString(), "")
 	nodeWant(t, rec.ResponseRecorder, http.StatusUnprocessableEntity, CodeInvalid)
 
-	rec = uploadCreate(t, h, owner, folder, "under.bin", 1024, "fp-"+uuid.NewString(), "")
+	rec = uploadCreate(t, h, owner, folder, "under.bin", 3000, "fp-"+uuid.NewString(), "")
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("an upload inside the quota: status %d, want 201 (body %s)", rec.Code, rec.Body)
 	}
 	uploadCancelLater(t, h, owner, uploadDecode(t, rec).UploadID)
+
+	// That upload is running, not published, and it still counts: otherwise one
+	// account starts a hundred uploads that each pass the check on their own.
+	rec = uploadCreate(t, h, owner, folder, "one-too-many.bin", 3000, "fp-"+uuid.NewString(), "")
+	nodeWant(t, rec.ResponseRecorder, http.StatusUnprocessableEntity, CodeInvalid)
 }
 
 // A resume must never be refused by a cap.
