@@ -19,6 +19,8 @@ type Manifest = {
   drop_dir: string;
   drop_dir_file_count: number;
   parts: { part_number: number; url: string; file: string; size: number; md5: string; content_type: string }[];
+  expired_put_url: string;
+  expired_put_key: string;
 };
 
 test('presigned part PUTs from a real page origin', async ({ page }) => {
@@ -62,10 +64,15 @@ test('presigned part PUTs from a real page origin', async ({ page }) => {
       };
     });
 
-  const preflights = cors.filter((c) => c.method === 'OPTIONS');
-  const puts = cors.filter((c) => c.method === 'PUT');
+  // The expired-presign PUT is deliberately refused, and a refusal carries no
+  // CORS headers at all — that opacity IS the measurement. Keep it out of the
+  // one-origin assertion below, which is about the successful part PUTs.
+  const isExpiredProbe = (url: string) => url.includes(manifest.expired_put_key);
+  const preflights = cors.filter((c) => c.method === 'OPTIONS' && !isExpiredProbe(c.url));
+  const puts = cors.filter((c) => c.method === 'PUT' && !isExpiredProbe(c.url));
 
-  writeFileSync(RESULTS, JSON.stringify({ put, cors, preflights, puts, console_errors: consoleErrors }, null, 2));
+  const expiredProbe = cors.filter((c) => isExpiredProbe(c.url));
+  writeFileSync(RESULTS, JSON.stringify({ put, cors, preflights, puts, expired_probe: expiredProbe, console_errors: consoleErrors }, null, 2));
 
   // --- assertions -----------------------------------------------------------
   expect(put.fatal, 'in-page fatal error').toBeNull();

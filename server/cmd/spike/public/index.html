@@ -67,9 +67,30 @@ function putPart(part, bytes) {
   });
 }
 
+/** PUT to an already-expired presigned URL and record what the BROWSER sees.
+ *  A refusal without CORS headers is opaque to XHR: no readable status, just
+ *  onerror and status 0. Both outcomes route to the engine's network path
+ *  (parts.ts classifies 0 as `network`); this records which one the store
+ *  actually produces. */
+function putExpired(url) {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url, true);
+    const finish = (error) => resolve({
+      status: xhr.status,
+      error,
+      status_readable: xhr.status !== 0,
+      response_text: xhr.status === 0 ? null : String(xhr.responseText || '').slice(0, 400),
+    });
+    xhr.onload = () => finish(null);
+    xhr.onerror = () => finish('xhr.onerror');
+    xhr.send(new Uint8Array(1024));
+  });
+}
+
 async function run() {
   logEl.textContent = 'running';
-  const out = { parts: [], fatal: null };
+  const out = { parts: [], expired_put: null, fatal: null };
   try {
     const manifest = await (await fetch('manifest.json', { cache: 'no-store' })).json();
     for (const part of manifest.parts) {
@@ -80,6 +101,11 @@ async function run() {
       say('  -> status=' + r.status + ' etag=' + r.etag_raw + ' md5_match=' + r.md5_match
           + (r.error ? ' ERROR=' + r.error : ''));
       out.parts.push(r);
+    }
+    if (manifest.expired_put_url) {
+      say('PUT to an already-expired part URL');
+      out.expired_put = await putExpired(manifest.expired_put_url);
+      say('  -> status=' + out.expired_put.status + ' error=' + out.expired_put.error);
     }
   } catch (e) {
     out.fatal = String(e && e.stack || e);

@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -39,12 +40,19 @@ import (
 
 	"github.com/rahul-sharma-cs/drive/server/internal/blob"
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
+	"github.com/rahul-sharma-cs/drive/server/internal/upload"
 )
 
 const (
 	part1Size = 10 << 20 // 10 MiB — a non-final part: >= S3's 5 MiB floor and a multiple of Garage's block size
 	part2Size = 1 << 20  // 1 MiB — the final part, deliberately smaller
 	dropFiles = 120      // > 100 so the drop probe exercises Chromium's readEntries batching cap
+
+	// The two dispositions must differ: a GET response tells which of stored
+	// metadata (g) and the presigned override (c/d) the store honoured.
+	storedDisp   = `attachment; filename*=UTF-8''stored.bin`
+	overrideDisp = `attachment; filename*=UTF-8''spike.bin`
+	overrideType = "application/octet-stream"
 )
 
 // check records one spike assertion.
@@ -55,17 +63,21 @@ type check struct {
 }
 
 type report struct {
-	StartedAt   time.Time       `json:"started_at"`
-	S3Endpoint  string          `json:"s3_endpoint"`
-	Bucket      string          `json:"bucket"`
-	ObjectKey   string          `json:"object_key"`
-	Checks      []check         `json:"checks"`
-	Browser     json.RawMessage `json:"browser,omitempty"`
-	ExpiredGET  map[string]any  `json:"expired_presigned_get"`
-	RangeGET    map[string]any  `json:"range_get"`
-	FullGET     map[string]any  `json:"full_get"`
-	Verdict     string          `json:"verdict"`
-	FailedNames []string        `json:"failed_checks"`
+	StartedAt     time.Time       `json:"started_at"`
+	S3Endpoint    string          `json:"s3_endpoint"`
+	Bucket        string          `json:"bucket"`
+	ObjectKey     string          `json:"object_key"`
+	Checks        []check         `json:"checks"`
+	Browser       json.RawMessage `json:"browser,omitempty"`
+	ExpiredGET    map[string]any  `json:"expired_presigned_get"`
+	ExpiredPUT    map[string]any  `json:"expired_presigned_put"`
+	RangeGET      map[string]any  `json:"range_get"`
+	FullGET       map[string]any  `json:"full_get"`
+	Downloads     map[string]any  `json:"download_matrix"`
+	CompleteTag   map[string]any  `json:"complete_etag"`
+	MultipartList map[string]any  `json:"multipart_listing"`
+	Verdict       string          `json:"verdict"`
+	FailedNames   []string        `json:"failed_checks"`
 }
 
 func (r *report) add(name string, pass bool, format string, args ...any) bool {
@@ -96,6 +108,11 @@ type manifest struct {
 	DropDir          string         `json:"drop_dir"`
 	DropDirFileCount int            `json:"drop_dir_file_count"`
 	Parts            []manifestPart `json:"parts"`
+	// Assertion (i): a part URL that is already expired by the time the page
+	// loads. The browser's surface for it (readable status vs opaque
+	// status-0/onerror) decides which engine path an expired presign takes.
+	ExpiredPutURL string `json:"expired_put_url"`
+	ExpiredPutKey string `json:"expired_put_key"`
 }
 
 func main() {
@@ -192,8 +209,13 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	rep.ObjectKey = key
 	// No ContentType and no ChecksumAlgorithm, ever: objects stored without a
 	// Content-Type are what makes the Range-GET posture in PLAN §Sharing hold.
+	//
+	// Content-Disposition IS stored, deliberately: it is the fallback the
+	// download endpoint needs if the store ignores response-content-disposition
+	// on presigned GETs (assertion g). It is set to a value that differs from
+	// the override tried later, so a response says which of the two won.
 	create, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-		Bucket: &cfg.S3Bucket, Key: &key,
+		Bucket: &cfg.S3Bucket, Key: &key, ContentDisposition: aws.String(storedDisp),
 	})
 	if err != nil {
 		rep.add("CreateMultipartUpload", false, "%v", err)
@@ -233,7 +255,34 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	rep.add("presigned URLs carry no checksum params", leaked == "",
 		"%s", orElse(leaked, "clean (RequestChecksumCalculation=WhenRequired holds)"))
 
-	man := manifest{S3Endpoint: cfg.S3Endpoint, DropDir: dropDir, DropDirFileCount: dropCount, Parts: parts}
+	// An already-expired part URL, on a throwaway multipart of its own so a
+	// surprise success cannot pollute the real upload's part list. One second of
+	// TTL is spent long before Playwright finishes booting. Both the browser (i)
+	// and the Go client (b) hit this same URL.
+	expiredKey := "spike/" + randomHex(16) + "-expired"
+	expiredCreate, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: &cfg.S3Bucket, Key: &expiredKey,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			Bucket: &cfg.S3Bucket, Key: &expiredKey, UploadId: expiredCreate.UploadId,
+		})
+	}()
+	one := int32(1)
+	expiredPut, err := presigner.PresignUploadPart(ctx, &s3.UploadPartInput{
+		Bucket: &cfg.S3Bucket, Key: &expiredKey, UploadId: expiredCreate.UploadId, PartNumber: &one,
+	}, s3.WithPresignExpires(time.Second))
+	if err != nil {
+		return err
+	}
+
+	man := manifest{
+		S3Endpoint: cfg.S3Endpoint, DropDir: dropDir, DropDirFileCount: dropCount, Parts: parts,
+		ExpiredPutURL: expiredPut.URL, ExpiredPutKey: expiredKey,
+	}
 	manPath := filepath.Join(publicDir, "manifest.json")
 	mb, _ := json.MarshalIndent(man, "", "  ")
 	if err := os.WriteFile(manPath, mb, 0o644); err != nil {
@@ -261,7 +310,82 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 		}
 		rep.Browser = raw
 		rep.add("browser presigned PUTs", true, "2 parts PUT from http://localhost:%d, ETag readable, normalized ETag == client MD5", pagePort)
+
+		// (i) The expired-presign surface a browser actually sees. Recorded, not
+		// asserted: a readable 403 and an opaque status-0/onerror both route to
+		// the engine's network path (parts.ts classifies 0 as `network`); which
+		// one the store produces is what this spike exists to write down.
+		var br struct {
+			Put struct {
+				ExpiredPut map[string]any `json:"expired_put"`
+			} `json:"put"`
+		}
+		if err := json.Unmarshal(raw, &br); err != nil {
+			return fmt.Errorf("browser results: %w", err)
+		}
+		if br.Put.ExpiredPut == nil {
+			rep.add("browser expired-presign surface recorded", false, "the page reported no expired_put result")
+		} else {
+			rep.add("browser expired-presign surface recorded", true,
+				"status=%v onerror=%v (both route to the engine's network path)",
+				br.Put.ExpiredPut["status"], br.Put.ExpiredPut["error"] != nil)
+		}
 	}
+
+	// --- 5b. expired presigned PUT from the Go client, ± Expect: 100-continue -
+	// Phase 0 measured Garage answering an expired presign before draining the
+	// body and resetting the socket, which surfaces as a transport error rather
+	// than a response; `Expect: 100-continue` is what made it deterministic
+	// (uploadclient and testutil both send it now). This records whether the
+	// same holds here.
+	expiredBody := make([]byte, 1<<20)
+	if _, err := rand.Read(expiredBody); err != nil {
+		return err
+	}
+	rep.ExpiredPUT = map[string]any{}
+	expiredRefused := true
+	expectReadable := false
+	for _, v := range []struct {
+		label  string
+		expect bool
+	}{{"without_expect_100_continue", false}, {"with_expect_100_continue", true}} {
+		req, err := http.NewRequest(http.MethodPut, expiredPut.URL, bytes.NewReader(expiredBody))
+		if err != nil {
+			return err
+		}
+		req.ContentLength = int64(len(expiredBody))
+		if v.expect {
+			req.Header.Set("Expect", "100-continue")
+		}
+		obs := map[string]any{}
+		resp, err := http.DefaultClient.Do(req)
+		switch {
+		case err != nil:
+			// A reset socket is still a refusal — but an unreadable one: the
+			// client sees a transport error and cannot tell expiry from a dead
+			// network, which is the bug the Expect header exists to avoid.
+			obs["transport_error"] = err.Error()
+		default:
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+			resp.Body.Close()
+			obs["status"] = resp.StatusCode
+			obs["code"] = xmlTag(string(body), "Code")
+			obs["body"] = string(body)
+			if resp.StatusCode < 400 {
+				expiredRefused = false
+			}
+			if v.expect {
+				expectReadable = true
+			}
+		}
+		rep.ExpiredPUT[v.label] = obs
+	}
+	rep.add("expired presigned PUT never succeeds", expiredRefused,
+		"without Expect: %v | with Expect: %v", rep.ExpiredPUT["without_expect_100_continue"], rep.ExpiredPUT["with_expect_100_continue"])
+	// uploadclient reads the response code to tell an expired URL from a network
+	// failure; without a readable response an expiry burns the integrity budget.
+	rep.add("expired presigned PUT is readable with Expect: 100-continue", expectReadable,
+		"%v", rep.ExpiredPUT["with_expect_100_continue"])
 
 	// --- 6. server-side reconciliation ---------------------------------------
 	listed, err := listAllParts(ctx, client, cfg.S3Bucket, key, uploadID)
@@ -284,12 +408,23 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	}
 	rep.add("ListParts matches the client ledger", partsOK, "%s", detail)
 
-	found, err := hasMultipart(ctx, client, cfg.S3Bucket, uploadID)
+	// GC's orphan sweep reads this listing and asks "does a live session own
+	// this?". What it can key that question on is exactly what this measures:
+	// the object key is always safe, the upload id is not.
+	found, idMatch, initiated, err := findMultipart(ctx, client, cfg.S3Bucket, key, uploadID)
 	if err != nil {
 		rep.add("ListMultipartUploads (GC dependency)", false, "%v", err)
 		return err
 	}
-	rep.add("ListMultipartUploads (GC dependency)", found, "upload_id visible=%v", found)
+	rep.MultipartList = map[string]any{
+		"found_by_key": found, "listed_id_equals_created_id": idMatch, "initiated": initiated,
+	}
+	idNote := ""
+	if !idMatch {
+		idNote = " — the store re-mints upload ids per response, so GC must claim by object_key alone; gc.go's multipartClaimed also matches s3_upload_id, which here would abort live uploads"
+	}
+	rep.add("ListMultipartUploads finds the upload by object key", found,
+		"initiated=%s; listed upload_id == created upload_id: %v%s", initiated, idMatch, idNote)
 
 	// --- 7. complete ---------------------------------------------------------
 	completed := make([]s3types.CompletedPart, 0, len(listed))
@@ -313,58 +448,119 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	rep.add("HeadObject size == declared", aws.ToInt64(head.ContentLength) == totalSize,
 		"got %d want %d, stored Content-Type=%q", aws.ToInt64(head.ContentLength), totalSize, aws.ToString(head.ContentType))
 
+	// (e) An object created with no Content-Type must not come back renderable:
+	// that, not the response-content-type override, is what keeps uploaded HTML
+	// inert when it is served from the store's own origin (PLAN §Sharing).
+	rep.add("stored Content-Type is not renderable", !renderable(aws.ToString(head.ContentType)),
+		"stored Content-Type=%q", aws.ToString(head.ContentType))
+
+	// (f) The finalizer stores whatever HeadObject reports, normalized, in
+	// blobs.etag — a multipart ETag is "<md5-of-md5s>-<partcount>", not a plain
+	// MD5, and nothing downstream may assume 32 hex characters.
+	headETag := normalizeETag(aws.ToString(head.ETag))
+	rep.CompleteTag = map[string]any{
+		"head_etag_raw": aws.ToString(head.ETag), "head_etag_normalized": headETag,
+		"parts": len(completed),
+	}
+	rep.add("multipart ETag survives normalization", multipartETag.MatchString(headETag),
+		"normalized=%q (want <32 hex>[-<n>])", headETag)
+
 	// A retried complete must look like NoSuchUpload — the crash-after-complete
 	// window the finalizer has to recognise (PLAN §Complete).
 	_, reErr := client.ListParts(ctx, &s3.ListPartsInput{Bucket: &cfg.S3Bucket, Key: &key, UploadId: &uploadID})
 	rep.add("ListParts after complete => NoSuchUpload", reErr != nil && strings.Contains(reErr.Error(), "NoSuchUpload"),
 		"%v", reErr)
 
-	// --- 8. downloads --------------------------------------------------------
-	disp := `attachment; filename*=UTF-8''spike.bin`
-	octet := "application/octet-stream"
-	getReq, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+	// --- 8. downloads: the attachment matrix (c, d, g) ------------------------
+	// Four fetches over two presigned GETs of the SAME object: one carrying the
+	// response-content-* overrides, one plain. The object was stored with a
+	// different Content-Disposition, so each response says which layer won.
+	// Neither layer is documented on R2 either way; this is the empirical answer
+	// the download endpoint's design depends on.
+	overrideReq, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: &cfg.S3Bucket, Key: &key,
-		ResponseContentDisposition: &disp,
-		ResponseContentType:        &octet,
+		ResponseContentDisposition: aws.String(overrideDisp),
+		ResponseContentType:        aws.String(overrideType),
+	}, s3.WithPresignExpires(cfg.PresignTTL))
+	if err != nil {
+		return err
+	}
+	plainReq, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: &cfg.S3Bucket, Key: &key,
 	}, s3.WithPresignExpires(cfg.PresignTTL))
 	if err != nil {
 		return err
 	}
 
-	full, body, err := fetch(getReq.URL, nil)
+	type getObs struct {
+		status int
+		ct     string
+		cd     string
+		body   []byte
+	}
+	obsOf := func(label, url string, headers map[string]string) (getObs, error) {
+		resp, body, err := fetch(url, headers)
+		if err != nil {
+			rep.add("presigned GET ("+label+")", false, "%v", err)
+			return getObs{}, err
+		}
+		o := getObs{resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Disposition"), body}
+		rep.Downloads[label] = map[string]any{
+			"status": o.status, "content_type": o.ct, "content_disposition": o.cd,
+			"content_range": resp.Header.Get("Content-Range"), "bytes": len(body),
+		}
+		return o, nil
+	}
+	rep.Downloads = map[string]any{}
+	rangeHdr := map[string]string{"Range": "bytes=0-1023"}
+	override200, err := obsOf("override_200", overrideReq.URL, nil)
 	if err != nil {
-		rep.add("presigned GET", false, "%v", err)
 		return err
 	}
-	rep.FullGET = map[string]any{
-		"status": full.StatusCode, "content_type": full.Header.Get("Content-Type"),
-		"content_disposition": full.Header.Get("Content-Disposition"), "bytes": len(body),
+	override206, err := obsOf("override_206", overrideReq.URL, rangeHdr)
+	if err != nil {
+		return err
 	}
-	gotHash := md5.Sum(body)
+	plain200, err := obsOf("plain_200", plainReq.URL, nil)
+	if err != nil {
+		return err
+	}
+	plain206, err := obsOf("plain_206", plainReq.URL, rangeHdr)
+	if err != nil {
+		return err
+	}
+	rep.FullGET = rep.Downloads["override_200"].(map[string]any)
+	rep.RangeGET = rep.Downloads["override_206"].(map[string]any)
+
+	gotHash := md5.Sum(override200.body)
 	wantHash := md5.Sum(whole.Bytes())
 	rep.add("presigned GET returns byte-identical object",
-		full.StatusCode == 200 && gotHash == wantHash,
-		"status=%d bytes=%d md5_match=%v", full.StatusCode, len(body), gotHash == wantHash)
-	rep.add("full GET applies response-content-* overrides",
-		full.Header.Get("Content-Type") == octet && full.Header.Get("Content-Disposition") == disp,
-		"Content-Type=%q Content-Disposition=%q", full.Header.Get("Content-Type"), full.Header.Get("Content-Disposition"))
+		override200.status == 200 && gotHash == wantHash,
+		"status=%d bytes=%d md5_match=%v", override200.status, len(override200.body), gotHash == wantHash)
+	rep.add("Range GET returns 206", override206.status == 206,
+		"status=%d content_range=%v", override206.status, rep.Downloads["override_206"].(map[string]any)["content_range"])
 
-	rng, rngBody, err := fetch(getReq.URL, map[string]string{"Range": "bytes=0-1023"})
-	if err != nil {
-		rep.add("Range GET", false, "%v", err)
-		return err
-	}
-	rct := rng.Header.Get("Content-Type")
-	rep.RangeGET = map[string]any{
-		"status": rng.StatusCode, "content_type": rct,
-		"content_disposition": rng.Header.Get("Content-Disposition"),
-		"content_range":       rng.Header.Get("Content-Range"), "bytes": len(rngBody),
-	}
-	rep.add("Range GET returns 206", rng.StatusCode == 206, "status=%d content_range=%q", rng.StatusCode, rng.Header.Get("Content-Range"))
 	// The load-bearing posture check from PLAN §Sharing: Garage skips the
-	// response-content-* overrides on 206, so safety rests entirely on the
-	// object having been stored with no Content-Type at all.
-	rep.add("Range GET carries no renderable Content-Type", !renderable(rct), "Content-Type=%q", rct)
+	// response-content-* overrides on 206, so safety rests on the object itself
+	// never carrying a renderable Content-Type. It must hold on both GETs.
+	rep.add("Range GET carries no renderable Content-Type",
+		!renderable(override206.ct) && !renderable(plain206.ct),
+		"override=%q plain=%q", override206.ct, plain206.ct)
+
+	// The derived verdict the download endpoint is designed against.
+	overridesWork := override200.cd == overrideDisp && override200.ct == overrideType
+	metadataWorks := plain200.cd == storedDisp && plain206.cd == storedDisp
+	strategy := "NONE — stop and decide (never proxy bytes through the server)"
+	switch {
+	case overridesWork:
+		strategy = "overrides — presign with response-content-disposition/-type"
+	case metadataWorks:
+		strategy = "metadata — store Content-Disposition on the object at upload"
+	}
+	rep.add("attachment strategy determined", overridesWork || metadataWorks,
+		"%s | overrides_on_200=%v overrides_on_206=%v stored_cd_on_200=%v stored_cd_on_206=%v",
+		strategy, overridesWork, override206.cd == overrideDisp,
+		plain200.cd == storedDisp, plain206.cd == storedDisp)
 
 	// --- 9. expired presigned GET (fixture for the engine's vitest) ----------
 	shortReq, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &cfg.S3Bucket, Key: &key},
@@ -413,6 +609,15 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 		Bucket: &cfg.S3Bucket, Key: &emptyKey, UploadId: emptyCreate.UploadId,
 	})
 
+	// --- 11. uniform part sizes (h) ------------------------------------------
+	// R2 rejects a multipart whose parts are not all the same size except the
+	// last. Drive slices at the session's part_size, so the only way to violate
+	// that is for ResolvePartSize to hand back a size the ledger cannot honour:
+	// below S3's floor, off Garage's block grain, or one that needs more parts
+	// than the ceiling allows. This is a pure function — no store involved.
+	ok, detail := checkPartSizes(cfg.PartSize)
+	rep.add("ResolvePartSize yields uniform, in-range parts", ok, "%s", detail)
+
 	// --- verdict -------------------------------------------------------------
 	fmt.Println()
 	if len(rep.FailedNames) > 0 {
@@ -428,6 +633,13 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 func checkCORS(ctx context.Context, client *s3.Client, bucket string) (bool, string) {
 	out, err := client.GetBucketCors(ctx, &s3.GetBucketCorsInput{Bucket: &bucket})
 	if err != nil {
+		// R2 refuses bucket-level reads to an Object-Read-&-Write token. That is
+		// a permission boundary, not a CORS defect: the browser half's CDP
+		// assertion on Access-Control-Allow-Origin is the authoritative check
+		// either way, so record and continue. Any other error is still a failure.
+		if strings.Contains(err.Error(), "AccessDenied") {
+			return true, "not readable with this token (AccessDenied) — browser-side Access-Control-Allow-Origin assertion is authoritative"
+		}
 		return false, fmt.Sprintf("GetBucketCors: %v", err)
 	}
 	var notes []string
@@ -445,6 +657,59 @@ func checkCORS(ctx context.Context, client *s3.Client, bucket string) (bool, str
 		}
 	}
 	return ok, strings.Join(notes, ", ")
+}
+
+// multipartETag matches what a completed multipart reports: the MD5 of the
+// concatenated part MD5s, suffixed with the part count. A single-part or
+// PutObject object has no suffix.
+var multipartETag = regexp.MustCompile(`^[0-9a-f]{32}(-[0-9]+)?$`)
+
+// checkPartSizes sweeps ResolvePartSize across the boundaries that matter: the
+// configured size, both sides of the 10,000-part ceiling, and the largest file
+// the grown path can still serve. Every result must be block-aligned, at or
+// above S3's 5 MiB floor, within the part ceiling, and leave a final part in
+// (0, part_size] — which is what "all parts equal except the last" means.
+func checkPartSizes(configured int64) (bool, string) {
+	const fiveMiB = 5 << 20
+	sizes := []int64{
+		1,
+		configured - 1,
+		configured,
+		configured + 1,
+		configured * upload.MaxParts,         // exactly the ceiling
+		configured*upload.MaxParts + 1,       // one byte past it — the grown path
+		configured * upload.MaxParts * 7,     // deep into the grown path
+		upload.MaxPartSize * upload.MaxParts, // the largest file that resolves at all
+	}
+	var notes []string
+	ok := true
+	for _, size := range sizes {
+		partSize, total, err := upload.ResolvePartSize(size, configured)
+		if err != nil {
+			ok = false
+			notes = append(notes, fmt.Sprintf("size=%d: %v", size, err))
+			continue
+		}
+		last := size - int64(total-1)*partSize
+		switch {
+		case partSize%upload.PartSizeGrain != 0:
+			ok = false
+			notes = append(notes, fmt.Sprintf("size=%d: part_size %d is not block-aligned", size, partSize))
+		case partSize < fiveMiB:
+			ok = false
+			notes = append(notes, fmt.Sprintf("size=%d: part_size %d is below S3's 5 MiB floor", size, partSize))
+		case total > upload.MaxParts:
+			ok = false
+			notes = append(notes, fmt.Sprintf("size=%d: %d parts exceeds the %d ceiling", size, total, upload.MaxParts))
+		case last <= 0 || last > partSize:
+			ok = false
+			notes = append(notes, fmt.Sprintf("size=%d: final part %d is not in (0, %d]", size, last, partSize))
+		}
+	}
+	if ok {
+		return true, fmt.Sprintf("%d file sizes across the 10,000-part boundary: every part == part_size except a final part in (0, part_size]", len(sizes))
+	}
+	return false, strings.Join(notes, "; ")
 }
 
 func listAllParts(ctx context.Context, client *s3.Client, bucket, key, uploadID string) ([]s3types.Part, error) {
@@ -465,22 +730,32 @@ func listAllParts(ctx context.Context, client *s3.Client, bucket, key, uploadID 
 	}
 }
 
-func hasMultipart(ctx context.Context, client *s3.Client, bucket, uploadID string) (bool, error) {
+// findMultipart locates an in-progress multipart in the bucket listing and
+// reports both what GC needs (the object key is there, with an Initiated
+// timestamp) and whether the listed upload id is the one CreateMultipartUpload
+// handed out. R2 mints a fresh opaque upload-id token per response, so the
+// second answer decides which column GC's claim query may key on.
+func findMultipart(ctx context.Context, client *s3.Client, bucket, key, uploadID string) (found, idMatch bool, initiated string, err error) {
 	var keyMarker, idMarker *string
 	for {
 		out, err := client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
 			Bucket: &bucket, KeyMarker: keyMarker, UploadIdMarker: idMarker,
 		})
 		if err != nil {
-			return false, err
+			return false, false, "", err
 		}
 		for _, u := range out.Uploads {
-			if aws.ToString(u.UploadId) == uploadID {
-				return true, nil
+			if aws.ToString(u.Key) != key {
+				continue
 			}
+			at := ""
+			if u.Initiated != nil {
+				at = u.Initiated.Format(time.RFC3339)
+			}
+			return true, aws.ToString(u.UploadId) == uploadID, at, nil
 		}
 		if !aws.ToBool(out.IsTruncated) {
-			return false, nil
+			return false, false, "", nil
 		}
 		keyMarker, idMarker = out.NextKeyMarker, out.NextUploadIdMarker
 	}
