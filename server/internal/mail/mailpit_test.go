@@ -82,7 +82,7 @@ func TestSMTPAndMailpit_SubjectInjectionDoesNotAddARecipient(t *testing.T) {
 	}
 
 	to := fmt.Sprintf("injection-test-%d@drive.local", time.Now().UnixNano())
-	subject := "Verify your Drive account\r\nBcc: attacker@evil.com"
+	subject := "Verify your Drive account\r\nBcc: attacker@evil.example"
 	const body = "hello"
 
 	sender := NewSMTPSender(smtpAddr())
@@ -111,8 +111,8 @@ func TestSMTPAndMailpit_SubjectInjectionDoesNotAddARecipient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if n := countMessagesTo(list, "attacker@evil.com"); n != 0 {
-		t.Errorf("%d message(s) reached attacker@evil.com -- the subject injection was not contained", n)
+	if n := countMessagesTo(list, "attacker@evil.example"); n != 0 {
+		t.Errorf("%d message(s) reached attacker@evil.example -- the subject injection was not contained", n)
 	}
 }
 

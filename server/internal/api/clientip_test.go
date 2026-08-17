@@ -6,6 +6,13 @@ package api
 // fail silently when they are wrong: a limiter keyed on the proxy locks out
 // every user as one, and a limiter that believes a forged header is no limiter
 // at all. Neither shows up as a failing request in normal use.
+//
+// Every address below is from RFC 5737's documentation ranges, standing in for
+// a client (203.0.113.7, 198.51.100.x) and for the CDN hop the edge appends
+// after it (203.0.113.100, .200). They are deliberately not the real
+// infrastructure addresses: nothing observed from a live system belongs in a
+// tracked file, and TEST-NET is public as far as isPublicIP is concerned, which
+// is the only property these cases depend on.
 
 import (
 	"net/http"
@@ -31,19 +38,19 @@ func TestClientIPTakesTheLeftmostForwardedAddress(t *testing.T) {
 		},
 		{
 			"two entries: the CDN hop is appended AFTER the client, so leftmost wins",
-			"10.0.0.9:80", "203.0.113.7, 151.101.1.1", "203.0.113.7",
+			"10.0.0.9:80", "203.0.113.7, 203.0.113.100", "203.0.113.7",
 		},
 		{
 			"rightmost-non-internal would pick the CDN here, which is the bug this avoids",
-			"10.0.0.9:80", "198.51.100.22, 151.101.65.91, 151.101.1.1", "198.51.100.22",
+			"10.0.0.9:80", "198.51.100.22, 203.0.113.200, 203.0.113.100", "198.51.100.22",
 		},
 		{
 			"whitespace around the entries is not part of the address",
-			"10.0.0.9:80", "  203.0.113.7 , 151.101.1.1 ", "203.0.113.7",
+			"10.0.0.9:80", "  203.0.113.7 , 203.0.113.100 ", "203.0.113.7",
 		},
 		{
 			"an IPv6 client survives its own formatting",
-			"10.0.0.9:80", "2001:db8::1, 151.101.1.1", "2001:db8::1",
+			"10.0.0.9:80", "2001:db8::1, 203.0.113.100", "2001:db8::1",
 		},
 		{
 			"a private leftmost is not something the edge writes: fall back to the peer",
@@ -81,7 +88,7 @@ func TestClientIPTakesTheLeftmostForwardedAddress(t *testing.T) {
 func TestClientIPIgnoresXRealIP(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
 	r.RemoteAddr = "203.0.113.9:41234"
-	r.Header.Set("X-Real-IP", "151.101.1.1")
+	r.Header.Set("X-Real-IP", "203.0.113.100")
 
 	if got := ClientIP(r); got != "203.0.113.9" {
 		t.Errorf("ClientIP = %q, want the peer address -- X-Real-IP must not be read", got)

@@ -1,5 +1,5 @@
 // Package seed populates Drive with the two demo users and rahul@drive.local's
-// sample folder tree that PLAN.md §Seed specifies. Run is idempotent: it is a
+// sample folder tree. Run is idempotent: it is a
 // no-op the moment any user row exists, so `make seed` and every e2e run that
 // calls it are safe to repeat.
 package seed

@@ -48,7 +48,7 @@ func abuseDo(t *testing.T, h http.Handler, method, path string, body any, forwar
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "10.0.0.9:41234" // the edge, as it looks from inside
 	if forwarded != "" {
-		req.Header.Set("X-Forwarded-For", forwarded+", 151.101.1.1")
+		req.Header.Set("X-Forwarded-For", forwarded+", 203.0.113.100")
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

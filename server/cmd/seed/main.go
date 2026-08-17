@@ -1,5 +1,5 @@
 // Command seed populates Drive's database with the two demo users and
-// rahul@drive.local's sample folder tree (PLAN.md §Seed). Idempotent: a no-op
+// rahul@drive.local's sample folder tree. Idempotent: a no-op
 // once any user exists.
 package main
 

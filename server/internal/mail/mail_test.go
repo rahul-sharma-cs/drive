@@ -11,7 +11,7 @@ import (
 // writer, not on a live send.
 func TestBuildMessage_SubjectInjection(t *testing.T) {
 	msg, _, _, err := buildMessage(DefaultFrom, "victim@example.com",
-		"Report\r\nBcc: attacker@evil.com", "body")
+		"Report\r\nBcc: attacker@evil.example", "body")
 	if err != nil {
 		t.Fatalf("buildMessage: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestBuildMessage_SubjectInjection(t *testing.T) {
 // riding in the address itself rather than the subject.
 func TestBuildMessage_ToAddressInjectionRejected(t *testing.T) {
 	_, _, _, err := buildMessage(DefaultFrom,
-		"victim@example.com>\r\nBcc: attacker@evil.com<x@x.com", "subject", "body")
+		"victim@example.com>\r\nBcc: attacker@evil.example<x@x.com", "subject", "body")
 	if err == nil {
 		t.Fatal("buildMessage: want error for a control-character address, got nil")
 	}
@@ -38,7 +38,7 @@ func TestBuildMessage_ToAddressInjectionRejected(t *testing.T) {
 // half of the mandatory case: a quoted display-name containing CRLF.
 func TestBuildMessage_DisplayNameInjectionRejected(t *testing.T) {
 	_, _, _, err := buildMessage(DefaultFrom,
-		"\"Evil\r\nBcc: attacker@evil.com\" <victim@example.com>", "subject", "body")
+		"\"Evil\r\nBcc: attacker@evil.example\" <victim@example.com>", "subject", "body")
 	if err == nil {
 		t.Fatal("buildMessage: want error for a CRLF-carrying display name, got nil")
 	}
