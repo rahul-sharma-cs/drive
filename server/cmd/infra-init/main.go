@@ -70,6 +70,9 @@ func run(ctx context.Context, l *log.Logger, project, envPath string) error {
 	if cfg.S3AccessKey == "" || cfg.S3SecretKey == "" {
 		return fmt.Errorf("DRIVE_S3_ACCESS_KEY/DRIVE_S3_SECRET_KEY are empty in %s", envPath)
 	}
+	if err := guardLocalEndpoint(cfg.S3Endpoint); err != nil {
+		return err
+	}
 
 	// Bring the stack up with the values we just resolved. This has to happen
 	// here, not in a Makefile prerequisite: on a first run the env file does not
@@ -433,4 +436,26 @@ func putCORS(ctx context.Context, c *s3.Client, bucket string, origins []string)
 		return fmt.Errorf("put bucket cors: %w", err)
 	}
 	return nil
+}
+
+// guardLocalEndpoint refuses to bootstrap anything but a local object store.
+//
+// This command runs `docker compose up`, creates a bucket and writes a CORS
+// rule naming a localhost dev origin. Pointed at a hosted store it would either
+// fail confusingly or, worse, succeed -- replacing a production CORS rule with
+// one that trusts http://localhost. There is no flag to override it: nothing
+// about this command has a use against a remote store.
+func guardLocalEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("DRIVE_S3_ENDPOINT: not a valid URL: %w", err)
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1", "garage", "":
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing to bootstrap %s: infra-init brings up the local docker stack and writes a bucket CORS rule "+
+			"naming a localhost origin, which would overwrite a hosted store's own rule. It only ever runs "+
+			"against the local Garage", u.Hostname())
 }

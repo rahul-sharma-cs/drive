@@ -120,6 +120,7 @@ func (s *Server) Routes() http.Handler {
 	r.Use(s.recoverer)
 
 	r.Get("/healthz", s.healthz)
+	r.Get("/livez", s.livez)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(RequireClientHeader)
@@ -168,6 +169,20 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "database unreachable", http.StatusServiceUnavailable)
 		return
 	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok\n"))
+}
+
+// livez says the process is up and serving. It touches nothing.
+//
+// It is separate from healthz on purpose. A platform health check that fails
+// restarts the container, so wiring it to a database ping means a brief
+// database blip becomes a restart loop -- exactly when a running process would
+// have recovered on its own. healthz keeps the database ping, because what the
+// test harness and `make e2e` wait for is "ready to serve requests", which is a
+// different question.
+func (s *Server) livez(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))

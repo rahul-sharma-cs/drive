@@ -8,13 +8,19 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/rahul-sharma-cs/drive/server/internal/config"
 )
 
 // newTestServer builds a Server with no database. Everything exercised here
 // runs before the session loader touches one.
+//
+// It goes through New rather than a struct literal so the limiters New builds
+// are present: a Server assembled by hand has none, and the handlers that use
+// them would be exercised in a shape production never has.
 func newTestServer(t *testing.T) http.Handler {
 	t.Helper()
-	return (&Server{}).Routes()
+	return New(&config.Config{}, nil, nil, nil, nil, nil).Routes()
 }
 
 func decodeErr(t *testing.T, body string) ErrorBody {
@@ -279,4 +285,27 @@ func TestMustUser(t *testing.T) {
 		}
 	}()
 	MustUser(t.Context())
+}
+
+// /livez answers without touching the database, and /healthz does not.
+//
+// They are separate because a platform health check that fails restarts the
+// container: wiring the platform's probe to a database ping turns a brief blip
+// into a restart loop, exactly when a running process would have ridden it out.
+// The readiness question -- which is what `make e2e` and the harness wait on --
+// is a different one, and keeps its ping.
+func TestLivezIsAliveWithoutADatabase(t *testing.T) {
+	h := newTestServer(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("/livez with no database: status %d, want 200", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("/healthz with no database: status %d, want 503 -- readiness must still mean ready", rec.Code)
+	}
 }

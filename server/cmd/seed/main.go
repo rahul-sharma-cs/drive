@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -22,16 +23,17 @@ import (
 
 func main() {
 	envFile := flag.String("env-file", ".env", "env file to load before seeding (same pattern as cmd/infra-init)")
+	force := flag.Bool("force", false, "seed a database that is not on this machine (refused without it)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(context.Background(), log, *envFile); err != nil {
+	if err := run(context.Background(), log, *envFile, *force); err != nil {
 		log.Error("seed failed", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger, envFile string) error {
+func run(ctx context.Context, log *slog.Logger, envFile string, force bool) error {
 	if err := loadEnvFile(envFile); err != nil {
 		return err
 	}
@@ -41,6 +43,9 @@ func run(ctx context.Context, log *slog.Logger, envFile string) error {
 		return err
 	}
 	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if err := guardLocalDSN(cfg.DBDSN, force); err != nil {
 		return err
 	}
 
@@ -100,4 +105,29 @@ func loadEnvFile(path string) error {
 		}
 	}
 	return nil
+}
+
+// guardLocalDSN refuses to seed a database that is not on this machine.
+//
+// The seed's accounts have a password baked into the source and are created
+// pre-verified, which is exactly right for a demo tree on a laptop and is a
+// published credential anywhere else. Nothing runs this against production on
+// purpose -- the guard exists for the afternoon when a shell still has the
+// deployment's DRIVE_DB_DSN exported and `make seed` looks harmless.
+func guardLocalDSN(dsn string, force bool) error {
+	if force {
+		return nil
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return fmt.Errorf("DRIVE_DB_DSN: not a valid connection URL: %w", err)
+	}
+	host := u.Hostname()
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing to seed %s: the seed creates pre-verified accounts with a password from the source tree, "+
+			"which belongs on a local stack and nowhere else. Pass -force if this really is what you want",
+		host)
 }

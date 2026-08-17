@@ -82,6 +82,12 @@ func TestValidateRequiredValues(t *testing.T) {
 		{"DRIVE_DB_DSN", func(c *Config) *Config { c.DBDSN = ""; return c }},
 		{"DRIVE_S3_ENDPOINT", func(c *Config) *Config { c.S3Endpoint = ""; return c }},
 		{"DRIVE_S3_BUCKET", func(c *Config) *Config { c.S3Bucket = ""; return c }},
+		// Credentials and the signing region are required at boot, not
+		// discovered at the first upload: a blank region boots fine and then
+		// fails every CreateMultipartUpload with SignatureDoesNotMatch.
+		{"DRIVE_S3_ACCESS_KEY", func(c *Config) *Config { c.S3AccessKey = ""; return c }},
+		{"DRIVE_S3_SECRET_KEY", func(c *Config) *Config { c.S3SecretKey = ""; return c }},
+		{"DRIVE_S3_REGION", func(c *Config) *Config { c.S3Region = ""; return c }},
 	}
 	for _, c := range cases {
 		if err := c.mut(validConfig()).Validate(); err == nil {
@@ -95,10 +101,12 @@ func TestValidateRequiredValues(t *testing.T) {
 
 func TestLoadDefaults(t *testing.T) {
 	// An empty value falls back to the default, so this isolates the test from
-	// whatever the developer's shell exports.
+	// whatever the developer's shell exports -- including the credentials a
+	// sourced .env leaves behind, which would make the assertion below vacuous.
 	for _, k := range []string{"DRIVE_ADDR", "DRIVE_BASE_URL", "DRIVE_DB_DSN", "DRIVE_S3_ENDPOINT",
-		"DRIVE_S3_BUCKET", "DRIVE_SMTP_ADDR", "DRIVE_MAILPIT_API", "DRIVE_PART_SIZE",
-		"DRIVE_RESEND_KEY", "DRIVE_MAIL_FROM",
+		"DRIVE_S3_BUCKET", "DRIVE_S3_ACCESS_KEY", "DRIVE_S3_SECRET_KEY", "DRIVE_S3_REGION",
+		"DRIVE_SMTP_ADDR", "DRIVE_MAILPIT_API", "DRIVE_PART_SIZE", "DRIVE_RESEND_KEY",
+		"DRIVE_MAIL_FROM", "DRIVE_SIGNUP_MODE", "DRIVE_LOG_LEVEL",
 		"DRIVE_PRESIGN_TTL", "DRIVE_TOKEN_PRESIGN_TTL"} {
 		t.Setenv(k, "")
 	}
@@ -110,8 +118,26 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.PartSize != 100*MiB {
 		t.Errorf("default part size = %d, want %d", cfg.PartSize, 100*MiB)
 	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("defaults must validate: %v", err)
+	if cfg.S3Region != DefaultS3Region {
+		t.Errorf("default signing region = %q, want %q", cfg.S3Region, DefaultS3Region)
+	}
+	// An environment that sets nothing is a deployment, not a laptop: it gets
+	// the quiet log level, and the dev and test .env files ask for debug.
+	if cfg.LogLevel != "info" {
+		t.Errorf("default log level = %q, want info", cfg.LogLevel)
+	}
+	if cfg.SignupMode != SignupOpen {
+		t.Errorf("default signup mode = %q, want %q", cfg.SignupMode, SignupOpen)
+	}
+	// And the defaults alone are NOT a runnable configuration: there is no
+	// sensible default for a credential, so Validate has to say so at boot
+	// rather than let the first upload discover it.
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatal("a configuration with no S3 credentials validated")
+	}
+	if !strings.Contains(err.Error(), "DRIVE_S3_ACCESS_KEY") {
+		t.Errorf("error = %q, want it to name the missing credential", err)
 	}
 }
 
@@ -133,14 +159,17 @@ func TestLoadPartSizeFromEnv(t *testing.T) {
 
 func validConfig() *Config {
 	return &Config{
-		Addr:       ":8080",
-		BaseURL:    "http://localhost:8080",
-		DBDSN:      "postgres://drive:drive@localhost:55432/drive?sslmode=disable",
-		S3Endpoint: "http://localhost:3900",
-		S3Bucket:   "drive-blobs",
-		SMTPAddr:   "localhost:1025",
-		MailpitAPI: "http://localhost:8025",
-		PartSize:   100 * MiB,
+		Addr:        ":8080",
+		BaseURL:     "http://localhost:8080",
+		DBDSN:       "postgres://drive:drive@localhost:55432/drive?sslmode=disable",
+		S3Endpoint:  "http://localhost:3900",
+		S3Bucket:    "drive-blobs",
+		S3AccessKey: "key",
+		S3SecretKey: "secret",
+		S3Region:    DefaultS3Region,
+		SMTPAddr:    "localhost:1025",
+		MailpitAPI:  "http://localhost:8025",
+		PartSize:    100 * MiB,
 	}
 }
 

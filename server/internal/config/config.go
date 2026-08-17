@@ -97,7 +97,10 @@ func Load() (*Config, error) {
 		ResendKey:  env("DRIVE_RESEND_KEY", ""),
 		MailFrom:   env("DRIVE_MAIL_FROM", ""),
 		SignupMode: env("DRIVE_SIGNUP_MODE", SignupOpen),
-		LogLevel:   env("DRIVE_LOG_LEVEL", "debug"),
+		// info by default, so an environment that sets nothing -- which is what
+		// a deployment looks like -- is not writing a line per request. The dev
+		// and test .env files ask for debug explicitly.
+		LogLevel: env("DRIVE_LOG_LEVEL", "info"),
 	}
 
 	var err error
@@ -157,8 +160,17 @@ func (c *Config) Validate() error {
 		{"DRIVE_DB_DSN", c.DBDSN},
 		{"DRIVE_S3_ENDPOINT", c.S3Endpoint},
 		{"DRIVE_S3_BUCKET", c.S3Bucket},
-		{"DRIVE_MAILPIT_API", c.MailpitAPI},
+		// The S3 credentials and the signing region are required here rather
+		// than discovered later. Without them the server boots perfectly well
+		// and then fails at the first CreateMultipartUpload -- with a blank
+		// region, with SignatureDoesNotMatch -- so the failure surfaces inside
+		// somebody's upload instead of at startup, where it belongs.
+		{"DRIVE_S3_ACCESS_KEY", c.S3AccessKey},
+		{"DRIVE_S3_SECRET_KEY", c.S3SecretKey},
+		{"DRIVE_S3_REGION", c.S3Region},
 	}
+	// DRIVE_MAILPIT_API is deliberately absent: nothing in the server reads it.
+	// It belongs to the test harness's inbox client, which validates it itself.
 	// Exactly one mail path has to be configured. Which one is decided by
 	// DRIVE_RESEND_KEY, so the other's variable is not required.
 	if !c.UseResend() {
