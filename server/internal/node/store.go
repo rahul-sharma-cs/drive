@@ -236,8 +236,11 @@ func (s *Store) Copy(ctx context.Context, ownerID, srcID, destParentID uuid.UUID
 		return Node{}, err
 	}
 
+	// unreferenced_at is cleared with the increment: a blob that has a reference
+	// again is not waiting out any grace, and leaving a stale stamp behind would
+	// let the collector delete bytes this copy points at.
 	const bump = `
-		UPDATE blobs SET refcount = refcount + 1
+		UPDATE blobs SET refcount = refcount + 1, unreferenced_at = NULL
 		 WHERE id = (SELECT blob_id FROM nodes
 		              WHERE id = $1 AND owner_id = $2
 		                AND kind = 'file' AND deleted_at IS NULL)

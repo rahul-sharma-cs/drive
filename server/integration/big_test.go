@@ -191,7 +191,7 @@ func cleanupBig(t *testing.T, owner *testutil.Client, nodeID uuid.UUID) {
 	t.Cleanup(func() {
 		ctx := context.Background()
 		purge(t, owner, nodeID)
-		testutil.Backdate(t, H.Pool, "blobs", "created_at", blobGrace, "object_key = $1", key)
+		testutil.Backdate(t, H.Pool, "blobs", "unreferenced_at", blobGrace, "object_key = $1", key)
 		testutil.GC(t, ctx)
 		if H.ObjectExists(t, key) {
 			t.Errorf("the big run's object %s was not reclaimed", key)

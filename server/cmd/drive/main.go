@@ -15,6 +15,7 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/blob"
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 	"github.com/rahul-sharma-cs/drive/server/internal/db"
+	"github.com/rahul-sharma-cs/drive/server/internal/gc"
 	"github.com/rahul-sharma-cs/drive/server/internal/mail"
 )
 
@@ -56,6 +57,16 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+
+	// The collector runs in-process: this service is resident, so an hourly
+	// ticker is the whole scheduler. One pass runs at startup because the ticker
+	// alone would leave a restarted process collecting nothing for an hour --
+	// and a deploy that restarts often would mean it never runs at all.
+	collector := gc.New(pool, s3Client, cfg.S3Bucket, logger)
+	if err := collector.RunOnce(bootCtx); err != nil {
+		logger.Error("startup garbage collection pass failed", "error", err)
+	}
+	go collector.Run(ctx)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

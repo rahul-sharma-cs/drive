@@ -516,6 +516,38 @@ func TestGCAbortsAnAgedOrphanMultipart(t *testing.T) {
 	}
 }
 
+// R2 re-mints the UploadId on every response: the id ListMultipartUploads
+// reports for an upload is never the id CreateMultipartUpload returned for it,
+// and both address the same upload (measured against R2 2026-08-17). A claim
+// that compares the listed id to the stored one can therefore never match
+// there, so every in-progress multipart past the orphan grace looks unclaimed
+// and is aborted -- the collector destroying exactly the long-running resumable
+// uploads this product exists for.
+//
+// Garage does not re-mint, so the divergence is injected rather than waited for:
+// the session keeps its object key and its real multipart, and only the stored
+// id is rewritten to one the listing will never report. Claiming on the object
+// key alone is what survives it; with the two-column predicate this test aborts
+// a live upload.
+func TestGCKeepsAMultipartWhoseStoredUploadIDWasReminted(t *testing.T) {
+	w := newWorld(t)
+	sess := w.session(w.folder("uploads"), "long-running.bin", gcData(2048))
+	live := *sess.S3UploadID
+
+	if _, err := w.pool.Exec(w.ctx,
+		`UPDATE upload_sessions SET s3_upload_id = $2 WHERE id = $1`,
+		sess.ID, "reminted-"+uuid.NewString()); err != nil {
+		t.Fatalf("re-minting the stored upload id: %v", err)
+	}
+
+	w.gc.Cfg.OrphanAge = 0
+	w.run()
+
+	if !w.multipartExists(sess.ObjectKey, live) {
+		t.Error("an active session's multipart was aborted because its stored upload id no longer matched the listed one")
+	}
+}
+
 // ------------------------------------------------------- the refcount battery --
 
 // Copy shares a blob; purging one side must not touch the bytes the other side
@@ -572,16 +604,20 @@ func TestGCDeletesOnlyBlobsNothingReferences(t *testing.T) {
 		t.Fatalf("refcount is %d after purging both sides, want 0", got)
 	}
 
-	// The grace is real: a blob that just hit zero is not collected yet.
-	if _, err := w.pool.Exec(w.ctx, `UPDATE blobs SET created_at = now() WHERE id = $1`, blobID); err != nil {
-		t.Fatalf("resetting created_at: %v", err)
+	// The grace is real, and it runs from when the last reference went -- not
+	// from created_at, which is still backdated three hours from the step above.
+	// Under the old created_at semantics this blob was collectible the instant
+	// the refcount hit zero, so an already-issued one-hour download URL could
+	// 404 mid-transfer; this pass is what proves the deadline moved.
+	if stamp := w.unreferencedAt(blobID); stamp == nil {
+		t.Fatal("the purge that emptied the blob did not stamp unreferenced_at")
 	}
 	w.run()
 	if got := w.refcount(blobID); got != 0 {
 		t.Error("an unreferenced blob was collected inside the grace period")
 	}
 
-	testutil.Backdate(t, w.pool, "blobs", "created_at", 3*time.Hour, "id = $1", blobID)
+	testutil.Backdate(t, w.pool, "blobs", "unreferenced_at", 3*time.Hour, "id = $1", blobID)
 	w.run()
 
 	var alive int
@@ -594,6 +630,18 @@ func TestGCDeletesOnlyBlobsNothingReferences(t *testing.T) {
 	if w.objectExists(key) {
 		t.Error("the object is still in Garage after its last reference went")
 	}
+}
+
+// unreferencedAt reads the moment a blob's last reference went, or nil while it
+// still has one (or once the row is gone).
+func (w *world) unreferencedAt(blobID uuid.UUID) *time.Time {
+	w.t.Helper()
+	var at *time.Time
+	if err := w.pool.QueryRow(w.ctx,
+		`SELECT unreferenced_at FROM blobs WHERE id = $1`, blobID).Scan(&at); err != nil {
+		return nil
+	}
+	return at
 }
 
 // refcount reads a blob's refcount, or -1 once the row is gone.

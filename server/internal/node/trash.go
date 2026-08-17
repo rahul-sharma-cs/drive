@@ -240,9 +240,19 @@ func (s *Store) Purge(ctx context.Context, ownerID, id uuid.UUID) error {
 
 	// One decrement per referencing node, so two nodes sharing a blob take it
 	// down by two. Never below zero, and never a DeleteObject.
+	//
+	// The decrement that empties a blob also stamps unreferenced_at: the GC's
+	// grace runs from the moment the last reference went, not from when the blob
+	// was created, so an already-issued download URL cannot outlive its bytes.
+	// COALESCE keeps the first stamp -- purging a second node that referenced an
+	// already-empty blob must not push the deadline forward -- and the ELSE
+	// branch restores the invariant that a referenced blob carries no stamp.
 	if _, err := tx.Exec(ctx, `
 		UPDATE blobs b
-		   SET refcount = GREATEST(b.refcount - c.n, 0)
+		   SET refcount = GREATEST(b.refcount - c.n, 0),
+		       unreferenced_at = CASE WHEN b.refcount - c.n <= 0
+		                              THEN COALESCE(b.unreferenced_at, now())
+		                              ELSE NULL END
 		  FROM (
 		        SELECT blob_id, count(*) AS n
 		          FROM nodes

@@ -214,6 +214,11 @@ func (g *GC) finishStaleFinalizes(ctx context.Context) error {
 // inserts the session row, so a multipart younger than OrphanAge might belong to
 // a session that is milliseconds from existing. Nothing else in the system
 // abandons a multipart, so waiting a day costs only storage.
+//
+// The abort uses the id the listing reported, never a stored one -- a genuine
+// orphan has no session row and so no stored id, and R2's re-minted ids are
+// interchangeable (proven: aborting by a listed id returns 204 and empties the
+// listing).
 func (g *GC) abortOrphanMultiparts(ctx context.Context) error {
 	cutoff := time.Now().Add(-g.Cfg.OrphanAge)
 
@@ -236,7 +241,7 @@ func (g *GC) abortOrphanMultiparts(ctx context.Context) error {
 			if up.Initiated == nil || up.Initiated.After(cutoff) {
 				continue
 			}
-			claimed, err := g.multipartClaimed(ctx, key, uploadID)
+			claimed, err := g.multipartClaimed(ctx, key)
 			if err != nil {
 				errs = append(errs, err)
 				continue
@@ -264,14 +269,28 @@ func (g *GC) abortOrphanMultiparts(ctx context.Context) error {
 }
 
 // multipartClaimed reports whether a live session owns this multipart upload.
-func (g *GC) multipartClaimed(ctx context.Context, key, uploadID string) (bool, error) {
+//
+// The claim is on object_key alone, deliberately, and the upload id is not part
+// of the predicate: R2 re-mints the UploadId on every response, so the id
+// ListMultipartUploads reports for an upload is never the id
+// CreateMultipartUpload returned for it (measured 2026-08-17 -- both address the
+// same upload; aborting with either one empties the listing). Comparing the
+// listed id to the stored one can therefore never match on R2, which would make
+// every in-progress multipart past the orphan grace look unclaimed and get
+// aborted -- the collector destroying exactly the long-running resumable
+// uploads this product exists for.
+//
+// One key per session is what makes the narrower predicate sound: object keys
+// come from upload.NewObjectKey (a fresh uuid), it has exactly one call site,
+// and no path -- resume, expiry retire, the insert race -- ever reuses one.
+func (g *GC) multipartClaimed(ctx context.Context, key string) (bool, error) {
 	const q = `SELECT EXISTS (
 		SELECT 1 FROM upload_sessions
-		 WHERE object_key = $1 AND s3_upload_id = $2
+		 WHERE object_key = $1
 		   AND status IN ('active', 'completing'))`
 	var claimed bool
-	if err := g.db.QueryRow(ctx, q, key, uploadID).Scan(&claimed); err != nil {
-		return false, fmt.Errorf("gc: checking multipart %s: %w", uploadID, err)
+	if err := g.db.QueryRow(ctx, q, key).Scan(&claimed); err != nil {
+		return false, fmt.Errorf("gc: checking multipart at %s: %w", key, err)
 	}
 	return claimed, nil
 }
@@ -285,13 +304,20 @@ func (g *GC) multipartClaimed(ctx context.Context, key, uploadID string) (bool, 
 // row knows about, which is recoverable, instead of a row whose bytes are gone,
 // which is not.
 //
-// The grace is measured from created_at, the only timestamp the row carries.
+// The grace is measured from unreferenced_at -- when the last reference went --
+// and never from created_at. From created_at, a blob older than the grace was
+// collectible the instant its refcount hit zero, so a download URL issued a
+// minute earlier could 404 mid-transfer and a file uploaded yesterday and
+// trashed today got no grace at all. A NULL unreferenced_at at refcount 0 means
+// the stamp has not landed yet; the row waits for the next pass rather than
+// being collected on a timestamp that means something else.
 func (g *GC) deleteUnreferencedBlobs(ctx context.Context) error {
 	const q = `DELETE FROM blobs
 		 WHERE id IN (SELECT id FROM blobs
 		               WHERE refcount = 0
-		                 AND created_at < now() - make_interval(secs => $1)
-		               ORDER BY created_at LIMIT $2)
+		                 AND unreferenced_at IS NOT NULL
+		                 AND unreferenced_at < now() - make_interval(secs => $1)
+		               ORDER BY unreferenced_at LIMIT $2)
 		RETURNING id, object_key`
 	rows, err := g.db.Query(ctx, q, g.Cfg.BlobGrace.Seconds(), g.Cfg.Batch)
 	if err != nil {

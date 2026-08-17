@@ -90,7 +90,7 @@ func TestRefcountPurgeBothDeletesTheObject(t *testing.T) {
 		t.Fatal("an unreferenced object was deleted inside its grace window")
 	}
 
-	testutil.Backdate(t, H.Pool, "blobs", "created_at", blobGrace, "object_key = $1", key)
+	testutil.Backdate(t, H.Pool, "blobs", "unreferenced_at", blobGrace, "object_key = $1", key)
 	testutil.GC(t, ctx)
 
 	if n := H.CountRows(t, "blobs", "object_key = $1", key); n != 0 {
@@ -135,7 +135,7 @@ func TestRefcountTrashPurgeSubtreeWithCopy(t *testing.T) {
 		t.Fatalf("the surviving copy's refcount is %d, want 1", got)
 	}
 
-	testutil.Backdate(t, H.Pool, "blobs", "created_at", blobGrace, "object_key = ANY($1)",
+	testutil.Backdate(t, H.Pool, "blobs", "unreferenced_at", blobGrace, "object_key = ANY($1)",
 		[]string{sharedKey, lonelyKey})
 	testutil.GC(t, ctx)
 
