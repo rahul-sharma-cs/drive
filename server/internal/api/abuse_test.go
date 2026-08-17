@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -136,5 +137,98 @@ func TestLoginRecordsTheForwardedClientAddress(t *testing.T) {
 	}
 	if ip != "198.51.100.42" {
 		t.Errorf("auth_sessions.ip = %q, want the client address the edge reported", ip)
+	}
+}
+
+// The service-wide daily mail budget. The per-recipient budget cannot do this
+// job: a thousand addresses each well inside their personal allowance still
+// empty the sending account's quota, and a spent quota means no real user can
+// verify an address until tomorrow.
+func TestVerificationMailStopsAtTheServiceWideDailyCap(t *testing.T) {
+	pool := authTestPool(t)
+	ctx := context.Background()
+
+	// This budget is one row for the whole service, so the test owns the scope
+	// rather than a key of its own and clears it before counting.
+	if _, err := pool.Exec(ctx, `DELETE FROM throttle WHERE scope = $1`, auth.ScopeEmailSendGlobal); err != nil {
+		t.Fatalf("clearing the global mail budget: %v", err)
+	}
+
+	sender := &authRecordingSender{}
+	s := New(&config.Config{BaseURL: authTestBaseURL, EmailDailyCap: 2}, pool, nil, sender, nil, nil)
+	h := s.Routes()
+
+	const attempts = 3
+	for i := 0; i < attempts; i++ {
+		rec := abuseDo(t, h, http.MethodPost, "/api/auth/signup",
+			authSignupBody{authTestEmail(t), authTestPassword, "Test User"}, "203.0.113.7")
+		// Every signup still succeeds: a suppressed message must not tell the
+		// caller anything, and the account exists either way.
+		if rec.Code != http.StatusOK {
+			t.Fatalf("signup %d: status %d, body %s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	// The sends are dispatched off the request goroutine, so wait on the budget
+	// rather than on a clock: charge-first means all three attempts are counted
+	// whether or not they sent anything.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		n, err := auth.Count(ctx, pool, auth.ScopeEmailSendGlobal, auth.GlobalKey, auth.EmailSendGlobalWindow)
+		if err != nil {
+			t.Fatalf("reading the global mail budget: %v", err)
+		}
+		if n == attempts {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the global budget counted %d of %d attempts", n, attempts)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if got := len(sender.all()); got != 2 {
+		t.Errorf("%d messages went out under a cap of 2", got)
+	}
+}
+
+// DRIVE_SIGNUP_MODE. Gate A deploys "closed", so this is the switch that lets a
+// live URL exist before anyone is invited to use it.
+func TestSignupModeGatesAccountCreation(t *testing.T) {
+	pool := authTestPool(t)
+
+	for _, c := range []struct {
+		mode   string
+		status int
+	}{
+		{config.SignupOpen, http.StatusOK},
+		{"", http.StatusOK}, // unset is open
+		{config.SignupClosed, http.StatusForbidden},
+		// No invite system exists, so invite-only is a deployment nobody can
+		// join. Answering anything friendlier than closed would be a claim the
+		// server cannot back up.
+		{config.SignupInvite, http.StatusForbidden},
+	} {
+		t.Run("mode="+c.mode, func(t *testing.T) {
+			sender := &authRecordingSender{}
+			h := New(&config.Config{BaseURL: authTestBaseURL, SignupMode: c.mode}, pool, nil, sender, nil, nil).Routes()
+
+			email := authTestEmail(t)
+			rec := abuseDo(t, h, http.MethodPost, "/api/auth/signup",
+				authSignupBody{email, authTestPassword, "Test User"}, "203.0.113.7")
+			if rec.Code != c.status {
+				t.Fatalf("status %d, want %d (body %s)", rec.Code, c.status, rec.Body.String())
+			}
+			if c.status != http.StatusOK {
+				var n int
+				if err := pool.QueryRow(context.Background(),
+					`SELECT count(*) FROM users WHERE email = $1`, email).Scan(&n); err != nil {
+					t.Fatalf("counting the account: %v", err)
+				}
+				if n != 0 {
+					t.Error("a refused signup created an account anyway")
+				}
+			}
+		})
 	}
 }

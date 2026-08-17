@@ -19,6 +19,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/rahul-sharma-cs/drive/server/internal/config"
 	"github.com/rahul-sharma-cs/drive/server/internal/node"
 	"github.com/rahul-sharma-cs/drive/server/internal/upload"
 )
@@ -49,6 +51,56 @@ func (s *Server) mountUploads(r chi.Router) {
 }
 
 func (s *Server) uploads() *upload.Store { return upload.NewStore(s.DB) }
+
+// withinCapacity refuses a new upload that would take the service, or this
+// user, past its byte cap. It writes the refusal itself and reports false.
+//
+// The service-wide cap is the real cost control: the object store bills for
+// what it holds and offers no spend limit of its own, so nothing but this
+// stands between a stranger with a script and an unbounded invoice. The
+// per-user quota is fairness, and is the one of the two that may be cut.
+func (s *Server) withinCapacity(w http.ResponseWriter, r *http.Request, store *upload.Store, ownerID uuid.UUID, size int64) bool {
+	limit, quota := s.Cfg.StorageCap, s.Cfg.UserQuota
+	if limit <= 0 && quota <= 0 {
+		return true
+	}
+
+	used, err := store.Usage(r.Context(), ownerID)
+	if err != nil {
+		writeUploadErr(w, r, err)
+		return false
+	}
+
+	if limit > 0 && used.Total()+size > limit {
+		LoggerFrom(r.Context()).Warn("upload refused: the service is at its storage cap",
+			"stored", used.Stored, "in_flight", used.InFlight, "requested", size, "cap", limit)
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid,
+			"Drive is out of storage space. Try again once something has been deleted.")
+		return false
+	}
+	if quota > 0 && used.User+size > quota {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid,
+			fmt.Sprintf("this upload would take you past your %s of storage. Empty the trash or delete something first.",
+				humanBytes(quota)))
+		return false
+	}
+	return true
+}
+
+// humanBytes renders a byte count the way a limit should read in a message to a
+// person: whole units, no more precision than the number deserves.
+func humanBytes(n int64) string {
+	switch {
+	case n >= config.GiB:
+		return fmt.Sprintf("%.3g GiB", float64(n)/float64(config.GiB))
+	case n >= config.MiB:
+		return fmt.Sprintf("%.3g MiB", float64(n)/float64(config.MiB))
+	case n >= config.KiB:
+		return fmt.Sprintf("%.3g KiB", float64(n)/float64(config.KiB))
+	default:
+		return fmt.Sprintf("%d bytes", n)
+	}
+}
 
 func (s *Server) presigner() *upload.Presigner {
 	return &upload.Presigner{
@@ -239,6 +291,11 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "file_size must not be negative")
 		return
 	}
+	if maxFile := s.Cfg.MaxFileSize; maxFile > 0 && req.FileSize > maxFile {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid,
+			fmt.Sprintf("this file is %s; the limit is %s", humanBytes(req.FileSize), humanBytes(maxFile)))
+		return
+	}
 	// reuse is the folder vocabulary; a colliding file is answered with
 	// replace or rename, or with no policy at all and a prompt.
 	policy := strings.TrimSpace(req.ConflictPolicy)
@@ -278,6 +335,16 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	if match != nil {
 		s.writeMatched(w, r, store, match, policy, http.StatusOK)
+		return
+	}
+
+	// 2b. Capacity, on the create-new path only.
+	//
+	// A resume never comes through here, and that is deliberate: its bytes are
+	// already stored and already counted, so refusing it would strand them --
+	// the upload could neither finish nor free anything. Only new volume is
+	// refused.
+	if !s.withinCapacity(w, r, store, user.ID, req.FileSize) {
 		return
 	}
 

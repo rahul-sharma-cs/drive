@@ -59,7 +59,20 @@ type Config struct {
 	LogLevel        string
 	Argon2Limit     int
 	AuthRatePerMin  int
+	SignupMode      string
+	EmailDailyCap   int
+	MaxFileSize     int64
+	StorageCap      int64
+	UserQuota       int64
 }
+
+// Signup modes. Only SignupOpen creates accounts; SignupInvite is accepted and
+// behaves as SignupClosed until there is an invite system to back it.
+const (
+	SignupOpen   = "open"
+	SignupInvite = "invite"
+	SignupClosed = "closed"
+)
 
 // Load reads the configuration from the process environment.
 func Load() (*Config, error) {
@@ -81,9 +94,10 @@ func Load() (*Config, error) {
 		// Blank MailFrom means the sender's own default (mail.DefaultFrom); a
 		// deployment on a verified domain must set it, and no default can guess
 		// what that domain is.
-		ResendKey: env("DRIVE_RESEND_KEY", ""),
-		MailFrom:  env("DRIVE_MAIL_FROM", ""),
-		LogLevel:  env("DRIVE_LOG_LEVEL", "debug"),
+		ResendKey:  env("DRIVE_RESEND_KEY", ""),
+		MailFrom:   env("DRIVE_MAIL_FROM", ""),
+		SignupMode: env("DRIVE_SIGNUP_MODE", SignupOpen),
+		LogLevel:   env("DRIVE_LOG_LEVEL", "debug"),
 	}
 
 	var err error
@@ -99,8 +113,29 @@ func Load() (*Config, error) {
 	if cfg.AuthRatePerMin, err = parseCount(env("DRIVE_AUTH_RATE_PER_MIN", "")); err != nil {
 		return nil, fmt.Errorf("DRIVE_AUTH_RATE_PER_MIN: %w", err)
 	}
+	// Messages the whole service may send in a rolling day. Unlike the two
+	// limits above, 0 here means no budget at all -- which is right for a local
+	// Mailpit and wrong for anything with a vendor quota, so Load defaults it to
+	// a real number and a deployment only ever raises or lowers it.
+	if cfg.EmailDailyCap, err = parseCount(env("DRIVE_EMAIL_DAILY_CAP", "80")); err != nil {
+		return nil, fmt.Errorf("DRIVE_EMAIL_DAILY_CAP: %w", err)
+	}
 	if cfg.PartSize, err = ParseSize(env("DRIVE_PART_SIZE", "100MiB")); err != nil {
 		return nil, fmt.Errorf("DRIVE_PART_SIZE: %w", err)
+	}
+	// The three volume caps. All default to 0, which means no cap: the test
+	// battery deliberately uploads multi-GB files, and a default that refused
+	// them would be a limit nobody chose. A deployment sets real numbers -- and
+	// StorageCap in particular is what bounds the object store's bill, since the
+	// store itself offers no spend limit.
+	if cfg.MaxFileSize, err = ParseSize(env("DRIVE_MAX_FILE_SIZE", "0")); err != nil {
+		return nil, fmt.Errorf("DRIVE_MAX_FILE_SIZE: %w", err)
+	}
+	if cfg.StorageCap, err = ParseSize(env("DRIVE_STORAGE_CAP", "0")); err != nil {
+		return nil, fmt.Errorf("DRIVE_STORAGE_CAP: %w", err)
+	}
+	if cfg.UserQuota, err = ParseSize(env("DRIVE_USER_QUOTA", "0")); err != nil {
+		return nil, fmt.Errorf("DRIVE_USER_QUOTA: %w", err)
 	}
 	if cfg.PresignTTL, err = time.ParseDuration(env("DRIVE_PRESIGN_TTL", "1h")); err != nil {
 		return nil, fmt.Errorf("DRIVE_PRESIGN_TTL: %w", err)
@@ -136,6 +171,12 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(r.value) == "" {
 			return fmt.Errorf("%s: must not be empty", r.name)
 		}
+	}
+
+	switch c.SignupMode {
+	case "", SignupOpen, SignupInvite, SignupClosed:
+	default:
+		return fmt.Errorf("DRIVE_SIGNUP_MODE: %q is not one of open, invite, closed", c.SignupMode)
 	}
 
 	if c.PartSize < minPartSize {

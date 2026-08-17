@@ -14,7 +14,17 @@ const (
 	ScopeLogin = "login"
 	// ScopeEmailSend counts outbound mail, keyed by recipient address.
 	ScopeEmailSend = "email_send"
+	// ScopeEmailSendGlobal counts ALL outbound mail, service-wide. ScopeEmailSend
+	// is per-recipient and so cannot protect the sending account's own daily
+	// quota: a thousand addresses each under their personal budget still burn
+	// through it in one afternoon, and a spent vendor quota takes verification
+	// mail down for real users.
+	ScopeEmailSendGlobal = "email_send_global"
 )
+
+// GlobalKey is the throttle key for budgets that are not keyed by anybody --
+// one row per window for the whole service.
+const GlobalKey = "all"
 
 // Budgets from PLAN §schema. Both are auto-clearing: the window is measured
 // against now(), so a lapsed window simply stops counting -- there is no
@@ -25,6 +35,12 @@ const (
 
 	EmailSendLimit  = 5
 	EmailSendWindow = time.Hour
+
+	// EmailSendGlobalWindow is the service-wide budget's rolling window. It is
+	// exactly the collector's throttle retention, so a row stops counting at the
+	// same moment the collector becomes free to delete it -- a shorter retention
+	// would silently refund budget mid-window.
+	EmailSendGlobalWindow = 24 * time.Hour
 )
 
 // Count returns how many events are recorded for (scope, key) inside the last

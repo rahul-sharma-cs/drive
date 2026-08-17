@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/rahul-sharma-cs/drive/server/internal/auth"
+	"github.com/rahul-sharma-cs/drive/server/internal/config"
 )
 
 // Input bounds. PLAN fixes none of these; they are the smallest limits that
@@ -101,6 +102,14 @@ type authTokenRequest struct {
 // and an address that is taken generates no mail at all -- signup must not be
 // an oracle for "does this person have an account here".
 func (s *Server) authSignup(w http.ResponseWriter, r *http.Request) {
+	// Before the body is even read: a closed deployment does no work at all for
+	// a signup, which is also what makes "closed" a usable emergency brake.
+	if !s.signupsOpen() {
+		WriteErr(w, r, http.StatusForbidden, CodeUnsupported,
+			"Drive is not accepting new accounts right now")
+		return
+	}
+
 	var req authSignupRequest
 	if err := ReadJSON(r, &req); err != nil {
 		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "expected {email, password, display_name}")
@@ -171,6 +180,28 @@ func (s *Server) sendVerificationMail(ctx context.Context, log *slog.Logger, acc
 	if !allowed {
 		log.Warn("verification mail suppressed: address is over its send budget", "user_id", acct.ID)
 		return
+	}
+
+	// The service-wide daily budget, charged BEFORE the decision to send.
+	//
+	// Check-then-send races straight past the cap: two concurrent signups both
+	// read 79, both conclude there is room, and both send. Charging first makes
+	// the increment the serialization point -- the upsert takes the row lock --
+	// and the post-increment count is then the honest answer to "was there room
+	// for me". A suppressed attempt still spends budget, which is the correct
+	// direction to be wrong in when the thing being protected is a hard vendor
+	// quota that takes verification mail down for everyone when it runs out.
+	if dailyCap := s.emailDailyCap(); dailyCap > 0 {
+		spent, err := auth.Bump(ctx, s.DB, auth.ScopeEmailSendGlobal, auth.GlobalKey, auth.EmailSendGlobalWindow)
+		if err != nil {
+			log.Error("charging the service-wide mail budget", "error", err)
+			return
+		}
+		if spent > dailyCap {
+			log.Warn("verification mail suppressed: the service-wide daily send budget is spent",
+				"user_id", acct.ID, "spent", spent, "cap", dailyCap)
+			return
+		}
 	}
 
 	token, err := auth.CreateEmailToken(ctx, s.DB, acct.ID, auth.PurposeVerify)
@@ -377,6 +408,26 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 
 func (s *Server) secureCookies() bool {
 	return strings.HasPrefix(strings.ToLower(s.baseURL()), "https://")
+}
+
+// signupsOpen reports whether POST /auth/signup creates accounts.
+//
+// Only "open" does. "invite" is accepted as a configuration value and behaves
+// exactly like "closed" -- there is no invite system yet, so an invite-only
+// deployment is one nobody can join, and answering anything friendlier than
+// "closed" would be a claim the server cannot back up.
+func (s *Server) signupsOpen() bool {
+	return s.Cfg == nil || s.Cfg.SignupMode == "" || s.Cfg.SignupMode == config.SignupOpen
+}
+
+// emailDailyCap is the service-wide daily send budget, or 0 for no budget --
+// which is what every local and test run gets, because Mailpit has no quota to
+// protect.
+func (s *Server) emailDailyCap() int {
+	if s.Cfg == nil {
+		return 0
+	}
+	return s.Cfg.EmailDailyCap
 }
 
 func (s *Server) baseURL() string {
