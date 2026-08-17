@@ -10,6 +10,7 @@ package upload
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -96,6 +97,100 @@ func (p *Presigner) PartURLs(ctx context.Context, key, uploadID string, numbers 
 		out = append(out, part)
 	}
 	return out, nil
+}
+
+// ------------------------------------------------------------------ download --
+
+// DownloadContentType is what every download claims to be, whatever was
+// uploaded. Objects are stored with no Content-Type at all, and the presigned
+// GET overrides it to this unconditionally: uploaded HTML or SVG served back
+// under its own MIME type from a store origin would be a stored-XSS channel,
+// and "never echo the client's MIME" is the rule that closes it.
+const DownloadContentType = "application/octet-stream"
+
+// PresignedGet is one download URL and the moment it stops working.
+type PresignedGet struct {
+	URL       string
+	ExpiresAt time.Time
+}
+
+// GetURL signs a GET for an object, forcing the response's disposition and
+// content type through the response-content-* query overrides.
+//
+// The overrides are honoured by R2 on both the 200 and the 206 Range response,
+// and by Garage on the 200 only (both measured 2026-08-17). Garage's 206 is
+// still safe -- the object carries no stored Content-Type for it to fall back
+// to -- so the posture holds on both stores.
+//
+// The TTL is the presigner's (DRIVE_PRESIGN_TTL, an hour). Anything much
+// shorter breaks download managers: a resumed transfer re-requests ranges
+// against this URL directly, long after the redirect that produced it.
+func (p *Presigner) GetURL(ctx context.Context, key, fileName string) (PresignedGet, error) {
+	req, err := p.Presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket:                     aws.String(p.Bucket),
+		Key:                        aws.String(key),
+		ResponseContentDisposition: aws.String(AttachmentDisposition(fileName)),
+		ResponseContentType:        aws.String(DownloadContentType),
+	}, s3.WithPresignExpires(p.TTL))
+	if err != nil {
+		return PresignedGet{}, fmt.Errorf("presigning a download of %s: %w", key, err)
+	}
+	return PresignedGet{URL: req.URL, ExpiresAt: time.Now().Add(p.TTL)}, nil
+}
+
+// AttachmentDisposition builds the Content-Disposition value a download is
+// served with: always an attachment, never inline.
+//
+// Both parameter forms are emitted, as RFC 6266 recommends. filename= carries
+// an ASCII-only fallback for anything that cannot read the extended form, and
+// filename*= carries the real name RFC 5987 style -- UTF-8, percent-encoded --
+// so emoji, CJK and RTL names arrive intact. The fallback also drops quotes and
+// backslashes, which are the only two characters that could otherwise end the
+// quoted string early; names never contain CR/LF, because node.Clean strips
+// every C0 control before a name is ever stored.
+func AttachmentDisposition(fileName string) string {
+	return `attachment; filename="` + asciiFallbackName(fileName) +
+		`"; filename*=UTF-8''` + percentEncodeName(fileName)
+}
+
+// asciiFallbackName reduces a name to printable ASCII for the plain filename=
+// parameter. Everything else becomes an underscore rather than disappearing, so
+// the fallback keeps the name's shape and its extension.
+func asciiFallbackName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('_')
+		case r >= 0x20 && r < 0x7F:
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "download"
+	}
+	return b.String()
+}
+
+// percentEncodeName encodes a name into RFC 5987's value-chars: attr-char stays
+// literal, every other byte of the UTF-8 encoding becomes %XX. Note that '%',
+// '\'' and '*' are deliberately not attr-char and so are always escaped.
+func percentEncodeName(name string) string {
+	const attrChar = "!#$&+-.^_`|~"
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			strings.IndexByte(attrChar, c) >= 0:
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }
 
 // PartLister is the slice of the S3 client ListAllParts needs. It is an
