@@ -18,12 +18,19 @@ COPY web/ ./
 RUN npm run build \
  && test -d /src/server/web/dist/assets \
  && test -n "$(ls -A /src/server/web/dist/assets)" \
+ && test -s /src/server/web/dist/index.html \
  && ! grep -q 'has not been built yet' /src/server/web/dist/index.html
-# The three assertions above are the point of this stage. server/web/dist holds
-# a committed placeholder index.html so a fresh clone compiles; go build accepts
-# it silently, and the result is a server that serves "the web app has not been
-# built yet" at the real URL. A missing or empty assets/ dir, or a surviving
-# placeholder, has to fail the build rather than ship.
+# server/web/dist holds a committed placeholder index.html so a fresh clone
+# compiles; go build accepts it silently, and the result would be a server
+# serving "the web app has not been built yet" at the real URL.
+#
+# What actually keeps the placeholder out of the image is structural, not this
+# grep: .dockerignore excludes server/web/dist from the context, so the only
+# path into the binary is the COPY --from=web below. The grep is the backstop
+# for the day that changes. `test -s` is not decoration either -- `grep -q` on a
+# missing file exits 2, which the leading `!` turns into success, so without it
+# a build that emitted assets but no entry HTML would pass and ship a server
+# that 404s at /.
 
 # --- server ----------------------------------------------------------------
 FROM golang:1.26-alpine AS server
@@ -42,8 +49,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/drive .
 # same binary on scratch dies at boot with
 #   DRIVE_S3_ENDPOINT: unreachable: x509: certificate signed by unknown authority
 # from ValidateRuntime's probe. Alpine's base already carries the bundle, so the
-# apk line is belt and braces; the test is the real guard, and it fails the build
-# if that ever stops being true.
+# apk line is what guarantees the store rather than merely restating it. The
+# test below documents the path the Go runtime reads and would catch a base
+# image that moved it -- it cannot catch a missing bundle, since it runs after
+# apk in the same chain and apk failing fails the build first.
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates \
  && test -f /etc/ssl/certs/ca-certificates.crt \

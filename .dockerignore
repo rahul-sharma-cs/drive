@@ -33,6 +33,12 @@ server/drive-mcp
 go.work
 go.work.sum
 
+# generated spike fixtures. Gitignored, so `railway up` never ships them —
+# without this line they are ~11 MB of a 12.6 MB local context and the two
+# builds are demonstrably not the same tree, which is what the header claims.
+server/cmd/spike/public/*.bin
+server/cmd/spike/public/manifest.json
+
 # local stack and test material — no part of the server build
 docker-compose.yml
 garage.toml

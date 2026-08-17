@@ -7,8 +7,9 @@ function App() {
       <h1 className="text-3xl font-semibold tracking-tight">Drive</h1>
       <p className="text-base leading-relaxed text-neutral-600">
         A self-hosted file platform. Uploads are resumable by design: a transfer
-        survives a lost connection, a closed laptop, a restarted server, and
-        picks up from the last confirmed part.
+        survives a lost connection, a closed laptop, a restarted server. Pick
+        the same file again and it carries on from the last confirmed part
+        rather than starting over.
       </p>
       <p className="text-base leading-relaxed text-neutral-600">
         The server is running here. The web interface is still being built, so
