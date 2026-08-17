@@ -25,17 +25,18 @@ type Sender interface {
 	Send(ctx context.Context, to, subject, body string) error
 }
 
-// defaultFrom is Drive's outbound address. Not configurable via env — PLAN
-// names no DRIVE_MAIL_FROM var, and locally every message goes to Mailpit
-// regardless of what From claims.
-const defaultFrom = "Drive <no-reply@drive.local>"
+// DefaultFrom is Drive's outbound address when DRIVE_MAIL_FROM is unset. It is
+// the local one: Mailpit accepts anything, and a deployment sending through
+// Resend must name an address on its own verified domain, which no default can
+// guess.
+const DefaultFrom = "Drive <no-reply@drive.local>"
 
 // SMTPSender sends mail over plain SMTP with no auth and no TLS — Mailpit's
 // listener, in dev and in the test stack alike.
 type SMTPSender struct {
 	// Addr is the SMTP server's host:port (DRIVE_SMTP_ADDR).
 	Addr string
-	// From overrides defaultFrom when set. Tests use this; production code
+	// From overrides DefaultFrom when set. Tests use this; production code
 	// should leave it blank.
 	From string
 }
@@ -56,7 +57,7 @@ func (s *SMTPSender) Send(ctx context.Context, to, subject, body string) error {
 
 	from := s.From
 	if from == "" {
-		from = defaultFrom
+		from = DefaultFrom
 	}
 
 	msg, fromAddr, toAddr, err := buildMessage(from, to, subject, body)

@@ -51,6 +51,8 @@ type Config struct {
 	S3Region        string
 	SMTPAddr        string
 	MailpitAPI      string
+	ResendKey       string
+	MailFrom        string
 	PartSize        int64
 	PresignTTL      time.Duration
 	TokenPresignTTL time.Duration
@@ -71,7 +73,15 @@ func Load() (*Config, error) {
 		S3Region:   env("DRIVE_S3_REGION", DefaultS3Region),
 		SMTPAddr:   env("DRIVE_SMTP_ADDR", "localhost:1025"),
 		MailpitAPI: env("DRIVE_MAILPIT_API", "http://localhost:8025"),
-		LogLevel:   env("DRIVE_LOG_LEVEL", "debug"),
+		// Mail: the sender is chosen by ResendKey's presence. Blank means SMTP
+		// to Mailpit, which is every local and test run; set means Resend's
+		// HTTP API, which is the only path out of Railway's Hobby plan.
+		// Blank MailFrom means the sender's own default (mail.DefaultFrom); a
+		// deployment on a verified domain must set it, and no default can guess
+		// what that domain is.
+		ResendKey: env("DRIVE_RESEND_KEY", ""),
+		MailFrom:  env("DRIVE_MAIL_FROM", ""),
+		LogLevel:  env("DRIVE_LOG_LEVEL", "debug"),
 	}
 
 	var err error
@@ -98,8 +108,15 @@ func (c *Config) Validate() error {
 		{"DRIVE_DB_DSN", c.DBDSN},
 		{"DRIVE_S3_ENDPOINT", c.S3Endpoint},
 		{"DRIVE_S3_BUCKET", c.S3Bucket},
-		{"DRIVE_SMTP_ADDR", c.SMTPAddr},
 		{"DRIVE_MAILPIT_API", c.MailpitAPI},
+	}
+	// Exactly one mail path has to be configured. Which one is decided by
+	// DRIVE_RESEND_KEY, so the other's variable is not required.
+	if !c.UseResend() {
+		required = append(required, struct {
+			name  string
+			value string
+		}{"DRIVE_SMTP_ADDR", c.SMTPAddr})
 	}
 	for _, r := range required {
 		if strings.TrimSpace(r.value) == "" {
@@ -130,11 +147,24 @@ func (c *Config) ValidateRuntime(ctx context.Context) error {
 	if err := reachHTTP(ctx, c.S3Endpoint); err != nil {
 		return fmt.Errorf("DRIVE_S3_ENDPOINT: %w", err)
 	}
-	if err := dialTCP(ctx, c.SMTPAddr); err != nil {
-		return fmt.Errorf("DRIVE_SMTP_ADDR: %w", err)
+	// The SMTP probe applies only when SMTP is the sender. With DRIVE_RESEND_KEY
+	// set, mail goes over HTTPS and nothing is listening on an SMTP port -- and
+	// on Railway's Hobby plan nothing can be, since outbound SMTP is blocked
+	// there entirely. Probing anyway would hard-fail boot on the one platform
+	// this configuration exists for. Resend itself is deliberately not probed:
+	// a third party being briefly unreachable must not stop the server starting.
+	if !c.UseResend() {
+		if err := dialTCP(ctx, c.SMTPAddr); err != nil {
+			return fmt.Errorf("DRIVE_SMTP_ADDR: %w", err)
+		}
 	}
 	return nil
 }
+
+// UseResend reports whether mail goes over Resend's HTTP API rather than SMTP.
+// The key's presence is the whole switch: there is no mode variable to get out
+// of step with it.
+func (c *Config) UseResend() bool { return strings.TrimSpace(c.ResendKey) != "" }
 
 // dialDSN opens a TCP connection to the Postgres host in the DSN. It proves
 // reachability without pulling a driver into this package; internal/db does the

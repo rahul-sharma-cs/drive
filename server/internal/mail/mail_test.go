@@ -10,7 +10,7 @@ import (
 // message. Asserted directly on the bytes buildMessage hands to the SMTP
 // writer, not on a live send.
 func TestBuildMessage_SubjectInjection(t *testing.T) {
-	msg, _, _, err := buildMessage(defaultFrom, "victim@example.com",
+	msg, _, _, err := buildMessage(DefaultFrom, "victim@example.com",
 		"Report\r\nBcc: attacker@evil.com", "body")
 	if err != nil {
 		t.Fatalf("buildMessage: %v", err)
@@ -27,7 +27,7 @@ func TestBuildMessage_SubjectInjection(t *testing.T) {
 // TestBuildMessage_ToAddressInjectionRejected covers an attempted injection
 // riding in the address itself rather than the subject.
 func TestBuildMessage_ToAddressInjectionRejected(t *testing.T) {
-	_, _, _, err := buildMessage(defaultFrom,
+	_, _, _, err := buildMessage(DefaultFrom,
 		"victim@example.com>\r\nBcc: attacker@evil.com<x@x.com", "subject", "body")
 	if err == nil {
 		t.Fatal("buildMessage: want error for a control-character address, got nil")
@@ -37,7 +37,7 @@ func TestBuildMessage_ToAddressInjectionRejected(t *testing.T) {
 // TestBuildMessage_DisplayNameInjectionRejected covers the "display name"
 // half of the mandatory case: a quoted display-name containing CRLF.
 func TestBuildMessage_DisplayNameInjectionRejected(t *testing.T) {
-	_, _, _, err := buildMessage(defaultFrom,
+	_, _, _, err := buildMessage(DefaultFrom,
 		"\"Evil\r\nBcc: attacker@evil.com\" <victim@example.com>", "subject", "body")
 	if err == nil {
 		t.Fatal("buildMessage: want error for a CRLF-carrying display name, got nil")
@@ -45,7 +45,7 @@ func TestBuildMessage_DisplayNameInjectionRejected(t *testing.T) {
 }
 
 func TestBuildMessage_Shape(t *testing.T) {
-	msg, from, to, err := buildMessage(defaultFrom, "victim@example.com", "hello", "body text")
+	msg, from, to, err := buildMessage(DefaultFrom, "victim@example.com", "hello", "body text")
 	if err != nil {
 		t.Fatalf("buildMessage: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestBuildMessage_Shape(t *testing.T) {
 }
 
 func TestBuildMessage_NonASCIISubjectEncoded(t *testing.T) {
-	msg, _, _, err := buildMessage(defaultFrom, "victim@example.com", "café", "body")
+	msg, _, _, err := buildMessage(DefaultFrom, "victim@example.com", "café", "body")
 	if err != nil {
 		t.Fatalf("buildMessage: %v", err)
 	}

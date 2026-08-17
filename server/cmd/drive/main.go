@@ -70,7 +70,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           api.New(cfg, pool, logger, mail.NewSMTPSender(cfg.SMTPAddr), s3Client, presign).Routes(),
+		Handler:           api.New(cfg, pool, logger, mailSender(cfg, logger), s3Client, presign).Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -91,6 +91,20 @@ func main() {
 		logger.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+// mailSender picks the outbound path. The API key's presence is the switch:
+// with one, mail goes over Resend's HTTPS API, which is the only way off a
+// Railway Hobby dyno (outbound SMTP is blocked there); without one, it is plain
+// SMTP to a local Mailpit, which is what makes the verification loop readable
+// in dev and in the test stack.
+func mailSender(cfg *config.Config, logger *slog.Logger) mail.Sender {
+	if cfg.UseResend() {
+		logger.Info("mail: sending over the Resend API", "from", cfg.MailFrom)
+		return mail.NewResendSender(cfg.ResendKey, cfg.MailFrom)
+	}
+	logger.Info("mail: sending over SMTP", "addr", cfg.SMTPAddr)
+	return &mail.SMTPSender{Addr: cfg.SMTPAddr, From: cfg.MailFrom}
 }
 
 func logLevel(name string) slog.Level {

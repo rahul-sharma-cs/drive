@@ -1,6 +1,13 @@
 package config
 
-import "testing"
+import (
+	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestParseSize(t *testing.T) {
 	cases := []struct {
@@ -91,6 +98,7 @@ func TestLoadDefaults(t *testing.T) {
 	// whatever the developer's shell exports.
 	for _, k := range []string{"DRIVE_ADDR", "DRIVE_BASE_URL", "DRIVE_DB_DSN", "DRIVE_S3_ENDPOINT",
 		"DRIVE_S3_BUCKET", "DRIVE_SMTP_ADDR", "DRIVE_MAILPIT_API", "DRIVE_PART_SIZE",
+		"DRIVE_RESEND_KEY", "DRIVE_MAIL_FROM",
 		"DRIVE_PRESIGN_TTL", "DRIVE_TOKEN_PRESIGN_TTL"} {
 		t.Setenv(k, "")
 	}
@@ -133,5 +141,82 @@ func validConfig() *Config {
 		SMTPAddr:   "localhost:1025",
 		MailpitAPI: "http://localhost:8025",
 		PartSize:   100 * MiB,
+	}
+}
+
+// ---------------------------------------------------------------- mail path --
+
+// DRIVE_RESEND_KEY is the only switch between the two senders, and it moves two
+// things at once: which variable is required, and whether boot probes SMTP.
+func TestResendKeySelectsTheMailPath(t *testing.T) {
+	smtp := validConfig()
+	if smtp.UseResend() {
+		t.Error("a config with no DRIVE_RESEND_KEY wants the Resend path")
+	}
+	smtp.SMTPAddr = ""
+	if err := smtp.Validate(); err == nil {
+		t.Error("Validate() with no key and no DRIVE_SMTP_ADDR: want an error, got nil")
+	}
+
+	resend := validConfig()
+	resend.ResendKey = "re_live_key"
+	resend.SMTPAddr = ""
+	if !resend.UseResend() {
+		t.Error("a config with DRIVE_RESEND_KEY set does not want the Resend path")
+	}
+	if err := resend.Validate(); err != nil {
+		t.Errorf("Validate() with a key and no DRIVE_SMTP_ADDR: %v", err)
+	}
+	if blank := (&Config{ResendKey: "   "}); blank.UseResend() {
+		t.Error("a whitespace-only key counts as configured")
+	}
+}
+
+// The probe that would hard-fail boot on Railway, where outbound SMTP is
+// blocked on the Hobby plan and nothing can be listening on 1025.
+//
+// Everything but SMTP is stood up locally so the SMTP dial is the only thing
+// that can fail: with no key it must fail and name its variable, and with a key
+// it must not be attempted at all.
+func TestValidateRuntimeProbesSMTPOnlyWhenSMTPIsTheSender(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("standing in for Postgres: %v", err)
+	}
+	defer db.Close()
+	go func() {
+		for {
+			conn, err := db.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer store.Close()
+
+	// Port 1 on the loopback: reserved, and nothing will ever be listening.
+	cfg := validConfig()
+	cfg.DBDSN = "postgres://drive:drive@" + db.Addr().String() + "/drive?sslmode=disable"
+	cfg.S3Endpoint = store.URL
+	cfg.SMTPAddr = "127.0.0.1:1"
+
+	err = cfg.ValidateRuntime(ctx)
+	if err == nil {
+		t.Fatal("ValidateRuntime passed with an unreachable SMTP server and no Resend key")
+	}
+	if !strings.Contains(err.Error(), "DRIVE_SMTP_ADDR") {
+		t.Errorf("error = %q, want it to name DRIVE_SMTP_ADDR", err)
+	}
+
+	cfg.ResendKey = "re_live_key"
+	if err := cfg.ValidateRuntime(ctx); err != nil {
+		t.Errorf("ValidateRuntime probed SMTP even though mail goes over Resend: %v", err)
 	}
 }
