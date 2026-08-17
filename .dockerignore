@@ -1,0 +1,46 @@
+# Build context. Mirrors .gitignore where it matters, because `railway up`
+# ships the tree minus the gitignored paths — anything excluded there but not
+# here would make a local `docker build` pass on files the platform build never
+# sees.
+
+.git/
+.gitignore
+
+# secrets and agent/planning files — never inside an image
+.env
+.env.*
+.claude/
+.mcp.json
+CLAUDE.md
+AGENTS.md
+*.claude.md
+docs/
+
+# build output: the image builds its own. Excluding server/web/dist in
+# particular is load-bearing — it is the one directory where a stale local
+# artifact could silently become the shipped SPA. node_modules needs the **
+# prefix: unlike .gitignore, a trailing-slash pattern here matches only at the
+# context root, and web/node_modules copied over the container's own install
+# puts host-platform binaries (esbuild) into a linux image.
+**/node_modules
+server/web/dist/
+server/drive
+server/drive-mcp
+
+# the Go workspace: the image builds the server module directly, and
+# go.work.sum is untracked, so resolving the workspace would behave differently
+# here than from a clean checkout
+go.work
+go.work.sum
+
+# local stack and test material — no part of the server build
+docker-compose.yml
+garage.toml
+Makefile
+scripts/
+e2e/
+playwright-report/
+test-results/
+coverage/
+**/*.log
+**/.DS_Store
