@@ -15,18 +15,19 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 )
 
-// Region must equal garage.toml's s3_api.s3_region; a mismatch signs requests
-// that Garage then rejects with SignatureDoesNotMatch.
-const Region = "garage"
-
 // New returns the shared S3 client and its presigner.
 //
 // Never set ChecksumAlgorithm on any request built from this client: the
 // checksum settings below keep SDK checksum parameters out of presigned
 // queries, which is what makes presigned PUTs work against Garage.
 func New(ctx context.Context, cfg *config.Config) (*s3.Client, *s3.PresignClient, error) {
+	// Hand-built Configs (tests) may leave the region unset; Load always fills it.
+	region := cfg.S3Region
+	if region == "" {
+		region = config.DefaultS3Region
+	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(Region),
+		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(cfg.S3AccessKey, cfg.S3SecretKey, ""),
 		),

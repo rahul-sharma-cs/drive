@@ -26,6 +26,11 @@ const (
 	GiB int64 = 1 << 30
 )
 
+// DefaultS3Region is Garage's s3_api.s3_region from garage.toml; a mismatch
+// signs requests the store then rejects with SignatureDoesNotMatch. R2 wants
+// "auto", set through DRIVE_S3_REGION.
+const DefaultS3Region = "garage"
+
 const (
 	// minPartSize is S3's floor for a non-final multipart part.
 	minPartSize = 5 * MiB
@@ -43,6 +48,7 @@ type Config struct {
 	S3Bucket        string
 	S3AccessKey     string
 	S3SecretKey     string
+	S3Region        string
 	SMTPAddr        string
 	MailpitAPI      string
 	PartSize        int64
@@ -61,9 +67,11 @@ func Load() (*Config, error) {
 		S3Bucket:    env("DRIVE_S3_BUCKET", "drive-blobs"),
 		S3AccessKey: env("DRIVE_S3_ACCESS_KEY", ""),
 		S3SecretKey: env("DRIVE_S3_SECRET_KEY", ""),
-		SMTPAddr:    env("DRIVE_SMTP_ADDR", "localhost:1025"),
-		MailpitAPI:  env("DRIVE_MAILPIT_API", "http://localhost:8025"),
-		LogLevel:    env("DRIVE_LOG_LEVEL", "debug"),
+		// Signing region. Garage's own s3_region locally; "auto" on R2.
+		S3Region:   env("DRIVE_S3_REGION", DefaultS3Region),
+		SMTPAddr:   env("DRIVE_SMTP_ADDR", "localhost:1025"),
+		MailpitAPI: env("DRIVE_MAILPIT_API", "http://localhost:8025"),
+		LogLevel:   env("DRIVE_LOG_LEVEL", "debug"),
 	}
 
 	var err error
