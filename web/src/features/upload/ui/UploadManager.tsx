@@ -1,4 +1,4 @@
-import { memo, useRef } from 'react'
+import { memo, useRef, type ReactNode } from 'react'
 
 import { secondaryButtonClass } from '../../../ui/controls'
 import { formatBytes } from '../../../ui/format'
@@ -11,8 +11,17 @@ import { describeUpload } from './status'
  * folder is on screen. It is presentational — the container feeds it snapshots
  * and actions — so the whole surface is testable without a live engine.
  */
-export function UploadManager({ items, actions }: { items: UploadSnapshot[]; actions: UploadActions }) {
-  if (items.length === 0) return null
+export function UploadManager({
+  items,
+  actions,
+  resumable = null,
+}: {
+  items: UploadSnapshot[]
+  actions: UploadActions
+  /** Interrupted server sessions waiting for their file to be picked again. */
+  resumable?: ReactNode
+}) {
+  if (items.length === 0 && resumable === null) return null
   const finished = items.some((i) => i.state === 'done' || i.state === 'canceled')
 
   return (
@@ -28,6 +37,7 @@ export function UploadManager({ items, actions }: { items: UploadSnapshot[]; act
           </button>
         )}
       </header>
+      {resumable}
       <ul>
         {items.map((item) => (
           // Spread, not the object: memo compares props shallowly, and

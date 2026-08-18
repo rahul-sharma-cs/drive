@@ -1,17 +1,64 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 
+import { discardUpload, listUploads } from '../../../lib/api'
+import { useSession } from '../../auth/session'
 import { childrenKey } from '../../browser/queries'
-import type { UploadSnapshot } from '../engine/types'
+import type { ConflictPolicy, UploadSnapshot } from '../engine/types'
+import { ConflictDialog } from './ConflictDialog'
 import { uploadActions, useUploadItems } from './engineStore'
+import { resumableSessions } from './resumable'
+import { ResumableUploads } from './ResumableUploads'
 import { UploadManager } from './UploadManager'
+
+export const uploadsKey = ['uploads'] as const
 
 /** The manager, wired to the singleton. Mounted once, in the app layout. */
 export function UploadDock() {
   const items = useUploadItems()
+  const session = useSession()
+  const client = useQueryClient()
   useCompletionBridge(items)
-  return <UploadManager items={items} actions={uploadActions} />
+
+  // Fetched once per load: this exists to answer "what was I uploading before
+  // the page went away", which does not change while the tab is open except
+  // through this engine — and the completion bridge invalidates it then.
+  const uploads = useQuery({ queryKey: uploadsKey, queryFn: listUploads, staleTime: Infinity })
+  const sessions = resumableSessions(items, uploads.data?.items ?? [])
+
+  const discard = useMutation({
+    mutationFn: discardUpload,
+    onSuccess: () => client.invalidateQueries({ queryKey: uploadsKey }),
+  })
+
+  const conflicts = items.filter((i) => i.state === 'conflict')
+
+  return (
+    <>
+      <UploadManager
+        items={items}
+        actions={uploadActions}
+        resumable={
+          sessions.length > 0 ? (
+            <ResumableUploads
+              sessions={sessions}
+              rootId={session.root_id}
+              onPick={(file, parentId) => uploadActions.enqueue(file, parentId)}
+              onDiscard={(uploadId) => discard.mutate(uploadId)}
+            />
+          ) : null
+        }
+      />
+      <ConflictDialog
+        conflicts={conflicts}
+        onResolve={(ids, policy: ConflictPolicy) => ids.forEach((id) => uploadActions.resolveConflict(id, policy))}
+        // Skip is client-side only — PLAN §Conflict rules: it sends no request,
+        // it just stops trying to upload this file.
+        onSkip={(ids) => ids.forEach((id) => uploadActions.cancel(id))}
+      />
+    </>
+  )
 }
 
 /**
@@ -34,7 +81,7 @@ export function useCompletionBridge(items: UploadSnapshot[]): void {
       seen.current.set(item.id, item.state)
       if (previous === item.state || item.state !== 'done') continue
       void client.invalidateQueries({ queryKey: childrenKey(item.parent_id) })
-      void client.invalidateQueries({ queryKey: ['uploads'] })
+      void client.invalidateQueries({ queryKey: uploadsKey })
       toast.success(
         item.renamed
           ? `Uploaded as “${item.name}” — “${item.original_name}” was already there`

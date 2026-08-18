@@ -126,5 +126,7 @@ export const search = (q: string) => request<Page<DriveNode>>('GET', `/search?q=
 
 export const listUploads = () => request<Page<UploadSession>>('GET', '/uploads')
 
+export const discardUpload = (uploadId: string) => request<void>('DELETE', `/uploads/${uploadId}`)
+
 /** Downloads are a top-level navigation to a 302 — never fetched into memory. */
 export const downloadHref = (id: string) => `/api/files/${id}/download`
