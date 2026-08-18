@@ -53,8 +53,8 @@ import (
 const StaleFinalize = 15 * time.Minute
 
 // renameAttempts bounds the auto-rename retry when a sibling takes the name
-// between reading the free one and inserting. Restore hit exactly this race in
-// Phase 1; here it must not surface at all, because a complete is usually
+// between reading the free one and inserting. Restore hit exactly this race
+// once; here it must not surface at all, because a complete is usually
 // unattended.
 const renameAttempts = 4
 

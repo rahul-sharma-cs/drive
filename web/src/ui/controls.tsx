@@ -169,7 +169,7 @@ function ThesisPanel() {
         </div>
       </div>
 
-      <p className="text-[13px] text-canvas/40">Go · React · S3-compatible storage · one binary</p>
+      <p className="text-[13px] text-canvas/50">Go · React · S3-compatible storage · one binary</p>
     </aside>
   )
 }

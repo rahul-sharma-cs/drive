@@ -10,8 +10,8 @@
 //     confirmed_at / window_start plus the RunGCOnce hook, so no suite ever
 //     sleeps a wall-clock window;
 //   - fixtures -- an authenticated HTTP client two lines from a signed-in
-//     request, and real objects in Garage for the phases whose upload protocol
-//     does not exist yet.
+//     request, and real objects in Garage for tests that need an object to
+//     exist without driving the whole upload protocol to make one.
 //
 // Everything targets the drive-test compose stack. The values come from the
 // committed .env.test, and guardTestStack refuses to run if any of them still

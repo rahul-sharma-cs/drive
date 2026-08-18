@@ -4,7 +4,7 @@ A self-hosted file store built around one hard problem: **uploading a very large
 
 One Go binary serves the API and the React app. File bytes never pass through it — the browser talks straight to S3-compatible object storage over presigned URLs, and the server authorizes, presigns, and keeps the ledger. An interrupted upload resumes from the last part the server confirmed, whether it was interrupted by a dropped connection, a closed tab, or the server process being killed mid-transfer.
 
-**Live:** <https://drive.rahulsharma-cs.site> — signups are closed while this is a single-operator deployment.
+**Live:** <https://drive.rahulsharma-cs.site> — a deployment I run and use. Account creation is currently closed, so the tour is the screenshot below.
 
 ![The file browser with a 420 MiB upload in flight. The upload manager draws one segment per multipart part, lit as the server confirms it.](.github/media/drive.png)
 
@@ -13,9 +13,9 @@ One Go binary serves the API and the React app. File bytes never pass through it
 - **Resumable uploads.** A custom session protocol over S3 multipart: create a session, PUT parts directly to storage with presigned URLs, confirm each part against its MD5, complete. Resume re-handshakes and re-sends only what is missing.
 - **Pause, resume, cancel, retry** per upload, from a manager that lives outside the React tree — navigating between folders never interrupts a transfer.
 - **Folder drag-and-drop** (full directory trees) plus a folder picker, both normalized through the same traversal.
-- **Name conflicts** resolved with keep-both / replace / skip, one prompt per bulk drop rather than one per file.
+- **Name conflicts** resolved with keep-both / replace / skip — one prompt at a time, with an apply-to-all for the rest of the drop, so 150 colliding files can't stack 150 modals.
 - **Accounts** with email verification, Argon2id password hashing, durable rate limits and an Argon2 concurrency semaphore.
-- **Folders, trash with restore and purge, name search, downloads** through short-lived presigned GETs that always answer `Content-Disposition: attachment`.
+- **Folders, trash with restore and purge, name search, downloads** through short-lived presigned GETs that force `Content-Disposition: attachment`, over objects deliberately stored with no content type — so even a partial response can't render as HTML.
 - **Garbage collection** of unreferenced blobs and abandoned multipart uploads, on an in-process hourly ticker with a pass at startup.
 - **Storage limits** that actually bind: a per-file maximum, a per-user quota, and a service-wide stored-bytes cap checked before a session is created.
 
@@ -35,7 +35,7 @@ Sharing and previews are the next things worth building. Nothing above is stubbe
 The interesting part is the failure path, so here is the sequence the browser test drives on every run:
 
 1. The client fingerprints the file (name, size, mtime, and both edge blocks) and opens a session; the server hands back presigned part URLs.
-2. Parts upload in parallel. Each finished part is confirmed to the server, which checks the storage's ETag against the client's MD5 before recording it. **A confirmed part is durable state in Postgres**, not browser memory.
+2. Parts upload in parallel. The client compares the ETag the store returns against the MD5 it computed for that part and only then confirms it to the server, which records both. **A confirmed part is durable state in Postgres**, not browser memory.
 3. The server is killed mid-transfer. The client parks the upload — *"Paused — can't reach the server. Will resume automatically."*
 4. The page is reloaded, which destroys the `File` handle for good. The upload manager offers the interrupted session back and asks for **the same file**.
 5. Re-picking it re-handshakes: the server merges its ledger with what the store actually holds, and the client sends only the parts neither of them has.
@@ -66,7 +66,7 @@ make infra-init   # generates .env secrets, starts Postgres + object store + SMT
 make dev          # API on :8080, Vite on :5173
 ```
 
-`make infra-init` refuses to point at anything but localhost, so it cannot be aimed at a real bucket by accident.
+`make infra-init` refuses any object-store endpoint that isn't loopback or the local compose service, so it cannot be aimed at a real bucket by accident.
 
 Tests:
 
@@ -74,7 +74,7 @@ Tests:
 make test         # Go suite against an isolated test stack
 make e2e          # Playwright
 make e2e-resume   # the kill-the-server-mid-upload proof above
-cd web && npx vitest run   # the upload engine's own suite
+cd web && npx vitest run   # the web suite: the upload engine and the screens
 ```
 
 The dev and test stacks are separate Docker projects on separate ports, so running tests never touches development data.
@@ -93,7 +93,7 @@ server/
 web/src/features/upload/engine   the browser upload engine
 ```
 
-- **Postgres owns all metadata**, including the resume ledger. Migrations are embedded and never edited after they ship.
+- **Postgres owns all metadata**, including the resume ledger. Migrations are embedded in the binary, and an applied one is never rewritten — a schema change gets a new numbered file.
 - **The upload engine is a pure state machine** with clock, RNG, XHR, IndexedDB and web locks all injected, so its test suite is deterministic by construction and needs no browser.
 - **The SPA is embedded in the binary** (`go:embed`), which is what lets cookies stay `SameSite=Lax` with no cross-origin credentialed CORS anywhere.
 

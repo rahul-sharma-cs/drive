@@ -686,8 +686,8 @@ func TestCookieAuthSendsClientHeader(t *testing.T) {
 	}
 }
 
-// Bearer requests are CSRF-exempt and must NOT carry X-Drive-Client -- Phase 6
-// asserts its absence.
+// Bearer requests carry no cookie, so they have no CSRF surface and must NOT
+// carry X-Drive-Client.
 func TestBearerAuthOmitsClientHeader(t *testing.T) {
 	f := newFake(t, 100, 100)
 	c := New(f.srv.URL, WithBearerToken("drv_abc123"))

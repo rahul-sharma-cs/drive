@@ -7,8 +7,8 @@ import (
 )
 
 // Throttle scopes. Every durable budget in Drive is a (scope, key) pair in the
-// throttle table; Phase 3's OTP budgets and Phase 6's token limits add their
-// own scopes here.
+// throttle table. Any later budget -- OTP sends, per-token limits -- adds its
+// own scope here.
 const (
 	// ScopeLogin counts failed sign-ins, keyed by the submitted email.
 	ScopeLogin = "login"

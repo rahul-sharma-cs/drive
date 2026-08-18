@@ -60,8 +60,8 @@ func MustUser(ctx context.Context) *User {
 	return u
 }
 
-// WithUser puts a user in the context. Exported so tests and later phases
-// (bearer-token auth) can populate the same slot.
+// WithUser puts a user in the context. Exported so tests -- and any later
+// authenticator, such as bearer tokens -- can populate the same slot.
 func WithUser(ctx context.Context, u *User) context.Context {
 	return context.WithValue(ctx, userKey{}, u)
 }
@@ -121,8 +121,8 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 // the public share POSTs -- the SPA share page sends it too. GETs and HEADs are
 // exempt.
 //
-// Phase 6: requests authenticated by `Authorization: Bearer drv_...` are exempt
-// (no cookie, so no CSRF surface).
+// Bearer-authenticated requests would be exempt (no cookie, so no CSRF
+// surface), if bearer auth ever ships.
 func RequireClientHeader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

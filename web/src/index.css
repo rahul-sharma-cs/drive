@@ -25,7 +25,10 @@
   /* Ink, three levels: content, supporting, metadata. */
   --color-ink: #10161c;
   --color-ink-2: #4a555f;
-  --color-ink-3: #78838d;
+  /* 4.78:1 on the canvas and 5.42:1 on white. It carries 12-13px metadata
+     and ghost-button labels, none of which is large text, so it has to
+     clear 4.5:1 rather than the 3:1 that large text gets. */
+  --color-ink-3: #626b74;
 
   /* In motion, or stored. The only colour an ordinary success ever gets. */
   --color-accent: #11726b;
@@ -194,14 +197,19 @@
   }
 }
 
+/* Scale only. Centering belongs on the element as a utility class: if this
+   animation is ever suppressed -- a future `animation: none` in the
+   reduced-motion block, an extension, a printing context -- an element whose
+   only transform came from here would jump to the middle of the viewport by
+   its top-left corner and hang off the right edge. */
 @keyframes drive-pop-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.96);
+    scale: 0.96;
   }
   to {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    scale: 1;
   }
 }
 

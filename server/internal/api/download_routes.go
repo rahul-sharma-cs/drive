@@ -28,8 +28,8 @@ func (s *Server) mountDownload(r chi.Router) {
 // is marked no-store, and the URL carries the forced attachment disposition and
 // octet-stream type rather than trusting anything the uploader supplied.
 //
-// Phase 6 adds ?redirect=0 returning {url, expires_at} for the MCP client, and a
-// shorter TTL for token-authed callers.
+// A non-browser client would want ?redirect=0 returning {url, expires_at}
+// instead of the 302, and a shorter TTL; neither exists yet.
 func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {

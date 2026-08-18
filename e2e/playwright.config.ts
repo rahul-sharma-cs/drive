@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 // globalSetup: './global-setup.ts' (fixture generation + Mailpit inbox purge)
-// is Phase 4 work — not created yet, so left out of this config for now.
+// does not exist — each spec makes its own fixtures — so it is left out here.
 
 // Two specs are driven by something outside `make e2e` and stay out of it
 // unless that something says otherwise:

@@ -3,8 +3,8 @@
 // security budget in the product is counted in.
 //
 // Nothing here knows about HTTP. Package api's auth_routes.go composes these
-// into handlers; Phase 3's share passwords and OTP budgets and Phase 6's
-// personal access tokens reuse the same primitives.
+// into handlers. Share passwords, OTP budgets and personal access tokens
+// would all reuse the same primitives if they ship.
 package auth
 
 import (

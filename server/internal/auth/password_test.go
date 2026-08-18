@@ -7,8 +7,8 @@ import (
 )
 
 // The PHC string is the storage format for every password in Drive -- user
-// accounts now, share passwords in Phase 3 -- so its shape is part of the
-// contract, not an implementation detail.
+// accounts, and share passwords too if those ship -- so its shape is part of
+// the contract, not an implementation detail.
 var phcShape = regexp.MustCompile(`^\$argon2id\$v=19\$m=19456,t=2,p=1\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$`)
 
 func TestHashPasswordProducesTheSpecifiedPHCString(t *testing.T) {

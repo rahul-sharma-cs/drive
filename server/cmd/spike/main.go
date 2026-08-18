@@ -344,7 +344,7 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	}
 
 	// --- 5b. expired presigned PUT from the Go client, ± Expect: 100-continue -
-	// Phase 0 measured Garage answering an expired presign before draining the
+	// The day-0 spike measured Garage answering an expired presign before draining the
 	// body and resetting the socket, which surfaces as a transport error rather
 	// than a response; `Expect: 100-continue` is what made it deterministic
 	// (uploadclient and testutil both send it now). This records whether the

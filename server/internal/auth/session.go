@@ -25,8 +25,8 @@ type Session struct {
 // Only sha256(raw) is stored, so a dump of auth_sessions yields no usable
 // cookies.
 //
-// ip and userAgent are recorded for the Phase 5 session list; either may be
-// empty, which stores NULL.
+// ip and userAgent are recorded so a session list could show where a session
+// came from; either may be empty, which stores NULL.
 func CreateSession(ctx context.Context, q Querier, userID uuid.UUID, ip, userAgent string) (string, Session, error) {
 	raw, hash, err := NewToken()
 	if err != nil {

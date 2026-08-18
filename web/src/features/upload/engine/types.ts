@@ -154,9 +154,10 @@ export interface LockManagerLike {
 /* -------------------------------------------------------------- snapshot */
 
 /**
- * Client-side upload state. `paused_*`, `error_file_changed`, `failed` and
- * `done` are the names the wire contract and the UI copy both use; the rest
- * name the steps around them.
+ * Client-side upload state. These are the engine's own names, not the wire's:
+ * a server session is only ever `active`, `completing`, `done` or `aborted`,
+ * and `done` is the one word both vocabularies share. The sentences a person
+ * reads are elsewhere again, in the manager's status table.
  */
 export type UploadState =
   | 'queued'

@@ -30,7 +30,7 @@ export function AppLayout() {
 
   return (
     <div className="min-h-screen bg-canvas text-ink">
-      <aside
+      <header
         className="material sticky top-0 z-30 flex items-center gap-1 overflow-x-auto border-b border-line px-3 py-2
                    md:fixed md:inset-y-0 md:left-0 md:w-60 md:flex-col md:items-stretch md:gap-1 md:overflow-visible
                    md:border-r md:border-b-0 md:bg-surface md:px-3 md:py-4 md:backdrop-blur-none"
@@ -65,7 +65,7 @@ export function AppLayout() {
             Sign out
           </button>
         </div>
-      </aside>
+      </header>
 
       <div className="md:pl-60">
         <Outlet />

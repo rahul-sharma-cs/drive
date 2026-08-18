@@ -144,7 +144,7 @@ func TestUploadEmojiAndRTLFilename(t *testing.T) {
 	folder := owner.CreateFolder(t, owner.RootID, "names")
 
 	// Real RTL letters, not a bidi override: overrides are stripped by filename
-	// hygiene, which is a different test in a different phase.
+	// hygiene, which is a different test in a different file.
 	for _, name := range []string{"🚀 launch 🎉.bin", "تقرير-٢٠٢٦.bin", "שלום עולם.bin"} {
 		t.Run(name, func(t *testing.T) {
 			data := testutil.RandomBytes(smallFileSize, 2)

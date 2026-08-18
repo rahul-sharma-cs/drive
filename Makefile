@@ -68,7 +68,7 @@ build:
 	@if [ -d server/cmd/drive-mcp ]; then \
 		go build -o server/drive-mcp ./server/cmd/drive-mcp; \
 	else \
-		echo "build: server/cmd/drive-mcp not found yet (Phase 6) — skipping"; \
+		echo "build: server/cmd/drive-mcp does not exist yet — skipping"; \
 	fi
 
 ## -- tests --------------------------------------------------------------
@@ -110,7 +110,7 @@ seed:
 seed-test:
 	go run ./server/cmd/seed -env-file .env.test
 
-# Phase-exit and handoff only, never the per-loop battery: these take tens of
+# Milestones and handoffs only, never the per-loop battery: these take tens of
 # minutes and would make the routine loop unusable. The loop battery covers the
 # same code paths with 100-200 MB files at 10 MiB parts.
 # Multi-GB random file end to end, plus the >1,000-part ListParts pagination
@@ -130,9 +130,9 @@ test-50g: infra-init-test
 		-run 'TestBigFiftyGB' ./server/integration/
 
 token:
-	@echo "make token: not implemented until Phase 6" >&2; exit 1
-# Phase 6 shape, recorded now so the argument contract is on record before
-# drive-token exists. USER and SCOPES carry no secret; the generated token is
+	@echo "make token: drive-token does not exist yet" >&2; exit 1
+# The shape this target will take, recorded now so the argument contract is
+# settled before drive-token exists. USER and SCOPES carry no secret; the generated token is
 # printed once by the command and never appears in argv:
 # token:
 #	go run ./server/cmd/drive-token -user $(USER) -scopes $(SCOPES)

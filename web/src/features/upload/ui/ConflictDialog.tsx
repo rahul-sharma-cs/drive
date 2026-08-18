@@ -42,7 +42,7 @@ export function ConflictDialog({
     <Dialog.Root open>
       <Dialog.Portal>
         <Dialog.Overlay className="scrim fixed inset-0 z-50" />
-        <Dialog.Content className="pop-enter fixed left-1/2 top-[42%] z-50 w-[min(24rem,calc(100vw-2rem))] rounded-pop border border-line bg-surface p-5 shadow-pop">
+        <Dialog.Content className="pop-enter fixed left-1/2 top-[42%] z-50 w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-pop border border-line bg-surface p-5 shadow-pop">
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-warn-soft text-warn">
             <AlertIcon />
           </span>

@@ -8,8 +8,8 @@ import (
 )
 
 // tokenBytes is the entropy behind every opaque token Drive hands out: session
-// cookies and email verification links now, share tokens and guest sessions in
-// Phase 3.
+// cookies and email verification links, and share tokens and guest sessions
+// too if those ship.
 const tokenBytes = 32 // 256 bits
 
 // NewToken mints one opaque token: the raw string that goes to the client and

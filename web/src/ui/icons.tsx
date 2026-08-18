@@ -1,11 +1,12 @@
 /**
- * The glyph set — hand-drawn on a 16px grid, stroked in `currentColor`, all
- * decorative. Every icon here sits next to a text label, so each one is
- * `aria-hidden`: an accessible name comes from the words, never the drawing.
+ * The glyph set — hand-drawn on a 16px grid and stroked in `currentColor`
+ * (`DriveMark` is the one filled exception), all decorative. Every icon sits
+ * next to a text label, so each one is `aria-hidden`: the accessible name comes
+ * from the words, never from the drawing.
  *
- * Inline rather than a library. Nine glyphs do not justify a dependency, and
- * the SPA ships inside the server binary — every byte here is a byte the
- * browser does not fetch.
+ * Inline rather than a library: a handful of glyphs does not justify a
+ * dependency, and the SPA ships inside the server binary — every byte here is
+ * a byte the browser does not fetch.
  */
 
 type IconProps = { className?: string }
@@ -109,10 +110,11 @@ export function ChevronIcon({ className }: IconProps) {
   )
 }
 
-export function CloseIcon({ className }: IconProps) {
+export function FolderPlusIcon({ className }: IconProps) {
   return (
     <Svg className={className}>
-      <path d="m4.4 4.4 7.2 7.2M11.6 4.4l-7.2 7.2" />
+      <path d="M1.75 4.25c0-.55.45-1 1-1h3.09c.3 0 .58.13.77.36l.78.93h5.86c.55 0 1 .45 1 1v6.2c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1z" />
+      <path d="M8 7.6v3.4M6.3 9.3h3.4" />
     </Svg>
   )
 }

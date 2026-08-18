@@ -15,10 +15,10 @@ import (
 // testutil.NewUser stamps email_verified_at with SQL -- and that blind spot let
 // the server binary ship with no mail sender wired at all: every signup logged
 // "no mail sender configured", returned 200, and left an account that could
-// never be verified or used. Nothing in the suite noticed. Playwright covers
-// this too, but that is two phases away, so the guard lives
-// here as well: this test talks to the real binary over HTTP and the real
-// Mailpit, so it fails the moment the wiring regresses.
+// never be verified or used. Nothing in the suite noticed. Nothing else
+// covers this loop end to end, so the guard lives here: this test talks to the
+// real binary over HTTP and the real Mailpit, so it fails the moment the
+// wiring regresses.
 func TestSignupVerifyLoginThroughRealMail(t *testing.T) {
 	ctx := context.Background()
 	anon := H.Anonymous(t)

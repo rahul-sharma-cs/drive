@@ -2,6 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { UploadSnapshot } from '../../engine/types'
@@ -43,16 +44,23 @@ function Harness({ items }: { items: UploadSnapshot[] }) {
 function mount(items: UploadSnapshot[]) {
   const client = new QueryClient()
   const invalidate = vi.spyOn(client, 'invalidateQueries')
+  // StrictMode, because main.tsx renders under it: it double-invokes render
+  // and simulates an unmount/remount of every effect, which is exactly the
+  // shape the completion memory has to survive.
   const view = render(
-    <QueryClientProvider client={client}>
-      <Harness items={items} />
-    </QueryClientProvider>,
+    <StrictMode>
+      <QueryClientProvider client={client}>
+        <Harness items={items} />
+      </QueryClientProvider>
+    </StrictMode>,
   )
   const rerender = (next: UploadSnapshot[]) =>
     view.rerender(
-      <QueryClientProvider client={client}>
-        <Harness items={next} />
-      </QueryClientProvider>,
+      <StrictMode>
+        <QueryClientProvider client={client}>
+          <Harness items={next} />
+        </QueryClientProvider>
+      </StrictMode>,
     )
   return { invalidate, rerender }
 }

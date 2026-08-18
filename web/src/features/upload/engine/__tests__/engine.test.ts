@@ -1,5 +1,5 @@
 /**
- * The singleton store contract Phase 4b consumes:
+ * The singleton store contract the React layer consumes:
  * `subscribe(cb)` + `getSnapshot()` shaped for useSyncExternalStore.
  */
 

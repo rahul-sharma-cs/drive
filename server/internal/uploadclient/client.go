@@ -1,7 +1,7 @@
 // Package uploadclient speaks Drive's upload protocol.
 //
-// It is a real client, not test scaffolding: the Phase 2 integration battery
-// drives its uploads, and drive-mcp streams agent uploads through it. What it
+// It is a real client, not test scaffolding: the integration battery drives
+// its uploads, and it is what a non-browser uploader would be built on. What it
 // implements is the wire contract -- POST /uploads, the presigned part PUTs,
 // per-part confirmation, the resume handshake, complete -- and nothing about
 // the server's internals. It never imports internal/upload or internal/api, so
@@ -18,7 +18,7 @@
 //   - Auth comes in two shapes and they are not interchangeable. Cookie auth
 //     carries X-Drive-Client, because that header plus SameSite=Lax cookies is
 //     the CSRF scheme. Bearer auth deliberately omits it -- a request with no
-//     cookie has no CSRF surface, and Phase 6 asserts the header's absence.
+//     cookie has no CSRF surface, and a test below asserts its absence.
 package uploadclient
 
 import (
@@ -112,8 +112,8 @@ type authMode struct {
 func (a authMode) apply(r *http.Request) {
 	if a.bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+a.bearer)
-		// No X-Drive-Client, deliberately: bearer requests are CSRF-exempt and
-		// Phase 6's suite asserts the header is absent.
+		// No X-Drive-Client, deliberately: bearer requests carry no cookie, so
+		// they have no CSRF surface. A test asserts the header is absent.
 		return
 	}
 	if a.cookie != "" {

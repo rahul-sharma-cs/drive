@@ -13,7 +13,7 @@ import (
 
 // The authorization matrix.
 //
-// Every endpoint class Phase 1 implements, crossed with every identity that can
+// Every endpoint class the API implements, crossed with every identity that can
 // reach it, asserting the status AND -- on every rejection -- that the database
 // did not move. A 404 with a row written behind it is not a rejection, and only
 // the digest catches that.
@@ -25,10 +25,10 @@ import (
 // folder" are all 404 with nothing written, even though the caller does own the
 // thing in the path.
 //
-// Extending it: `role` is the axis. Phase 3 adds guest (a share guest session,
-// including the guest-of-share-A-against-share-B row) and Phase 6 adds bearer
-// (PAT scopes); each is one more entry in the actors slice plus one `want`
-// field per case. Nothing else in this file has to change.
+// Extending it: `role` is the axis. Share guests (including the
+// guest-of-share-A-against-share-B row) and token-authenticated callers are
+// each one more entry in the actors slice plus one `want` field per case.
+// Nothing else in this file has to change.
 
 // role is one identity in the matrix.
 type role string
@@ -37,7 +37,8 @@ const (
 	roleOwner role = "owner" // owns the node in the path
 	roleOther role = "other" // a different signed-in user
 	roleAnon  role = "anon"  // signed out
-	// Phase 3: roleGuest (share guest session). Phase 6: roleBearer (PAT).
+	// Still to come, if those features ship: roleGuest (a share guest
+	// session) and roleBearer (a personal access token).
 )
 
 // want is one expected outcome: a status, and the error envelope's code when

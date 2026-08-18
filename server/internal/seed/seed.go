@@ -6,8 +6,6 @@ package seed
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"time"
@@ -16,8 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"golang.org/x/crypto/argon2"
-
+	"github.com/rahul-sharma-cs/drive/server/internal/auth"
 	"github.com/rahul-sharma-cs/drive/server/internal/blob"
 )
 
@@ -26,41 +23,6 @@ import (
 // against a disposable stack.
 const Password = "drive-demo-1"
 
-// Argon2id parameters, the same ones every password in the service is hashed
-// with -- user accounts and share passwords alike: m=19456 KiB, t=2, p=1,
-// 16-byte salt, 32-byte tag, PHC string format. Seeded accounts must log in
-// through the ordinary verifier, so these cannot drift from it.
-//
-// internal/auth (a parallel agent's package, not importable yet from this
-// session) owns the real hasher that signup/login will use. This is a
-// deliberately narrow duplicate — one function, the seed's own use only — so
-// seed does not block on that package landing. Once internal/auth exists,
-// this function should be deleted and seed should call its hasher directly;
-// the parameters here must not drift from it in the meantime.
-const (
-	argonTime    = 2
-	argonMemory  = 19456 // KiB
-	argonThreads = 1
-	argonSaltLen = 16
-	argonKeyLen  = 32
-)
-
-func hashPassword(password string) (string, error) {
-	salt := make([]byte, argonSaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("seed: generate salt: %w", err)
-	}
-	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-
-	b64 := base64.RawStdEncoding
-	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, argonMemory, argonTime, argonThreads,
-		b64.EncodeToString(salt), b64.EncodeToString(key)), nil
-}
-
-// Run seeds the two demo users, their root folders, and rahul@drive.local's
-// sample tree. It does nothing beyond checking and logging if any user
-// already exists.
 func Run(ctx context.Context, pool *pgxpool.Pool, s3c *s3.Client, bucket string, log *slog.Logger) error {
 	exists, err := usersExist(ctx, pool)
 	if err != nil {
@@ -111,7 +73,7 @@ type user struct {
 // same atomicity real signup uses, because a user without a root folder has
 // nowhere to put anything.
 func createUser(ctx context.Context, pool *pgxpool.Pool, email, displayName string) (user, error) {
-	hash, err := hashPassword(Password)
+	hash, err := auth.HashPassword(Password)
 	if err != nil {
 		return user{}, err
 	}
@@ -154,7 +116,7 @@ func createFolder(ctx context.Context, pool *pgxpool.Pool, ownerID, parentID uui
 }
 
 // fileSpec describes one seeded file: content is generated to match size, and
-// updatedAgo backdates created_at/updated_at from "now" so Phase 1's search
+// updatedAgo backdates created_at/updated_at from "now" so the search
 // boundary tests (?after=/?before=/?min_size=/?max_size=) have real spread to
 // test against.
 type fileSpec struct {

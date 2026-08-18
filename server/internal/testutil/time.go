@@ -73,13 +73,12 @@ func LapseThrottleWindow(t testing.TB, pool queryExecer, scope, key string, d ti
 // RunGCOnce is the GC loop's single synchronous pass, so a suite triggers
 // collection on demand instead of waiting out the hourly schedule.
 //
-// Phase 2 builds the loop in internal/gc and the integration suite's TestMain
-// assigns it here:
+// internal/gc owns the loop; a suite assigns its single pass here:
 //
 //	testutil.RunGCOnce = func(ctx context.Context) error { return gc.RunOnce(ctx, deps) }
 //
-// It is a variable rather than a direct call so this package does not depend on
-// a package that does not exist yet, and so the wiring stays one line.
+// It is a variable rather than a direct call so this package does not depend
+// on internal/gc at all, and so the wiring stays one line.
 var RunGCOnce func(context.Context) error
 
 // GC runs one garbage-collection pass. It fails the test with a specific
@@ -87,7 +86,7 @@ var RunGCOnce func(context.Context) error
 func GC(t testing.TB, ctx context.Context) {
 	t.Helper()
 	if RunGCOnce == nil {
-		t.Fatal("testutil.GC: RunGCOnce is not wired -- Phase 2 must assign testutil.RunGCOnce in the suite's TestMain")
+		t.Fatal("testutil.GC: RunGCOnce is not wired -- the suite must assign testutil.RunGCOnce")
 	}
 	if err := RunGCOnce(ctx); err != nil {
 		t.Fatalf("testutil.GC: %v", err)

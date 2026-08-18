@@ -30,10 +30,9 @@ func TestMain(m *testing.M) {
 		H = testutil.Start()
 		defer H.Stop()
 
-		// Phase 2 wires the GC here:
-		//   testutil.RunGCOnce = func(ctx context.Context) error { return gc.RunOnce(ctx, ...) }
-		// Until then testutil.GC fails with that instruction rather than
-		// silently doing nothing.
+		// The GC hook (testutil.RunGCOnce) is assigned in this package's
+		// init, not here: its closure reads H, which does not exist at
+		// init time but does by the time any test calls it.
 
 		code = m.Run()
 	}()

@@ -13,7 +13,7 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/testutil"
 )
 
-// The harness owns the server. This test proves the three mechanics Phase 2's
+// The harness owns the server. This test proves the three mechanics the
 // interruption battery is built on -- spawn on a private port, SIGKILL through
 // the process handle, restart on the same port -- and the invariant that makes
 // them safe to use: everything that matters is in Postgres, so a restarted
@@ -156,10 +156,10 @@ func TestDigestNoticesWrites(t *testing.T) {
 // the kill -9 battery above all -- leaves initiated multiparts in Garage that
 // no session row references and nothing else ever collects.
 //
-// Setup normally finds an empty bucket, so the sweep would otherwise be
-// untested until Phase 2 fed it real leftovers. This creates one and collects
-// it. Never give this test t.Parallel(): it aborts every multipart in the
-// bucket, and Phase 2's tests will hold live ones.
+// Setup normally finds an empty bucket, so without this the sweep would only
+// ever be exercised by an actual failed run. This creates one leftover and
+// collects it. Never give this test t.Parallel(): it aborts every multipart
+// in the bucket, and the upload tests hold live ones.
 func TestSweepMultipartsCollectsAbandonedUploads(t *testing.T) {
 	ctx := context.Background()
 	bucket := H.Cfg.S3Bucket
@@ -193,13 +193,15 @@ func TestSweepMultipartsCollectsAbandonedUploads(t *testing.T) {
 	}
 }
 
-// The GC hook is named but not yet wired. Phase 2 assigns testutil.RunGCOnce in
-// TestMain; until then the failure has to name that, not pass silently.
+// testutil.RunGCOnce is assigned by this package's init (interruption_test.go),
+// which is what lets any test in the suite force a collection instead of
+// waiting out the hourly schedule. If that wiring ever disappears, every test
+// that calls testutil.GC would otherwise fail with a confusing nil hook, so
+// this one says it plainly and runs a real pass against an idle stack.
 func TestGCHookIsNamedAndNotSilentlyMissing(t *testing.T) {
 	if testutil.RunGCOnce != nil {
-		// Phase 2 wired it: one pass must run cleanly on an idle stack.
 		testutil.GC(t, context.Background())
 		return
 	}
-	t.Log("testutil.RunGCOnce is not wired yet -- Phase 2 assigns it in TestMain")
+	t.Error("testutil.RunGCOnce is not wired -- this package's init must assign it")
 }

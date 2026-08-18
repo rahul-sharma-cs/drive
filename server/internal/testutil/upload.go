@@ -13,10 +13,10 @@ package testutil
 // publish transaction committing, so the test puts the world in that exact
 // state by hand and then runs one GC pass.
 //
-// The second is direct object reads. Phase 3 owns GET /files/{id}/download; it
-// does not exist yet, so "the bytes that came back are byte-identical" is
-// asserted by fetching the blob's object straight from Garage. Same bytes, same
-// proof, two phases earlier.
+// The second is direct object reads. "The bytes that came back are
+// byte-identical" is asserted by fetching the blob's object straight from
+// Garage rather than through GET /files/{id}/download, so the assertion does
+// not depend on the endpoint it would otherwise be checking.
 
 import (
 	"bytes"
@@ -197,8 +197,9 @@ func (h *Harness) GetObject(t testing.TB, key string) []byte {
 	return raw
 }
 
-// DownloadNode returns the bytes stored behind a file node. Until Phase 3 ships
-// GET /files/{id}/download this is how "downloads byte-identical" is proved.
+// DownloadNode returns the bytes stored behind a file node, read from the
+// store directly. That is deliberate: it is the independent oracle the
+// download endpoint's own tests are checked against.
 func (h *Harness) DownloadNode(t testing.TB, nodeID uuid.UUID) []byte {
 	t.Helper()
 	return h.GetObject(t, h.ObjectKeyOf(t, nodeID))

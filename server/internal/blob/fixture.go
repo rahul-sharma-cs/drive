@@ -22,10 +22,9 @@ type Fixture struct {
 
 // PutFixture writes data as one object via a direct S3 PutObject and returns
 // what a blobs row needs. It is the one shared path seed and every test
-// fixture use to get real bytes into Garage: Phases 1 and 3 need objects to
-// exist before Phase 2's upload session protocol does, and every later
-// fixture goes through this same function rather than re-implementing the
-// write.
+// fixture use to get real bytes into Garage, so that a test needing an
+// object to exist never has to re-implement the write -- or drive the whole
+// upload session protocol just to have something to read back.
 //
 // The key format ("blobs/{uuid}") matches the real upload path's object keys.
 // No Content-Type is set, matching the upload path for the same reason: Garage

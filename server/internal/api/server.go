@@ -1,8 +1,8 @@
 // Package api is Drive's HTTP surface: the router, the shared request/response
 // helpers every handler uses, and the middleware chain that authenticates them.
 //
-// The helpers below are the frozen internal contract between the phase's
-// feature files (auth, nodes, trash, search, later uploads and shares). Handlers
+// The helpers below are the internal contract every feature file in this
+// package writes against (auth, nodes, trash, search, uploads). Handlers
 // use them rather than writing JSON by hand, so the wire format stays uniform:
 // snake_case bodies, RFC3339 timestamps, one error envelope, one list envelope.
 package api

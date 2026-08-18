@@ -52,8 +52,8 @@ func (s *Server) mountAuth(r chi.Router) {
 		r.Post("/verify-email", s.authVerifyEmail)
 		r.Post("/login", s.authLogin)
 		r.Post("/logout", s.authLogout)
-		// Phase 6: /auth/me is the one /auth route a bearer token may call,
-		// and answers with the token's {id, name, scopes, expires_at} as well.
+		// If bearer tokens ever ship, /auth/me is the one /auth route they
+		// may call, and would answer with the token's own metadata too.
 		r.With(s.RequireAuth).Get("/me", s.authMe)
 	})
 }
@@ -364,8 +364,8 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 // where the file browser starts.
 func (s *Server) authMe(w http.ResponseWriter, r *http.Request) {
 	u := MustUser(r.Context())
-	// Phase 6: when the caller authenticated with a bearer token, this response
-	// additionally carries token: {id, name, scopes, expires_at}.
+	// If bearer tokens ever ship, a token-authenticated caller gets its own
+	// {id, name, scopes, expires_at} alongside this.
 	WriteJSON(w, http.StatusOK, authMeResponse{
 		ID:              u.ID,
 		Email:           u.Email,
@@ -479,7 +479,7 @@ func checkPassword(p string) error {
 }
 
 // cleanDisplayName trims the name and strips the control characters that could
-// otherwise ride into a mail header -- the name appears in Phase 3's OTP mails.
+// otherwise ride into a mail header -- the name is interpolated into mail.
 func cleanDisplayName(raw string) (string, error) {
 	cleaned := strings.Map(func(r rune) rune {
 		if r == 0x7F || unicode.IsControl(r) {

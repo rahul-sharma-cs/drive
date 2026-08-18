@@ -1,7 +1,7 @@
 -- Drive's complete schema.
--- Every table the product will ever need in the MVP lives here, including the
--- ones later phases fill in (upload ledger, shares, PATs), so no phase needs a
--- second migration for a table that was already specified.
+-- Every table the product needs lives here, including the ones nothing reads
+-- yet (shares, personal access tokens), so a feature landing later never needs
+-- a migration for a table that was already specified.
 --
 -- FK ON DELETE is explicit everywhere: the share children CASCADE, the audit
 -- log and the upload session's node/parent pointers SET NULL, and every other
@@ -212,7 +212,8 @@ CREATE INDEX share_access_log_share_id_id_idx ON share_access_log (share_id, id 
 
 -- ------------------------------------------------------- personal tokens ----
 
--- Phase 6. Token format: 'drv_' + >=30 base62 random + 6-char base62 CRC32
+-- No endpoint reads these yet. Token format: 'drv_' + >=30 base62 random +
+-- 6-char base62 CRC32
 -- checksum; SHA-256 at rest, plaintext shown exactly once. Scopes are
 -- 'files:read' | 'files:write' only, read-only by default.
 CREATE TABLE api_tokens (

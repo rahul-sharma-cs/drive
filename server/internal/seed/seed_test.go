@@ -4,47 +4,17 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/rahul-sharma-cs/drive/server/internal/auth"
 	"github.com/rahul-sharma-cs/drive/server/internal/blob"
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 	"github.com/rahul-sharma-cs/drive/server/internal/db"
 )
-
-// TestHashPassword_Shape is a pure check of the PHC-format Argon2id output —
-// the service-wide parameters, and the same string shape internal/auth's
-// verifier will need to parse once it exists.
-func TestHashPassword_Shape(t *testing.T) {
-	hash, err := hashPassword(Password)
-	if err != nil {
-		t.Fatalf("hashPassword: %v", err)
-	}
-	const wantPrefix = "$argon2id$v=19$m=19456,t=2,p=1$"
-	if !strings.HasPrefix(hash, wantPrefix) {
-		t.Errorf("hash = %q, want prefix %q", hash, wantPrefix)
-	}
-	parts := strings.Split(hash, "$")
-	// "", "argon2id", "v=19", "m=...,t=...,p=...", salt, tag
-	if len(parts) != 6 {
-		t.Fatalf("hash has %d $-separated parts, want 6: %q", len(parts), hash)
-	}
-	if parts[4] == "" || parts[5] == "" {
-		t.Errorf("empty salt or tag segment in %q", hash)
-	}
-
-	hash2, err := hashPassword(Password)
-	if err != nil {
-		t.Fatalf("hashPassword (2nd call): %v", err)
-	}
-	if hash == hash2 {
-		t.Error("two hashes of the same password are identical — salt is not being randomized")
-	}
-}
 
 // TestFixtureBytes checks the deterministic-content helper directly: same
 // inputs, same bytes, and the requested length exactly.
@@ -104,6 +74,21 @@ func TestRun_IdempotentAndTreeShape(t *testing.T) {
 	must(t, pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE email_verified_at IS NOT NULL`).Scan(&verifiedCount))
 	if verifiedCount != 2 {
 		t.Errorf("verified users = %d, want 2 (both seeded accounts)", verifiedCount)
+	}
+
+	// The seeded accounts have to log in the ordinary way, so what the seed
+	// wrote has to satisfy the service's own verifier. The seed once carried a
+	// private copy of the hasher, and a copy that drifts produces accounts that
+	// exist and cannot be used; reading the stored hash back is what would
+	// catch that.
+	var stored string
+	must(t, pool.QueryRow(ctx, `SELECT password_hash FROM users WHERE email = 'rahul@drive.local'`).Scan(&stored))
+	ok, err := auth.VerifyPassword(stored, Password)
+	if err != nil {
+		t.Fatalf("VerifyPassword on the seeded hash: %v", err)
+	}
+	if !ok {
+		t.Error("the seeded password does not verify through the service's verifier")
 	}
 
 	var rootCount int

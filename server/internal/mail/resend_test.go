@@ -123,8 +123,8 @@ func TestResendRejectsBadAddressesWithoutCallingTheApi(t *testing.T) {
 	}
 }
 
-// A subject reaches this code from user input (a display name, and from Phase 3
-// a file name). JSON escaping protects this request; stripping protects the
+// A subject reaches this code from user input -- a display name today, a file
+// name if share mails ever ship. JSON escaping protects this request; stripping protects the
 // header Resend writes out of the value on the other side.
 func TestResendStripsControlCharactersFromTheSubject(t *testing.T) {
 	s, got := stubResend(t, http.StatusOK, `{"id":"x"}`)
