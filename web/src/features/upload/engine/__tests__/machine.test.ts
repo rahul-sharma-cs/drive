@@ -1,6 +1,6 @@
 /**
- * PLAN §"Client engine state machine" — one case per row of that table,
- * plus the protocol paths the table depends on (chimera verify, URL refill,
+ * The upload state machine — one case per transition in `../machine.ts`, plus
+ * the protocol paths those transitions depend on (chimera verify, URL refill,
  * matched-session resume, 0-byte, multi-tab lock, cadence-derived progress).
  */
 
@@ -67,9 +67,9 @@ describe('row: part PUT fails integrity (normalized ETag != MD5)', () => {
   })
 
   it('Retry re-runs the whole-file SHA-256 after the hash worker failed', async () => {
-    // PLAN's risk table names exactly this: hash-wasm is dormant, "verify worker
-    // instantiation first in 4a". A cached REJECTED hash promise made Retry a
-    // no-op — the only escape was cancel + re-add.
+    // hash-wasm is pinned and dormant upstream, so a worker that dies has to be
+    // recoverable without losing the upload. A cached REJECTED hash promise
+    // made Retry a no-op — the only escape was cancel + re-add.
     const file = makeFile(3000)
     let fingerprinted = false
     let boom = true
@@ -89,7 +89,7 @@ describe('row: part PUT fails integrity (normalized ETag != MD5)', () => {
 
     await h.clock.runUntil(() => h.snap().state === 'failed')
     expect(h.snap().error_code).toBe('internal')
-    expect(h.snap().error).not.toMatch(/wasm boom/) // PLAN §Phase 5 message discipline
+    expect(h.snap().error).not.toMatch(/wasm boom/) // never surface a raw worker message
 
     h.engine.retry(h.id)
     await h.clock.runUntil(() => h.snap().state === 'done')
@@ -356,8 +356,8 @@ describe('row: /complete crash, timeout, and 409 in_progress', () => {
   it('422 at complete → re-handshake, re-upload what the server deleted, complete again', async () => {
     const h = makeHarness()
     h.server.inject('complete', new ApiError(422, 'invalid', 'verify mismatch'))
-    // PLAN: on a verify mismatch the server deletes the offending ledger rows,
-    // so the next handshake re-requests exactly those parts.
+    // On a verify mismatch the server deletes the offending ledger rows, so the
+    // next handshake re-requests exactly those parts.
     let dropped = false
     h.server.onCall = (method) => {
       if (method === 'complete' && !dropped) {
@@ -406,7 +406,8 @@ describe('URL pool refill', () => {
     // 12 parts, and `POST /uploads` presigns the first ~8 missing ones, so the
     // pool genuinely runs low mid-transfer. concurrency 1 keeps the interleaving
     // deterministic. The fake server stays contract-conformant: every resume
-    // returns fresh URLs for EVERY missing part (PLAN's frozen Appendix).
+    // returns fresh URLs for EVERY missing part, which the wire contract
+    // promises unconditionally.
     const h = makeHarness({ fileSize: 12_000, env: { concurrency: 1 } })
     await h.clock.runUntil(() => h.snap().state === 'done')
 
@@ -454,9 +455,9 @@ describe('chimera guard (verify_parts)', () => {
 
   it('restarts the whole-file SHA-256 when the flag arms MID-FLIGHT', async () => {
     const h = makeHarness()
-    // PLAN arms verify_parts on "a reconciliation that found ledger/Garage
-    // drift" — i.e. during an ordinary refill, long after create. That path
-    // returns straight into the transfer loop, past drive()'s hash guard.
+    // verify_parts also arms on a reconciliation that found ledger/store drift
+    // — i.e. during an ordinary refill, long after create. That path returns
+    // straight into the transfer loop, past drive()'s hash guard.
     h.put.scriptPart(2, expired403) // forces one mid-flight handshake
     let armed = false
     h.server.onCall = (method) => {

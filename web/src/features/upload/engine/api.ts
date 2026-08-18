@@ -1,6 +1,9 @@
 /**
- * Network layer: the upload REST endpoints (PLAN's frozen Appendix) and the
- * part-PUT transport.
+ * Network layer: the upload REST endpoints and the part-PUT transport.
+ *
+ * The endpoint shapes are a frozen contract shared with the Go client in
+ * server/internal/uploadclient; both speak it verbatim, so a change here is a
+ * change to both.
  *
  * Part PUTs go over XMLHttpRequest, not fetch: fetch has no upload-progress
  * events, and the engine needs `xhr.upload.onprogress` (stall watchdog),
@@ -24,7 +27,7 @@ import {
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 
-/** Every `/api` mutation carries this header (PLAN §CSRF). */
+/** Every `/api` mutation carries this header — it is half the CSRF scheme. */
 const CLIENT_HEADER = { 'X-Drive-Client': 'web' }
 
 export class HttpUploadApi implements UploadApi {
@@ -114,8 +117,11 @@ export const xhrPutPart: PartPutter = (url, body, onProgress) => {
     xhr.onerror = () => resolve({ kind: 'network', message: 'part PUT failed' })
     xhr.ontimeout = () => resolve({ kind: 'network', message: 'part PUT timed out' })
     xhr.onabort = () => resolve({ kind: 'aborted' })
-    // Content-Type is deliberately not set: objects must be stored with none
-    // (PLAN §Serving user content — Range GETs skip response-content-* overrides).
+    // Content-Type is deliberately not set: objects must be stored with none.
+    // Not every S3-compatible store applies the response-content-* overrides
+    // to Range (206) replies — some honour them only on a full 200 — so a
+    // stored renderable type could let a seek serve uploaded HTML as HTML.
+    // Storing no type is the part of the posture that holds everywhere.
     xhr.send(body)
   })
   return {

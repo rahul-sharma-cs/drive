@@ -26,7 +26,7 @@ const (
 // one row per window for the whole service.
 const GlobalKey = "all"
 
-// Budgets from PLAN §schema. Both are auto-clearing: the window is measured
+// The durable budgets. Both are auto-clearing: the window is measured
 // against now(), so a lapsed window simply stops counting -- there is no
 // permanent lockout and nothing has to reset anything.
 const (

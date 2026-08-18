@@ -47,7 +47,7 @@ func fixtureDir(t *testing.T) string {
 	return filepath.Join(H.RepoRoot, "e2e", "fixtures", "big")
 }
 
-// TestBigMultiGBRoundTrip is PLAN's multi-GB random-file run: real bytes, real
+// TestBigMultiGBRoundTrip is the multi-GB random-file run: real bytes, real
 // parts, and a digest taken from what came back out of Garage rather than from
 // what the client believed it sent.
 func TestBigMultiGBRoundTrip(t *testing.T) {
@@ -140,8 +140,8 @@ func TestBigListPartsPagination(t *testing.T) {
 }
 
 // TestBigFiftyGB is the acceptance walkthrough's 50 GB run. The file is sparse,
-// created with /usr/bin/truncate exactly as PLAN specifies, so it costs no disk
-// on the host; Garage's zstd collapses the zeros on the way in.
+// created with /usr/bin/truncate, so it costs no disk on the host; Garage's
+// zstd collapses the zeros on the way in.
 func TestBigFiftyGB(t *testing.T) {
 	requireBig(t, "DRIVE_TEST_50G")
 
@@ -200,8 +200,8 @@ func cleanupBig(t *testing.T, owner *testutil.Client, nodeID uuid.UUID) {
 }
 
 // requireDockerSpace checks the Docker VM's free space through a container that
-// has a shell, which the Garage image does not. PLAN asks for twice the file
-// before a big run; the probe failing is logged, not fatal -- a missing docker
+// has a shell, which the Garage image does not. A big run needs twice the file
+// free; the probe failing is logged, not fatal -- a missing docker
 // CLI is not a reason to fail an upload test.
 func requireDockerSpace(t *testing.T, want int64) {
 	t.Helper()

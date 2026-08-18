@@ -924,8 +924,9 @@ func TestUploadStatusSlidesTheExpiry(t *testing.T) {
 	body := uploadStart(t, h, u, u.RootID, "sliding.bin", uploadTestPartSize)
 
 	// Six days in: still live, and a plain status read pushes the deadline back
-	// out to seven days. PLAN is explicit that every authenticated touch does
-	// this, not only part confirmations.
+	// out to seven days. EVERY authenticated touch of the session slides it, not
+	// only part confirmations -- otherwise a long final hash or a complete retry
+	// could be collected at the line.
 	if _, err := pool.Exec(context.Background(),
 		`UPDATE upload_sessions SET expires_at = now() + interval '1 day' WHERE id = $1`, body.UploadID); err != nil {
 		t.Fatalf("ageing the session: %v", err)

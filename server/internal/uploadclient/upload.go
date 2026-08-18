@@ -424,8 +424,9 @@ func (t *transfer) uploadPart(ctx context.Context, n int) error {
 				return fmt.Errorf("uploadclient: upload %s: no presigned URL for part %d after a handshake", t.id, n)
 			}
 		} else if t.poolLow() {
-			// Proactive refill: no error required, just a pool running dry
-			// (PLAN §Upload protocol, "URL pool refill").
+			// Proactive refill: no error required, just a pool running dry.
+			// Refilling before the URLs expire is what keeps a long transfer
+			// from stalling on a 403 it could have avoided.
 			if err := t.refill(ctx); err != nil {
 				return err
 			}
@@ -501,8 +502,8 @@ func (t *transfer) uploadPart(ctx context.Context, n int) error {
 }
 
 // isExpiredURL is the expired-presign signal. Garage answers an expired URL
-// with 400 and <Code>InvalidRequest</Code>, not the 403 the original plan
-// assumed; both count, and a bare 400 does not.
+// with 400 and <Code>InvalidRequest</Code>, not the 403 S3 semantics would
+// suggest; both count, and a bare 400 does not.
 func isExpiredURL(status int, body string) bool {
 	if status == http.StatusForbidden {
 		return true
@@ -538,8 +539,9 @@ func (t *transfer) put(ctx context.Context, url string, off, length int64) putOu
 	// rejected before Garage reads the body, and it closes the socket behind the
 	// rejection: without this the transport is already streaming 100 MiB into a
 	// dead connection and surfaces "broken pipe" instead of the 400 that means
-	// "expired". That misreading costs the part its integrity budget where PLAN
-	// promises a free re-handshake. Measured against Garage v2.3.0: the continue
+	// "expired". That misreading costs the part its integrity budget when an
+	// expired URL is supposed to buy a free re-handshake. Measured against
+	// Garage v2.3.0: the continue
 	// comes back immediately, so the happy path pays nothing for it.
 	req.Header.Set("Expect", "100-continue")
 

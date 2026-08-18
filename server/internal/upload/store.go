@@ -111,8 +111,8 @@ func (s *Store) Insert(ctx context.Context, sess *Session) error {
 	return nil
 }
 
-// Touch slides the sliding expiry. PLAN is specific that it moves on EVERY
-// authenticated touch -- handshake, part confirm, status, complete entry -- not
+// Touch slides the sliding expiry. It moves on EVERY authenticated touch of the
+// session -- handshake, part confirm, status, complete entry -- not
 // only on part confirmations, so a session whose final hash is still running
 // cannot be collected out from under the client.
 //

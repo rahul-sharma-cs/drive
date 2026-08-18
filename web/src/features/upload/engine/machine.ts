@@ -1,8 +1,8 @@
 /**
- * One file's upload state machine — a direct transcription of PLAN's
- * "Client engine state machine" table. UI-agnostic: it emits snapshots.
+ * One file's upload state machine. UI-agnostic: it emits snapshots.
  *
- * Every transition in that table has a vitest case in `__tests__`.
+ * The transitions here are the contract the rest of the engine is written
+ * against, and every one of them has a vitest case in `__tests__`.
  */
 
 import { backoffDelay } from './backoff'
@@ -80,7 +80,10 @@ const ACTIVE_STATES: ReadonlySet<UploadState> = new Set<UploadState>([
 
 export class UploadMachine {
   readonly id: string
-  /** Not readonly: `reselect()` swaps in a re-picked File (PLAN §Resume). */
+  /**
+   * Not readonly: `reselect()` swaps in a re-picked File — a browser cannot
+   * re-read a file after a reload, so resuming means the user picks it again.
+   */
   file: File
   readonly parentId: string
 
@@ -155,9 +158,10 @@ export class UploadMachine {
   }
 
   /**
-   * PLAN: pause = abort in-flight XHRs (and suspend both hash workers — that
-   * half belongs to `UploadEngine.pause`, which is the only place that can see
-   * whether another machine still needs the shared workers).
+   * Pause = abort in-flight XHRs (and suspend both hash workers — that half
+   * belongs to `UploadEngine.pause`, which is the only place that can see
+   * whether another machine still needs the shared workers). A user-initiated
+   * abort consumes no retry budget and must not trip the stall watchdog.
    *
    * `queued` is pausable too: in a 150-file folder drop 149 rows are queued,
    * and a pause the engine silently discards is worse than no pause at all.
@@ -181,7 +185,11 @@ export class UploadMachine {
     this.setState('queued')
   }
 
-  /** Per-file Retry — resets every budget (PLAN: terminal failed → Retry). */
+  /**
+   * Per-file Retry — resets every budget. A terminal `failed` is never a dead
+   * end: exhausting the budgets always leaves the user a Retry that starts the
+   * budgets over.
+   */
   retry(): void {
     this.integrity.clear()
     this.rehandshakes.clear()
@@ -200,7 +208,6 @@ export class UploadMachine {
   }
 
   /**
-   * PLAN §Resume / `error_file_changed`: "the user re-selects the file".
    * Hands a freshly picked `File` to this row, keeping its id and history: the
    * fingerprint is recomputed, so `POST /uploads` either matches the same
    * session (resume, chimera-verified) or opens a fresh one.
@@ -438,8 +445,8 @@ export class UploadMachine {
       throw STOP
     }
     this.verifyParts = null
-    // PLAN §Resume: "the SHA-256 worker restarts from byte 0 of the re-selected
-    // file, in parallel with remaining parts; complete waits on both". A verify
+    // The SHA-256 worker restarts from byte 0 of the re-selected file, in
+    // parallel with the remaining parts; complete waits on both. A verify
     // armed MID-FLIGHT returns straight into the transfer loop, past `drive()`'s
     // guard, so restarting here is the only thing that stops `complete` from
     // sending `{"sha256": null}`.
@@ -463,7 +470,7 @@ export class UploadMachine {
     // confirmed set — the handshake is no longer what repopulates the queue.
     this.rebuildQueue()
     // `POST /uploads` already returned the first ~8 missing URLs precisely so
-    // the first bytes move without a round trip (PLAN §Upload protocol); only
+    // the first bytes move without a round trip; only
     // handshake when the head of the queue has no URL. `stop()` empties the
     // pool, so URLs never survive an interruption into a later attempt.
     if (this.queue.length > 0 && !this.pool.has(this.queue[0])) await this.refill(gen)
@@ -482,7 +489,9 @@ export class UploadMachine {
       const n = this.queue.shift()
       if (n === undefined) return
       if (this.confirmed.has(n)) continue
-      // URL pool refill: proactive, no error required (PLAN §Upload protocol).
+      // URL pool refill: proactive, no error required. Refilling before the
+      // pool runs dry is what keeps a long transfer from stalling on an
+      // expired URL it could have replaced in advance.
       if (this.pool.size <= LOW_POOL && this.queue.length > 0 && !this.refilling) {
         void this.refill(gen).catch(() => undefined)
       }
@@ -754,7 +763,7 @@ export class UploadMachine {
     } catch (e) {
       this.check(gen)
       if (isFileChangedError(e) && !(await this.stillReadable(gen))) throw STOP
-      // PLAN §Phase 5: never surface a raw worker/wasm message to the user.
+      // Never surface a raw worker/wasm message to the user.
       // `retry()` drops the rejected promise, so Retry really re-hashes.
       this.failWith('internal', 'Could not finish hashing this file — retry to try again.')
       throw STOP

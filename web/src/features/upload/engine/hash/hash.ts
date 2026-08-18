@@ -1,17 +1,19 @@
 /**
  * Hash façade — the only thing the upload engine talks to.
  *
- * Two workers, both streaming (PLAN §Upload protocol: never materialize a whole
- * part in memory):
+ * Two workers, both streaming — a whole part is never materialized in memory,
+ * which is what keeps a 100 MiB part size from costing 100 MiB of heap per
+ * upload in flight:
  *   - md5worker    — per-part MD5 over 8 MiB sub-slices, compared to the PUT's
  *                    normalized ETag.
  *   - sha256worker — the whole file, sequentially, in parallel with the uploads.
  *
  * Viability of hash-wasm's WASM *inside a Worker* is proven by
- * e2e/tests/hashwasm.spec.ts (PLAN §Fixed choices: first Phase 4a task).
+ * e2e/tests/hashwasm.spec.ts — hash-wasm is pinned at 4.12.0 and dormant
+ * upstream, so that check is a standing guard rather than a one-off.
  */
 
-/** PLAN: hash a part in 8 MiB sub-slices, never as one buffer. */
+/** A part is hashed in 8 MiB sub-slices, never as one buffer. */
 export const HASH_CHUNK_SIZE = 8 * 1024 * 1024
 
 export type HashRequest =
@@ -73,7 +75,11 @@ export class HashClient {
     })
   }
 
-  /** Pause: the worker stops between sub-slices (PLAN: pause suspends both hash workers). */
+  /**
+   * Pause: the worker stops between sub-slices. Pausing an upload suspends both
+   * hash workers, not just the transfer — otherwise a paused upload keeps
+   * burning CPU.
+   */
   suspend(): void {
     this.worker?.postMessage({ kind: 'suspend' } satisfies HashRequest)
   }

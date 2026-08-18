@@ -82,13 +82,13 @@ func TestPutFixture(t *testing.T) {
 	if !bytes.Equal(got, data) {
 		t.Errorf("object body (%d bytes) does not match the fixture data (%d bytes)", len(got), len(data))
 	}
-	// PLAN §Sharing's posture only requires the type not be renderable by a
+	// The posture only requires the type not be renderable by a
 	// browser -- Garage defaults an unset Content-Type to
 	// "application/octet-stream" on a full GET (confirmed here) and to empty
 	// on a Range/206 (confirmed in the day-0 spike report); either is fine,
 	// text/html or image/* would not be.
 	if ct := aws.ToString(out.ContentType); ct != "" && ct != "application/octet-stream" {
-		t.Errorf("Content-Type = %q, want empty or application/octet-stream -- see PLAN §Sharing", ct)
+		t.Errorf("Content-Type = %q, want empty or application/octet-stream -- a renderable stored type would let a Range GET serve uploaded HTML", ct)
 	}
 }
 

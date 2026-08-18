@@ -1,17 +1,17 @@
 package testutil
 
-// Upload-specific harness machinery: the wire shapes of the frozen Appendix
-// contract, a driver that walks the protocol over real HTTP, and the two kinds
-// of side door the interruption battery needs.
+// Upload-specific harness machinery: the upload protocol's wire shapes, a
+// driver that walks the protocol over real HTTP, and the two kinds of side door
+// the interruption battery needs.
 //
 // The side doors are the point of this file.
 //
 // The first is out-of-band S3: CreateMultipartUpload / UploadPart / Complete /
 // PutObject issued directly against Garage, with no session row anywhere. That
-// is how a crash window gets constructed rather than raced -- PLAN is explicit
-// that SIGKILL cannot deterministically land between CompleteMultipartUpload
-// returning and the publish transaction committing, so the test puts the world
-// in that exact state by hand and then runs one GC pass.
+// is how a crash window gets constructed rather than raced -- SIGKILL cannot
+// deterministically land between CompleteMultipartUpload returning and the
+// publish transaction committing, so the test puts the world in that exact
+// state by hand and then runs one GC pass.
 //
 // The second is direct object reads. Phase 3 owns GET /files/{id}/download; it
 // does not exist yet, so "the bytes that came back are byte-identical" is
@@ -388,9 +388,9 @@ func (h *Harness) Session(t testing.TB, id uuid.UUID) SessionRow {
 // have left: claimed, no node published, and old enough for the collector to
 // take it over.
 //
-// PLAN §Testing 3 requires exactly this -- "both crash-window cases are
-// constructed, not timed: SQL state injection plus out-of-band S3 calls, then
-// RunGCOnce" -- because the window it reproduces is a few milliseconds wide.
+// Constructed, not timed: SQL state injection plus out-of-band S3 calls, then
+// one GC pass. The window it reproduces is a few milliseconds wide, so racing
+// for it would produce a flake rather than a proof.
 func (h *Harness) InjectCompleting(t testing.TB, id uuid.UUID, age time.Duration) {
 	t.Helper()
 	const q = `UPDATE upload_sessions
@@ -700,8 +700,8 @@ type PutResult struct {
 }
 
 // Expired reports Garage's expired-presign signature, measured in the day-0
-// spike: 400 carrying <Code>InvalidRequest</Code>, not the 403 the plan
-// originally assumed. A plain 400 without that code stays a hard failure.
+// spike: 400 carrying <Code>InvalidRequest</Code>, not the 403 S3 semantics
+// would suggest. A plain 400 without that code stays a hard failure.
 func (p PutResult) Expired() bool {
 	return p.Status == http.StatusForbidden ||
 		(p.Status == http.StatusBadRequest && strings.Contains(p.Body, "<Code>InvalidRequest</Code>"))
@@ -911,8 +911,8 @@ func (u *Uploader) Cancel(t testing.TB) {
 // and reusing it afterwards. sparse writes a hole instead of bytes, which is
 // what makes an 11 GiB part-count fixture cost no disk.
 //
-// It fails the test unless the filesystem has twice the file's size free, the
-// precheck PLAN §Testing 3 requires before a big run.
+// It fails the test unless the filesystem has twice the file's size free:
+// running out mid-upload fails in ways that look like protocol bugs.
 func BigFixture(t testing.TB, dir, name string, size int64, sparse bool) string {
 	t.Helper()
 
@@ -964,9 +964,9 @@ func BigFixture(t testing.TB, dir, name string, size int64, sparse bool) string 
 }
 
 // RequireFreeSpace skips the test unless the filesystem holding dir has at
-// least want bytes free. PLAN §Testing 3 asks for the check before a big run;
-// filling the Docker VM's disk mid-upload fails in ways that look like protocol
-// bugs and are not.
+// least want bytes free. Every big run does this check first: filling the
+// Docker VM's disk mid-upload fails in ways that look like protocol bugs and
+// are not.
 func RequireFreeSpace(t testing.TB, dir string, want int64) {
 	t.Helper()
 	var st syscall.Statfs_t

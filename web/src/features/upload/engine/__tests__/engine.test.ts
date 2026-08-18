@@ -130,8 +130,9 @@ describe('pause on a queued upload', () => {
 
 describe('reselect', () => {
   it('hands a re-picked File to the same row and re-fingerprints it', async () => {
-    // PLAN's `error_file_changed` row: "routes into the re-select + fingerprint
-    // flow"; §Resume: after a reload "the user re-selects the file".
+    // `error_file_changed` routes into the re-select + fingerprint flow: a
+    // browser cannot re-read a file after a reload or an on-disk change, so
+    // the only way forward is the user picking the file again.
     const dead = makeFile(3000)
     const err = Object.assign(new Error('could not be read'), { name: 'NotReadableError' })
     Object.defineProperty(dead, 'slice', { value: () => ({ arrayBuffer: () => Promise.reject(err) }) })

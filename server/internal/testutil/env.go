@@ -3,10 +3,9 @@
 //
 // Three things live here and nothing else does:
 //
-//   - the run-level setup PLAN §Testing 3 requires -- reset the schema, sweep
-//     leftover Garage multiparts, purge the Mailpit inbox, build the server
-//     binary once, and own the server as a child process the tests can SIGKILL
-//     and restart;
+//   - the run-level setup -- reset the schema, sweep leftover Garage
+//     multiparts, purge the Mailpit inbox, build the server binary once, and
+//     own the server as a child process the tests can SIGKILL and restart;
 //   - time control -- direct SQL backdating of expires_at / created_at /
 //     confirmed_at / window_start plus the RunGCOnce hook, so no suite ever
 //     sleeps a wall-clock window;

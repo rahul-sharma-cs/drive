@@ -35,9 +35,9 @@ const (
 )
 
 // ModeDirect is the only transfer mode built: the browser PUTs parts straight
-// to Garage with presigned URLs. The relay fallback the plan specced as a
-// contingency was not needed -- the day-0 spike proved direct works -- so
-// nothing ever writes 'relay'.
+// to Garage with presigned URLs. A server-side relay fallback was held in
+// reserve as a contingency but never needed -- the day-0 spike proved direct
+// works -- so nothing ever writes 'relay'.
 const ModeDirect = "direct"
 
 const (
@@ -145,8 +145,10 @@ func (s *Session) CheckPart(n int, size int64) error {
 // AdoptablePart reports whether a part ListParts returned may be taken into the
 // ledger as confirmed, which is a stricter question than CheckPart's.
 //
-// CheckPart is the confirm endpoint's rule and follows PLAN's wording: the final
-// part passes at anything up to the remainder. Adoption cannot afford that
+// CheckPart is the confirm endpoint's rule: a non-final part must equal
+// part_size exactly and the final part passes at anything up to the remainder,
+// so a wrong-sized part fails inside the client's retry budget rather than at
+// complete. Adoption cannot afford that
 // leniency. A part adopted from Garage is reported confirmed and never appears
 // in `missing` again, so if its size does not make the declared file size add
 // up, complete refuses forever and no response ever tells the client which part

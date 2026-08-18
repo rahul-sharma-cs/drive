@@ -11,14 +11,14 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/testutil"
 )
 
-// The authorization matrix (PLAN §Testing 2).
+// The authorization matrix.
 //
 // Every endpoint class Phase 1 implements, crossed with every identity that can
 // reach it, asserting the status AND -- on every rejection -- that the database
 // did not move. A 404 with a row written behind it is not a rejection, and only
 // the digest catches that.
 //
-// The destination rows are the point of the exercise. PLAN's IDOR rule runs in
+// The destination rows are the point of the exercise. The IDOR rule runs in
 // both directions: an endpoint that takes a parent in the body authorizes that
 // parent independently of the resource in the path, so "move my node into your
 // folder", "copy my file into your folder" and "create a folder inside your

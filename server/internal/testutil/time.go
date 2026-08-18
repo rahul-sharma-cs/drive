@@ -16,8 +16,9 @@ import (
 // by moving the row, never by sleeping: the whole suite runs in seconds and a
 // 30-day expiry is as testable as a 30-second one.
 //
-// The one thing that is not a stored timestamp is the GC's own schedule, and
-// that is why PLAN specifies an exported RunGCOnce -- see below.
+// The one thing that is not a stored timestamp is the GC's own schedule, which
+// is why the collector exports a single-pass entry point -- see RunGCOnce
+// below.
 
 // identifier guards the table and column names Backdate interpolates. They are
 // never caller data in practice, but a typo that turned into SQL would be an
@@ -60,8 +61,8 @@ func ExpireSessions(t testing.TB, pool queryExecer, userID any) {
 
 // LapseThrottleWindow moves a throttle budget's window into the past, which is
 // how a test gets past a durable lockout (login, OTP, share password) without
-// sleeping the window out. The scope and key are the ones in PLAN's schema
-// block, e.g. ("login", "someone@drive.test").
+// sleeping the window out. The scope and key are the ones stored in the
+// throttle table, e.g. ("login", "someone@drive.test").
 func LapseThrottleWindow(t testing.TB, pool queryExecer, scope, key string, d time.Duration) {
 	t.Helper()
 	if n := Backdate(t, pool, "throttle", "window_start", d, "scope = $1 AND key = $2", scope, key); n == 0 {
@@ -69,8 +70,8 @@ func LapseThrottleWindow(t testing.TB, pool queryExecer, scope, key string, d ti
 	}
 }
 
-// RunGCOnce is the hook PLAN §Testing 3 names: the GC loop's single synchronous
-// pass, so a suite triggers collection on demand instead of waiting an hour.
+// RunGCOnce is the GC loop's single synchronous pass, so a suite triggers
+// collection on demand instead of waiting out the hourly schedule.
 //
 // Phase 2 builds the loop in internal/gc and the integration suite's TestMain
 // assigns it here:

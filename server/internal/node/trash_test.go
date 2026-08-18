@@ -163,8 +163,8 @@ func (f *fixture) exists(id uuid.UUID) bool {
 
 // backdateTrash pushes every trashed row of this user an hour into the past, so
 // a following trash operation lands on a provably later timestamp. This is the
-// plan's time-control convention: state lives in Postgres, tests move it with
-// SQL rather than sleeping.
+// time-control convention throughout the suite: durable state lives in
+// Postgres, so tests move it with SQL rather than sleeping.
 func (f *fixture) backdateTrash() {
 	f.t.Helper()
 	if _, err := f.pool.Exec(f.ctx,
@@ -464,10 +464,10 @@ func TestPurgeDeletesTheNodesShares(t *testing.T) {
 // its destination nulled, so a complete that lands afterwards can re-parent the
 // finished file to the owner's root instead of throwing it away.
 //
-// This is the resolution of a PLAN contradiction: §FK ON DELETE asked for the
-// session to be aborted, but §Complete, the frozen Appendix and §Testing 3's
-// battery case all require it to survive. Aborting cost the user a fully
-// uploaded file; abandonment is handled by the GC's expiry sweep instead.
+// Aborting the session here instead would cost the user a fully uploaded file
+// -- complete would answer 410 with the bytes already durable in the store --
+// and would contradict the complete response's own promise to echo the new
+// parent_id. Abandonment is handled by the GC's expiry sweep instead.
 func TestPurgeLeavesUploadSessionsActiveWithDestinationNulled(t *testing.T) {
 	f := newFixture(t)
 	a := f.folder(f.root, "A")

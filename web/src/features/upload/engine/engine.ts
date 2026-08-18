@@ -1,8 +1,8 @@
 /**
  * The upload engine singleton.
  *
- * PLAN §Client engine state machine: a module-scope singleton living OUTSIDE
- * the React tree, so navigating between routes never unmounts an upload. The
+ * A module-scope singleton living OUTSIDE the React tree, so navigating
+ * between routes never unmounts an upload. The
  * UI subscribes with `useSyncExternalStore(engine.subscribe, engine.getSnapshot)`
  * — `getSnapshot()` returns a cached, immutable object and only changes
  * identity when something actually changed.
@@ -103,7 +103,7 @@ export class UploadEngine {
     const machine = this.find(id)
     if (!machine) return
     machine.pause()
-    // PLAN: pause also suspends both hash workers — but there is ONE worker
+    // Pausing an upload also suspends both hash workers — but there is ONE worker
     // pair for the whole engine, so only the engine may suspend them. Pausing
     // above already let `schedule()` admit the next queued upload, so if any
     // machine is still active the workers must keep running; suspending them
@@ -116,9 +116,10 @@ export class UploadEngine {
   }
 
   /**
-   * Hands a re-selected File to an existing row (PLAN §Resume: after a reload,
-   * or after `error_file_changed`, "the user re-selects the file"). The row
-   * keeps its id; the fingerprint is recomputed and decides resume vs fresh.
+   * Hands a re-selected File to an existing row. A browser cannot re-read a
+   * file after a reload, so resuming always starts with the user re-picking it;
+   * the same path serves `error_file_changed`. The row keeps its id; the
+   * fingerprint is recomputed and decides resume vs fresh.
    */
   reselect(id: string, file: File): void {
     this.find(id)?.reselect(file)

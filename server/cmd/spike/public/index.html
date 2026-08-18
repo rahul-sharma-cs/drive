@@ -119,8 +119,9 @@ async function run() {
 window.__spikeRun = run;
 
 // ---- CDP folder-drop viability probe -------------------------------------
-// PLAN §Testing 1: if a synthesized drop yields file entries (or nothing)
-// instead of a directory entry, that IS the webkitdirectory fallback trigger.
+// If a synthesized drop yields file entries (or nothing) instead of a
+// directory entry, that IS the webkitdirectory fallback trigger — switch e2e
+// folder ingress to the picker rather than debugging the drag synthesis.
 // The handler collects entries SYNCHRONOUSLY before any await, per the
 // traverse contract, and drains readEntries() until an empty batch.
 const dz = document.getElementById('dropzone');

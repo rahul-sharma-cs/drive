@@ -61,7 +61,10 @@ type Config struct {
 	Batch int
 }
 
-// Defaults are the numbers PLAN specifies.
+// Defaults are the production numbers. The grace periods are not arbitrary:
+// BlobGrace must exceed the presign TTL so a URL handed out just before a
+// refcount hit zero cannot outlive its object, and OrphanAge is long enough
+// that the create-then-insert race can never look like an orphan.
 func Defaults() Config {
 	return Config{
 		Interval:     time.Hour,

@@ -1,8 +1,9 @@
 /**
  * What each engine state says to a person.
  *
- * PLAN §Phase 5: honest copy, never a status code. Two rules the engine's own
- * table forces: `paused_offline` and `paused_backend` must read differently —
+ * Honest copy, never a status code: "Paused — offline. Will resume
+ * automatically.", not "Error 500". Two rules the engine's own states force:
+ * `paused_offline` and `paused_backend` must read differently —
  * one is the user's connection and one is the server, and both resume on their
  * own — and `error_file_changed` has to ask for the file again rather than
  * report a failure, because re-selecting is what fixes it.

@@ -12,9 +12,10 @@ package integration
 //
 // The second is constructed, because it cannot be timed. The window between
 // CompleteMultipartUpload returning and the publish transaction committing is
-// milliseconds; no SIGKILL lands there on demand. PLAN §Testing 3 says so
-// outright, so those cases put the world into that state by hand -- SQL state
-// injection plus out-of-band S3 calls -- and then run one GC pass.
+// milliseconds; no SIGKILL lands there on demand. Those cases therefore put the
+// world into that state by hand -- SQL state injection plus out-of-band S3
+// calls -- and then run one GC pass. Constructed beats raced: a test that has
+// to hit a millisecond window is a flake, not a proof.
 
 import (
 	"context"
@@ -27,8 +28,9 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/testutil"
 )
 
-// The GC hook PLAN §Testing 3 names, wired from this suite so no test ever
-// waits an hour for a collection pass. It is an init rather than a line in
+// The GC loop runs hourly in production; this exported hook fires a single
+// synchronous pass, wired from this suite so no test ever waits an hour for a
+// collection. It is an init rather than a line in
 // TestMain because H does not exist yet at init time -- the closure reads it
 // when it runs, which is always inside a test.
 func init() {
@@ -120,8 +122,8 @@ func TestInterruptionKill9MidUpload(t *testing.T) {
 	}
 }
 
-// TestInterruptionCrashAfterCompleteMultipart is the window PLAN calls out by
-// name: CompleteMultipartUpload succeeded, the publish transaction did not.
+// TestInterruptionCrashAfterCompleteMultipart covers the nastiest crash window:
+// CompleteMultipartUpload succeeded, the publish transaction did not.
 //
 // Constructed, never timed. Once Garage's complete lands the multipart ceases
 // to exist -- ListParts and a retried complete both answer NoSuchUpload -- so

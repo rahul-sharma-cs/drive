@@ -18,8 +18,11 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// Argon2id parameters, fixed by PLAN §Fixed choices for every password Drive
-// stores -- user accounts and, from Phase 3, share passwords.
+// Argon2id parameters, fixed for every password Drive stores -- user accounts
+// and share passwords alike. They are a compatibility contract:
+// changing them silently invalidates nothing (the PHC string carries its own
+// parameters) but every new hash diverges from every old one, so move them only
+// deliberately and with a rehash-on-login path.
 const (
 	argonMemory  uint32 = 19456 // KiB
 	argonTime    uint32 = 2

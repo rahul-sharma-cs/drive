@@ -1,11 +1,11 @@
 # Drive — build orchestration.
-# Semantics are frozen by the build plan §Fixed choices "Makefile targets"
-# (gitignored, not part of the public repo) — don't diverge without updating
-# that doc first.
+# Target semantics here are load-bearing, not cosmetic: the Go test harness and
+# the e2e runner both depend on the exact stack names, flags and ordering below.
+# Changing what a target does breaks callers that never read this file.
 #
 # Every Go command runs from the repo root: go.work puts the server module in a
-# workspace so `go run ./server/cmd/...` resolves exactly as PLAN writes it, and
-# relative paths (.env, e2e/, server/cmd/spike/public) mean what they say.
+# workspace so `go run ./server/cmd/...` resolves, and relative paths (.env,
+# e2e/, server/cmd/spike/public) mean what they say.
 
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -47,7 +47,7 @@ doctor:
 infra-init:
 	go run ./server/cmd/infra-init -project drive -env-file .env
 
-# One infra-init pass against the drive-test stack (PLAN §Makefile targets).
+# One infra-init pass against the drive-test stack.
 # infra-init loads .env.test itself — do not also source it here, or a stale
 # dev value could leak in.
 infra-init-test:
@@ -110,7 +110,9 @@ seed:
 seed-test:
 	go run ./server/cmd/seed -env-file .env.test
 
-# Phase-exit and handoff only, never the per-loop battery (PLAN §Testing 3).
+# Phase-exit and handoff only, never the per-loop battery: these take tens of
+# minutes and would make the routine loop unusable. The loop battery covers the
+# same code paths with 100-200 MB files at 10 MiB parts.
 # Multi-GB random file end to end, plus the >1,000-part ListParts pagination
 # case (sparse ~11 GiB at 10 MiB parts). Fixtures land in the gitignored
 # e2e/fixtures/big and are reused, so a second run does not rebuild them.
@@ -120,8 +122,8 @@ test-big: infra-init-test
 	DRIVE_TEST_BIG=1 go test -p 1 -count=1 -timeout 0 -v \
 		-run 'TestBigMultiGBRoundTrip|TestBigListPartsPagination' ./server/integration/
 
-# Opt-in 50 GB run: sparse file via /usr/bin/truncate. PLAN wants it once when
-# the battery is green and once before handoff.
+# Opt-in 50 GB run: sparse file via /usr/bin/truncate. Manual trigger only —
+# run it once when the battery is green and once before handoff.
 test-50g: infra-init-test
 	@set -a; . ./.env.test; set +a; \
 	DRIVE_TEST_50G=1 go test -p 1 -count=1 -timeout 0 -v \
@@ -129,8 +131,9 @@ test-50g: infra-init-test
 
 token:
 	@echo "make token: not implemented until Phase 6" >&2; exit 1
-# Phase 6 shape (argument contract recorded now per PLAN §Fixed choices, so
-# it's on record before drive-token exists):
+# Phase 6 shape, recorded now so the argument contract is on record before
+# drive-token exists. USER and SCOPES carry no secret; the generated token is
+# printed once by the command and never appears in argv:
 # token:
 #	go run ./server/cmd/drive-token -user $(USER) -scopes $(SCOPES)
 
@@ -139,10 +142,9 @@ token:
 # Asserts the repo is safe to push to the public GitHub remote:
 #   - nothing under docs/ is tracked
 #   - no .env* file is tracked except the allowlist {.env.example, .env.test}
-#     (PLAN's Makefile-targets bullet says "except .env.example"; its
-#     Fixed-choices bullet says ".env.test IS committed" as throwaway test
-#     constants — this allowlist is the resolution: both are permitted,
-#     nothing else under .env* is)
+#     (.env.example holds obvious placeholders; .env.test holds only throwaway
+#     test-stack constants — rebound ports and fixed test credentials that
+#     exist nowhere else. Nothing else under .env* may be tracked.)
 #   - docs/build, docs/research, docs/summary are all gitignored
 #   - the go:embed placeholder is tracked, so a fresh clone compiles
 #   - no AWS-key-shaped string, PEM private-key header, or drv_ PAT-shaped

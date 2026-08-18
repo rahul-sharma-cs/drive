@@ -1,7 +1,7 @@
 /**
  * Per-part MD5, streamed over 8 MiB sub-slices — a 100 MiB part is never held
- * in memory (PLAN §Upload protocol). Digest is compared against the part PUT's
- * normalized ETag.
+ * in memory. The digest is compared against the part PUT's normalized ETag;
+ * an unnormalized compare always fails and would falsely downgrade integrity.
  */
 import { createMD5 } from 'hash-wasm'
 import { HASH_CHUNK_SIZE, type HashRequest, type HashResponse } from './hash'

@@ -129,8 +129,8 @@ describe('fingerprint', () => {
    *   fingerprint= 8d64d4f47dc60e17724c5541a57afb5014f972cec889a11d5d00f4f9548d7ca5
    */
   it('golden vector: 2048 zero bytes named report.pdf @ lastModified 1700000000000', async () => {
-    // A REAL SHA-256 (WebCrypto — PLAN's own named hash-wasm fallback), so this
-    // pins the digest itself, not just the payload string.
+    // A REAL SHA-256 (WebCrypto — also the standing fallback if hash-wasm ever
+    // fails), so this pins the digest itself, not just the payload string.
     const sha256: HashLike = {
       hash: async (blob, start = 0, end = blob.size) => {
         const digest = await crypto.subtle.digest('SHA-256', await blob.slice(start, end).arrayBuffer())

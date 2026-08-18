@@ -373,8 +373,10 @@ func TestCompleteIsIdempotentOnceDone(t *testing.T) {
 	}
 }
 
-// PLAN's 0-byte special case: no multipart upload ever existed, so complete is a
-// zero-byte PutObject and the same atomic publish.
+// The 0-byte special case: an empty file skips CreateMultipartUpload entirely
+// (Garage hard-rejects an empty part list at complete), so no multipart upload
+// ever existed and complete is a zero-byte PutObject plus the same atomic
+// publish.
 func TestCompleteZeroByteFile(t *testing.T) {
 	f := newFixture(t)
 	dest := f.folder("uploads")

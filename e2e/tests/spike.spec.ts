@@ -2,7 +2,9 @@ import { test, expect } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 /**
- * Day-0 spike — browser half (PLAN §Testing 1).
+ * Day-0 spike — browser half. The spike is what proved browser->Garage direct
+ * uploads work at all: presigned part PUTs from a page context, single-valued
+ * CORS headers, readable ETags, and the expired-presign error shape.
  *
  * Driven by `go run ./server/cmd/spike`, which serves this page's directory on
  * http://localhost:5173 (Playwright's default about:blank has origin "null" and
@@ -126,17 +128,19 @@ test('CDP folder-drop viability', async ({ page }) => {
       expected_children: manifest.drop_dir_file_count,
       note: r.entry_kinds?.includes('directory')
         ? 'CDP folder drop yields a directory entry — drag-drop ingress is viable'
-        : 'CDP folder drop did NOT yield a directory entry — PLAN fallback trigger: use the webkitdirectory picker for e2e folder ingress',
+        : 'CDP folder drop did NOT yield a directory entry — fallback trigger: use the webkitdirectory picker for e2e folder ingress',
     };
   } catch (e: any) {
-    probe = { supported: false, error: String(e?.message ?? e), note: 'Input.dispatchDragEvent failed — PLAN fallback trigger: webkitdirectory picker' };
+    probe = { supported: false, error: String(e?.message ?? e), note: 'Input.dispatchDragEvent failed — fallback trigger: webkitdirectory picker' };
   }
 
   const prev = JSON.parse(readFileSync(RESULTS, 'utf8'));
   writeFileSync(RESULTS, JSON.stringify({ ...prev, folder_drop: probe }, null, 2));
 
-  // Deliberately NOT a hard failure: PLAN says a failed synthesized folder drop
-  // is the documented fallback trigger, not a bug to debug. The Go harness
-  // records the verdict in the build log.
+  // Deliberately NOT a hard failure: a failed synthesized folder drop is the
+  // trigger to switch e2e folder ingress to the webkitdirectory picker, not a
+  // bug to debug. Both ingress paths share the same traverse core, so the
+  // fallback still exercises the logic under test. The Go harness records the
+  // verdict.
   test.info().annotations.push({ type: 'folder-drop', description: JSON.stringify(probe) });
 });

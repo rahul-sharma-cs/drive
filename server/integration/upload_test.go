@@ -3,7 +3,7 @@ package integration
 // The upload protocol against the real thing: a real server binary, real
 // Postgres, real Garage, real presigned PUTs from outside the process.
 //
-// Every case here is one line of PLAN §Testing 3's battery. Nothing sleeps a
+// Nothing here sleeps a
 // wall-clock window except the presign-expiry case, which cannot be faked --
 // a presign deadline is signed into the URL, not stored in a row.
 
@@ -29,9 +29,11 @@ const loopFileSize = 100 << 20
 // smallFileSize is for the cases whose subject is a decision, not a transfer.
 const smallFileSize = 3 << 20
 
-// goldenFingerprint is the pinned vector from PLAN §Upload protocol (Create):
-// 2048 zero bytes, named "report.pdf", lastModified 1700000000000 ms. The
-// browser engine and server/internal/uploadclient both assert it.
+// goldenFingerprint is the pinned vector for the create fingerprint: 2048 zero
+// bytes, named "report.pdf", lastModified 1700000000000 ms. The browser engine
+// and server/internal/uploadclient both assert this same digest -- a mismatch
+// between the two raises no error anywhere, it just silently restarts an
+// upload as a fresh one instead of resuming.
 const goldenFingerprint = "8d64d4f47dc60e17724c5541a57afb5014f972cec889a11d5d00f4f9548d7ca5"
 
 // TestUploadFingerprintIsTheGoldenVector pins the battery's own fingerprints to
@@ -491,8 +493,8 @@ func TestUploadWrongSizedRemotePartConverges(t *testing.T) {
 		t.Fatalf("parts_total is %d, want 3 -- this case needs a non-final part to abuse", up.PartsTotal)
 	}
 
-	// The mistake PLAN §Resume warns about: a client slicing at the environment
-	// default rather than the session's part_size. Garage stores it happily.
+	// The classic client mistake: slicing at the environment default rather
+	// than the session's returned part_size. Garage stores it happily.
 	if res := up.PutShort(t, 1, created.Presigned[0].URL, 5<<20); res.Status != http.StatusOK {
 		t.Fatalf("the short PUT answered %d: %s", res.Status, res.Body)
 	}
@@ -524,8 +526,8 @@ func TestUploadWrongSizedRemotePartConverges(t *testing.T) {
 }
 
 // TestUploadShortFinalRemotePartConverges is the same shape at the one part the
-// confirm endpoint is lenient about: the final one, which PLAN allows at
-// anything up to the remainder.
+// confirm endpoint is lenient about: the final one, which may be anything up to
+// the remainder.
 //
 // That leniency must not extend to adoption. A truncated final part sitting in
 // Garage looks legal to CheckPart, so adopting it would re-confirm it after
@@ -572,7 +574,7 @@ func TestUploadShortFinalRemotePartConverges(t *testing.T) {
 }
 
 // TestUploadShortConfirmedFinalPartConverges drives the other half: a final part
-// that was actually CONFIRMED short. PLAN's confirm rule allows it (size <=
+// that was actually CONFIRMED short. The confirm rule allows it (size <=
 // remaining), so nothing rejects it until complete adds the sizes up.
 //
 // This is the case verifyLedger's total-mismatch fallback exists for, and the
@@ -697,7 +699,7 @@ func TestUploadExpiredSessionResumeIsGone(t *testing.T) {
 // is two seconds, so a URL genuinely dies between being issued and being used.
 //
 // Garage answers an expired presign with 400 and <Code>InvalidRequest</Code>,
-// measured in the day-0 spike -- not the 403 the plan first assumed. A client
+// measured in the day-0 spike -- not the 403 S3 semantics would suggest. A client
 // that treated it as a hard failure would burn its integrity budget and stall,
 // so this case asserts the re-handshake happens and the upload finishes.
 func TestUploadExpiredPresignReHandshakes(t *testing.T) {
@@ -787,8 +789,8 @@ func TestUploadCompleteTimeConflictReplace(t *testing.T) {
 	}
 }
 
-// TestUploadDestinationGoneMidSession is PLAN's "trash AND purge the
-// destination folder mid-session": the parent is gone by the time the bytes
+// TestUploadDestinationGoneMidSession trashes AND purges the destination folder
+// mid-session: the parent is gone by the time the bytes
 // land, and the file must still be published -- into the user's root, with the
 // new location echoed back. A complete often fires unattended; it may not fail
 // because a folder moved underneath it.

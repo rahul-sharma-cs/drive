@@ -166,7 +166,7 @@ func TestSweepMultipartsCollectsAbandonedUploads(t *testing.T) {
 
 	// No ContentType, matching the upload path: Garage skips the
 	// response-content-* overrides on Range responses, so objects must carry
-	// no renderable type of their own (PLAN §Sharing).
+	// no renderable type of their own.
 	created, err := H.S3.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String("blobs/" + uuid.NewString()),

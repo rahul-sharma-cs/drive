@@ -1,5 +1,5 @@
 /**
- * Folder-drop ingress — PLAN §Frontend "Folder drop traversal contract".
+ * Folder-drop ingress.
  *
  * Two ingress paths exist and they produce completely different raw shapes:
  *
@@ -10,7 +10,7 @@
  *
  * Both normalize into ONE iterator of `DropItem`, and exactly one consumer --
  * `ingest()` -- creates folders and enqueues files. That is load-bearing, not
- * decorative: the day-0 spike (BRIEF build log, F2) measured that CDP-synthesized
+ * decorative: the day-0 spike measured that CDP-synthesized
  * folder drops produce no directory entry in this environment, so the Playwright
  * folder suite drives path 2. If the two paths did not share this core, the e2e
  * suite would be testing code the product does not use.
@@ -152,8 +152,9 @@ export interface TraverseSink {
  * ONE failed folder create must never discard the rest of the drop: a 5xx, a
  * name the server's filename hygiene rejects, or a collision with an existing
  * FILE of that name would otherwise reject `ingest` at item 3 of 150, leaving
- * files 4..150 never enqueued and no per-item error anywhere (PLAN §Conflict
- * rules: bulk drops proceed without per-item prompts). So each item is isolated,
+ * files 4..150 never enqueued and no per-item error anywhere — and a bulk drop
+ * deliberately never prompts per item, so there is nothing to catch it. Each
+ * item is isolated instead,
  * and a failed folder path is memoized -- its descendants are reported, never
  * retried once per child.
  */

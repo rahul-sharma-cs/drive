@@ -137,7 +137,7 @@ func TestNextFreeName(t *testing.T) {
 			want:  "a.tar (1).gz",
 		},
 		{
-			name:  "the plan's example",
+			name:  "the canonical keep-both rename",
 			in:    "report.pdf",
 			taken: []string{"report.pdf"},
 			want:  "report (1).pdf",

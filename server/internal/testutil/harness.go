@@ -43,8 +43,8 @@ type Harness struct {
 	users  atomic.Int64
 }
 
-// Start performs the global setup PLAN §Testing 3 specifies and returns the
-// harness. Call it from TestMain and pair it with Stop.
+// Start performs the run-level global setup and returns the harness. Call it
+// from TestMain and pair it with Stop.
 //
 // The order is deliberate:
 //
@@ -173,10 +173,9 @@ func resetSchema(ctx context.Context, dsn string) error {
 // SweepMultiparts aborts every in-progress multipart upload in the bucket and
 // reports how many it aborted.
 //
-// PLAN is explicit that prior failed runs never clean up after themselves: a
-// kill -9 in the middle of the interruption battery leaves an initiated
-// multipart in Garage that no session row references, and nothing else ever
-// collects it in a test stack.
+// Prior failed runs never clean up after themselves: a kill -9 in the middle of
+// the interruption battery leaves an initiated multipart in Garage that no
+// session row references, and nothing else ever collects it in a test stack.
 func SweepMultiparts(ctx context.Context, c *s3.Client, bucket string) (int, error) {
 	var (
 		aborted   int

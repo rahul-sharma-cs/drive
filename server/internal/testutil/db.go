@@ -63,10 +63,10 @@ func Digest(t testing.TB, db DB, owners ...uuid.UUID) string {
 // the shape the upload path will produce: one blobs row at refcount 1 and one
 // nodes row pointing at it.
 //
-// Phases 1 and 3 need files to exist before Phase 2's upload protocol does --
-// PLAN §Seed says fixtures write objects with a direct PutObject for exactly
-// this reason -- and the copy/refcount rows of the authz matrix need a file
-// node to aim at.
+// Fixtures deliberately write their bytes with a direct PutObject rather than
+// driving the upload protocol: node and share tests need files to exist without
+// depending on the protocol under test, and the copy/refcount rows of the authz
+// matrix need a file node to aim at.
 func (h *Harness) CreateFile(t testing.TB, ownerID, parentID uuid.UUID, name string, content []byte) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()

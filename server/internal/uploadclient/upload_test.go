@@ -1,7 +1,7 @@
 package uploadclient
 
-// Protocol tests. Every one of them runs against the fake Appendix server in
-// fake_test.go -- no database, no Garage, no real drive binary.
+// Protocol tests. Every one of them runs against the fake wire-contract server
+// in fake_test.go -- no database, no Garage, no real drive binary.
 
 import (
 	"bytes"
@@ -136,8 +136,8 @@ func TestUploadPartPutShape(t *testing.T) {
 		// Garage rejects an expired presign before reading the body and closes
 		// the socket behind the rejection; a part already streaming into that
 		// connection surfaces as "broken pipe" rather than the 400 that means
-		// "expired", and the part is charged the integrity budget where PLAN
-		// promises a free re-handshake.
+		// "expired", and the part is charged the integrity budget when an
+		// expired URL is supposed to buy a free re-handshake.
 		if r.Header.Get("Expect") != "100-continue" {
 			bad = append(bad, "part "+strconv.Itoa(n)+" did not send Expect: 100-continue")
 		}

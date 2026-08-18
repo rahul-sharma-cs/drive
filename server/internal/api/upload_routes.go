@@ -676,7 +676,7 @@ func (s *Server) resumeUpload(w http.ResponseWriter, r *http.Request) {
 		// Only parts whose size makes this session's geometry add up may be
 		// adopted. Garage stores a part at whatever size it is given -- a client
 		// slicing at the environment default instead of the session's part_size
-		// is the exact mistake PLAN §Resume warns about, and a PUT cut off
+		// is the classic client mistake, and a PUT cut off
 		// mid-body is the other one -- and adopting one counts it as confirmed
 		// forever: it never appears in `missing` again, so the client is never
 		// told to re-send it, while complete's total check fails on every

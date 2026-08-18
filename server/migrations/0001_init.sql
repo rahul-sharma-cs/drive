@@ -1,4 +1,4 @@
--- Drive's complete schema, transcribed from the plan's schema block.
+-- Drive's complete schema.
 -- Every table the product will ever need in the MVP lives here, including the
 -- ones later phases fill in (upload ledger, shares, PATs), so no phase needs a
 -- second migration for a table that was already specified.

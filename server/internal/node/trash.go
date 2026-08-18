@@ -227,13 +227,11 @@ func (s *Store) Purge(ctx context.Context, ownerID, id uuid.UUID) error {
 	// the delete below nulls their destination, and finalize's destination
 	// re-verification then re-parents the finished file to the owner's root.
 	//
-	// PLAN contradicts itself here: §FK ON DELETE says purge "marks active
-	// sessions targeting a purged parent aborted", but §Complete, the frozen
-	// Appendix ("parent_id included when re-parented to root") and §Testing 3's
-	// battery case ("purge the destination folder mid-session -> complete
-	// re-parents to root") all require the session to SURVIVE. Aborting it makes
-	// complete answer 410 and throws away a fully uploaded file. Three
-	// requirements against one housekeeping clause: the file wins.
+	// The tempting alternative -- marking those sessions 'aborted' here as
+	// housekeeping -- is wrong: it makes complete answer 410 and throws away a
+	// fully uploaded file. The wire contract already promises the opposite
+	// (complete returns the new parent_id when it re-parents to root), so
+	// aborting would break a documented response as well as the user's upload.
 	//
 	// Abandonment is still handled -- a session nobody completes hits its
 	// sliding expires_at and the GC sweep aborts it and reaps the multipart.

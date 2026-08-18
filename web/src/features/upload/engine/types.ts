@@ -5,7 +5,8 @@
  * IndexedDB, Web Locks, hashing) arrives through an injected dependency so the
  * whole state machine runs deterministically under vitest in a node env.
  *
- * Wire shapes are transcribed from PLAN's frozen Appendix contract.
+ * The wire shapes are a frozen contract shared with the Go client in
+ * server/internal/uploadclient; both speak it verbatim.
  */
 
 /* ------------------------------------------------------------------ wire */
@@ -154,7 +155,8 @@ export interface LockManagerLike {
 
 /**
  * Client-side upload state. `paused_*`, `error_file_changed`, `failed` and
- * `done` are PLAN's own names; the rest name the steps around them.
+ * `done` are the names the wire contract and the UI copy both use; the rest
+ * name the steps around them.
  */
 export type UploadState =
   | 'queued'
@@ -217,7 +219,11 @@ export interface EngineSnapshot {
 
 /* ------------------------------------------------------------- constants */
 
-/** PLAN §Client engine state machine. */
+/**
+ * The state machine's budgets. INTEGRITY_BUDGET counts genuine retries of a
+ * part; a fresh-URL re-handshake is deliberately not charged to it, and gets
+ * its own small MAX_REHANDSHAKES so a clock skew cannot loop forever.
+ */
 export const INTEGRITY_BUDGET = 8
 export const MAX_REHANDSHAKES = 3
 export const STALL_TIMEOUT_MS = 45_000

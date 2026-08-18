@@ -1,6 +1,6 @@
 /**
- * Record cache: whole-record writes at most ~1 Hz.
- * PLAN: per-progress-tick read-modify-write races wipe fields.
+ * Record cache: whole-record writes at most ~1 Hz. Writing per progress tick
+ * means concurrent read-modify-write cycles, which silently wipe fields.
  */
 
 import { describe, expect, it } from 'vitest'

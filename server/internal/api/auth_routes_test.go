@@ -188,8 +188,8 @@ func authVerifiedUser(t *testing.T, h http.Handler, sender *authRecordingSender)
 	return email
 }
 
-// authTokenFromMail pulls the raw token out of the verification link. PLAN
-// §Mail construction fixes the link as ${DRIVE_BASE_URL}/verify?token=<raw>.
+// authTokenFromMail pulls the raw token out of the verification link, whose
+// shape is fixed: ${DRIVE_BASE_URL}/verify?token=<raw token>.
 func authTokenFromMail(t *testing.T, body string) string {
 	t.Helper()
 	const marker = "/verify?token="
@@ -226,7 +226,7 @@ func TestSessionTTLsAgreeAcrossPackages(t *testing.T) {
 	}
 }
 
-func TestSignupSendsTheVerificationMailPlanSpecifies(t *testing.T) {
+func TestSignupSendsTheVerificationMail(t *testing.T) {
 	h, sender, _ := authTestServer(t)
 	email := authTestEmail(t)
 
@@ -318,7 +318,8 @@ func TestSignupRejectsBadInput(t *testing.T) {
 	}
 }
 
-// PLAN §Rate limiting: login requires email_verified_at.
+// Login requires email_verified_at: an account that has not been through the
+// mail loop cannot be signed into, however correct the password is.
 func TestLoginIsRefusedUntilTheEmailIsVerified(t *testing.T) {
 	h, sender, _ := authTestServer(t)
 	email := authTestEmail(t)
@@ -369,7 +370,8 @@ func TestVerifyEmailRejectsUnusableTokens(t *testing.T) {
 		}
 	}
 
-	// Expired, by backdating the row rather than sleeping (PLAN §Testing 3).
+	// Expired, by backdating the row rather than sleeping: every expiry here is
+	// a stored timestamp compared against now(), so a test can age it directly.
 	if _, err := pool.Exec(t.Context(),
 		`UPDATE email_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = $1`, auth.HashToken(good),
 	); err != nil {
@@ -380,7 +382,7 @@ func TestVerifyEmailRejectsUnusableTokens(t *testing.T) {
 	}
 }
 
-func TestLoginSetsTheSessionCookiePlanSpecifies(t *testing.T) {
+func TestLoginSetsTheSessionCookie(t *testing.T) {
 	h, sender, _ := authTestServer(t)
 	email := authVerifiedUser(t, h, sender)
 
@@ -500,7 +502,9 @@ func TestLoginRejectsAWrongPasswordWithoutSayingWhy(t *testing.T) {
 	}
 }
 
-// PLAN §schema: login, key=email, 10 fails / 15 min, auto-clearing.
+// The login budget: scope 'login', keyed by email, 10 failures per 15 minutes,
+// auto-clearing. Auto-clearing is the point -- a success outside an active
+// window is never blocked, so there is no permanent lockout to unlock.
 func TestLoginLocksOutAfterTenFailuresAndClearsWithTheWindow(t *testing.T) {
 	h, sender, pool := authTestServer(t)
 	email := authVerifiedUser(t, h, sender)
@@ -521,8 +525,9 @@ func TestLoginLocksOutAfterTenFailuresAndClearsWithTheWindow(t *testing.T) {
 		t.Errorf("code %q, want %q", got, CodeRateLimited)
 	}
 
-	// Age the window out rather than sleeping it (PLAN §Testing 3). The
-	// lockout must clear itself: there is no unlock step anywhere.
+	// Age the window out rather than sleeping it -- the window is a stored
+	// timestamp compared against now(). The lockout must clear itself: there is
+	// no unlock step anywhere.
 	tag, err := pool.Exec(t.Context(),
 		`UPDATE throttle SET window_start = window_start - make_interval(secs => $2)
 		  WHERE scope = 'login' AND key = $1`,
@@ -649,7 +654,7 @@ func TestUsingASessionSlidesItsExpiry(t *testing.T) {
 	}
 }
 
-// PLAN §schema: email_send, key=email, 5/hour. Signup mail is charged to it,
+// The mail budget: scope 'email_send', keyed by email, 5 per hour. Signup mail is charged to it,
 // and a spent budget skips the send without changing what the caller sees.
 func TestVerificationMailIsCappedPerAddress(t *testing.T) {
 	h, sender, pool := authTestServer(t)

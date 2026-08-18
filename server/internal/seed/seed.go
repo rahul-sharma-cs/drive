@@ -21,12 +21,15 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/blob"
 )
 
-// Password is the shared password for both seeded accounts, per PLAN §Seed.
+// Password is the shared password for both seeded accounts. It is a throwaway
+// local-development constant, not a credential -- the seed only ever runs
+// against a disposable stack.
 const Password = "drive-demo-1"
 
-// Argon2id parameters, exactly as PLAN §Fixed choices pins them for both user
-// accounts and share passwords: m=19456 KiB, t=2, p=1, 16-byte salt, 32-byte
-// tag, PHC string format.
+// Argon2id parameters, the same ones every password in the service is hashed
+// with -- user accounts and share passwords alike: m=19456 KiB, t=2, p=1,
+// 16-byte salt, 32-byte tag, PHC string format. Seeded accounts must log in
+// through the ordinary verifier, so these cannot drift from it.
 //
 // internal/auth (a parallel agent's package, not importable yet from this
 // session) owns the real hasher that signup/login will use. This is a
@@ -104,8 +107,9 @@ type user struct {
 }
 
 // createUser inserts one verified user plus its root folder ("My Drive", the
-// only allowed name for a parent_id-NULL node) in a single transaction, the
-// same atomicity PLAN's schema comment requires of real signup.
+// only allowed name for a parent_id-NULL node) in a single transaction -- the
+// same atomicity real signup uses, because a user without a root folder has
+// nowhere to put anything.
 func createUser(ctx context.Context, pool *pgxpool.Pool, email, displayName string) (user, error) {
 	hash, err := hashPassword(Password)
 	if err != nil {
@@ -200,8 +204,9 @@ func fixtureBytes(name string, size int) []byte {
 
 const day = 24 * time.Hour
 
-// seedRahulTree builds the 3-level folder tree and ~10 files PLAN §Seed asks
-// for, under rahul's root:
+// seedRahulTree builds a 3-level folder tree with ~10 small files under rahul's
+// root -- enough depth and breadth for the browser, search-filter and trash
+// tests to have something real to work against:
 //
 //	My Drive/
 //	  readme.md, notes.txt, budget.xlsx, archive.zip

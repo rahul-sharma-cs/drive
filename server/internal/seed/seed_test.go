@@ -17,8 +17,8 @@ import (
 )
 
 // TestHashPassword_Shape is a pure check of the PHC-format Argon2id output —
-// the parameters PLAN §Fixed choices pins, and the same string shape
-// internal/auth's verifier will need to parse once it exists.
+// the service-wide parameters, and the same string shape internal/auth's
+// verifier will need to parse once it exists.
 func TestHashPassword_Shape(t *testing.T) {
 	hash, err := hashPassword(Password)
 	if err != nil {
@@ -66,9 +66,9 @@ func TestFixtureBytes(t *testing.T) {
 // TestRun_IdempotentAndTreeShape is the real, end-to-end verification: it
 // drops and recreates the test stack's schema, runs Run twice, and checks
 // that (a) the second run is a genuine no-op (same row counts, no error) and
-// (b) the seeded tree matches PLAN §Seed's shape — two verified users, one
-// root each, and rahul's 3-level / ~10-file tree with real objects behind
-// every file.
+// (b) the seeded tree has the expected shape — two verified users, one root
+// each, and rahul's 3-level / ~10-file tree with real objects behind every
+// file.
 func TestRun_IdempotentAndTreeShape(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

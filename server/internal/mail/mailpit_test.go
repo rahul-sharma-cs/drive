@@ -28,8 +28,8 @@ func mailpitAPI() string {
 }
 
 // TestSMTPAndMailpit_RoundTrip sends a real message through SMTPSender and
-// reads it back via the REST client -- the closed loop PLAN's OTP/verify-email
-// tests depend on.
+// reads it back via the REST client -- the closed loop the OTP and
+// verify-email tests depend on.
 func TestSMTPAndMailpit_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

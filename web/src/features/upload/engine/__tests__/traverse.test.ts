@@ -319,7 +319,8 @@ describe('ingest', () => {
   })
 
   it('one failed folder create never discards the rest of the drop', async () => {
-    // PLAN §Conflict rules: bulk drops proceed without per-item prompts. A 5xx,
+    // A bulk drop proceeds without per-item prompts, so nothing catches a
+    // per-item failure for the user. A 5xx,
     // a name the server's filename hygiene rejects, or a collision with an
     // existing FILE used to reject `ingest` outright — in a 150-file drop that
     // means items 4..150 are never enqueued and nothing is ever reported.

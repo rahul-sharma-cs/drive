@@ -255,7 +255,8 @@ func TestConsumeEmailTokenRejectsUnknownExpiredAndWrongPurposeTokens(t *testing.
 	if err != nil {
 		t.Fatalf("CreateEmailToken: %v", err)
 	}
-	// Time control per PLAN §Testing 3: backdate the row, never sleep.
+	// Time control: backdate the row rather than sleeping the test -- expiry is
+	// a stored timestamp compared against now(), so a test can age it directly.
 	if _, err := pool.Exec(t.Context(),
 		`UPDATE email_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = $1`, HashToken(expired),
 	); err != nil {

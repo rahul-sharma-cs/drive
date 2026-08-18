@@ -1,8 +1,9 @@
 /**
  * `/verify` — the landing page for the link in the verification mail
- * (`${DRIVE_BASE_URL}/verify?token=…`, PLAN §Mail construction). Without this
- * route every signup is a dead end: the account exists, the mail arrives, and
- * the link lands on a page that does nothing.
+ * (`${DRIVE_BASE_URL}/verify?token=…`). That path and query name are fixed on
+ * the server side, so this route has to match them exactly — without it every
+ * signup is a dead end: the account exists, the mail arrives, and the link
+ * lands on a page that does nothing.
  *
  * The token is redeemed once, from a query rather than a mutation-in-an-effect:
  * StrictMode mounts effects twice in development, and a second POST would spend

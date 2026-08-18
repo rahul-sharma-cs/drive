@@ -1,6 +1,6 @@
 package uploadclient
 
-// A fake Drive server that speaks PLAN's frozen Appendix, and nothing else.
+// A fake Drive server that speaks the upload wire contract, and nothing else.
 //
 // The point of the contract being frozen is that this package can be tested
 // without a server, a database, or Garage: every behaviour the client has to

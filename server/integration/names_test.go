@@ -83,8 +83,9 @@ func TestEmojiAndRTLFilenamesRoundTrip(t *testing.T) {
 }
 
 // Real RTL text survives; the bidi override characters that make "report.txt"
-// display as "report.exe" do not. This is filename hygiene (PLAN §Sharing)
-// asserted where a client would actually meet it.
+// display as "report.exe" do not. Filename hygiene strips RTL-override chars
+// along with C0 controls and 0x7F, asserted here where a client would actually
+// meet it.
 func TestBidiOverrideCharactersAreStrippedFromNames(t *testing.T) {
 	owner := H.NewUser(t)
 	parent := owner.CreateFolder(t, owner.RootID, "bidi-"+uuid.NewString()[:8])

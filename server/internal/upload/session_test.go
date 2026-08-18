@@ -31,7 +31,7 @@ func TestResolvePartSize(t *testing.T) {
 		{name: "one byte is one part", fileSize: 1, configured: base, wantSize: base, wantTotal: 1},
 		{name: "exact multiple", fileSize: 3 * base, configured: base, wantSize: base, wantTotal: 3},
 		{name: "remainder gets its own part", fileSize: 3*base + 1, configured: base, wantSize: base, wantTotal: 4},
-		// 50 GB at 100 MiB: the number PLAN quotes, derived rather than typed.
+		// The headline case, derived rather than typed.
 		{name: "50 GB at 100 MiB", fileSize: 50_000_000_000, configured: base, wantSize: base, wantTotal: 477},
 		{name: "50 GiB at 100 MiB", fileSize: 50 * giB, configured: base, wantSize: base, wantTotal: 512},
 		// At 10 MiB parts a 200 GiB file would need 20,480 parts, so the part

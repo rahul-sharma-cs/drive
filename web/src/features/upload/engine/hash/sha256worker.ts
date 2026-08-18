@@ -1,6 +1,6 @@
 /**
  * Whole-file SHA-256, streamed sequentially in its own worker so it runs in
- * parallel with the part uploads and never blocks them (PLAN §Upload protocol).
+ * parallel with the part uploads and never blocks them.
  * On resume it restarts from byte 0 of the re-selected file; complete waits on it.
  */
 import { createSHA256 } from 'hash-wasm'

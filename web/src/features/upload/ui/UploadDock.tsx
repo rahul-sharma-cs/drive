@@ -53,8 +53,8 @@ export function UploadDock() {
       <ConflictDialog
         conflicts={conflicts}
         onResolve={(ids, policy: ConflictPolicy) => ids.forEach((id) => uploadActions.resolveConflict(id, policy))}
-        // Skip is client-side only — PLAN §Conflict rules: it sends no request,
-        // it just stops trying to upload this file.
+        // Skip is client-side only: it sends no request, it just stops trying
+        // to upload this file.
         onSkip={(ids) => ids.forEach((id) => uploadActions.cancel(id))}
       />
     </>
@@ -68,8 +68,8 @@ export function UploadDock() {
  * folder it landed in has to be re-read or the new row simply never appears.
  * The transition is detected by diffing against the previous state per row —
  * the snapshot has no events — and the adopted name is the server's final one,
- * which may differ from what was picked (PLAN §Complete auto-renames on a
- * collision), hence the badge.
+ * which may differ from what was picked — complete auto-renames on a collision
+ * rather than failing, since completes often fire unattended — hence the badge.
  */
 export function useCompletionBridge(items: UploadSnapshot[]): void {
   const client = useQueryClient()

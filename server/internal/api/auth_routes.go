@@ -1,8 +1,8 @@
 package api
 
-// Phase 1 auth agent owns this file: signup, email verification, login, logout
-// and /me. Password reset and session management are Phase 5 if time remains
-// (PLAN §Build order).
+// The auth surface: signup, email verification, login, logout and /me. Password
+// reset and session management are deliberately not here -- they are a later,
+// cuttable slice of work.
 
 import (
 	"context"
@@ -23,8 +23,8 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 )
 
-// Input bounds. PLAN fixes none of these; they are the smallest limits that
-// keep a hostile body from reaching Argon2 or a mail header.
+// Input bounds. Nothing external dictates these numbers; they are the smallest
+// limits that keep a hostile body from reaching Argon2 or a mail header.
 const (
 	maxEmailLen    = 254 // RFC 5321's maximum path length
 	minPasswordLen = 8
@@ -32,9 +32,10 @@ const (
 	maxDisplayName = 100 // runes
 )
 
-// verifySubject and verifyPathPrefix are fixed verbatim by PLAN §Mail
-// construction. The SPA route /verify posts the token back to
-// POST /api/auth/verify-email.
+// The verification mail's subject and link path are fixed verbatim: the SPA
+// route /verify reads the token out of the query and posts it back to
+// POST /api/auth/verify-email, and the integration suite matches the subject
+// exactly. Changing either breaks a loop that spans mail, SPA and API.
 const (
 	verifySubject   = "Verify your Drive account"
 	verifyPathQuery = "/verify?token="
@@ -154,8 +155,8 @@ func (s *Server) authSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if created {
-		// Off the request goroutine, exactly as PLAN legislates for the OTP
-		// path. Hashing alone does not buy timing parity: the free-address
+		// Off the request goroutine, the same shape the share-OTP path uses.
+		// Hashing alone does not buy timing parity: the free-address
 		// branch also runs a budget SELECT, a token INSERT, a throttle upsert
 		// and a blocking SMTP round trip, and the taken-address branch runs
 		// none of it. Keeping every conditional statement off the response path
@@ -439,8 +440,9 @@ func (s *Server) baseURL() string {
 
 // --------------------------------------------------------------- validation --
 
-// canonicalEmail validates an address the way PLAN §Mail construction requires
-// -- net/mail.ParseAddress at the API boundary -- and returns the bare address,
+// canonicalEmail validates an address with net/mail.ParseAddress at the API
+// boundary -- the boundary is where it belongs, so nothing downstream can carry
+// a malformed address into a mail header -- and returns the bare address,
 // lower-cased. A display part is refused: "Someone <a@b.test>" is a header, not
 // a login.
 //

@@ -1,4 +1,4 @@
-// Command spike is the day-0 spike (PLAN §Testing 1).
+// Command spike is the day-0 spike.
 //
 // It answers one question before any protocol code is written: can a browser
 // PUT presigned multipart parts straight into the object store, read the ETag
@@ -165,7 +165,7 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	defer func() {
 		rep.Verdict = "direct"
 		if len(rep.FailedNames) > 0 {
-			rep.Verdict = "FAILED — run PLAN's triage order before declaring relay"
+			rep.Verdict = "FAILED — work the triage order in full (SDK checksum config, region + path-style, CORS AllowedHeaders, host/VM clock skew) before declaring relay"
 		}
 		b, _ := json.MarshalIndent(rep, "", "  ")
 		_ = os.WriteFile(filepath.Join(outDir, "spike-report.json"), b, 0o644)
@@ -214,8 +214,12 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	// --- 3. create the multipart upload --------------------------------------
 	key := "spike/" + randomHex(16)
 	rep.ObjectKey = key
-	// No ContentType and no ChecksumAlgorithm, ever: objects stored without a
-	// Content-Type are what makes the Range-GET posture in PLAN §Sharing hold.
+	// No ContentType and no ChecksumAlgorithm, ever. Some S3-compatible stores
+	// apply the response-content-* overrides only to full 200 GETs and skip
+	// them on Range (206) replies -- the local dev store is one, and this
+	// spike measures each store it is pointed at -- so uploaded HTML/SVG stays
+	// inert only because the object carries no renderable Content-Type of its
+	// own. That holds on every store; the overrides do not.
 	//
 	// Content-Disposition IS stored, deliberately: it is the fallback the
 	// download endpoint needs if the store ignores response-content-disposition
@@ -309,7 +313,7 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 
 		if err := runPlaywright(repo, manPath, resultsPath, pagePort); err != nil {
 			rep.add("browser presigned PUTs", false, "%v", err)
-			return fmt.Errorf("browser half failed — PLAN triage order: (1) SDK checksum config (2) region+path-style (3) CORS AllowedHeaders (4) clock skew: %w", err)
+			return fmt.Errorf("browser half failed — triage in this order: (1) SDK checksum config (2) region+path-style (3) CORS AllowedHeaders (4) clock skew: %w", err)
 		}
 		raw, err := os.ReadFile(resultsPath)
 		if err != nil {
@@ -457,7 +461,7 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 
 	// (e) An object created with no Content-Type must not come back renderable:
 	// that, not the response-content-type override, is what keeps uploaded HTML
-	// inert when it is served from the store's own origin (PLAN §Sharing).
+	// inert when it is served from the store's own origin.
 	rep.add("stored Content-Type is not renderable", !renderable(aws.ToString(head.ContentType)),
 		"stored Content-Type=%q", aws.ToString(head.ContentType))
 
@@ -472,8 +476,10 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	rep.add("multipart ETag survives normalization", multipartETag.MatchString(headETag),
 		"normalized=%q (want <32 hex>[-<n>])", headETag)
 
-	// A retried complete must look like NoSuchUpload — the crash-after-complete
-	// window the finalizer has to recognise (PLAN §Complete).
+	// A retried complete must look like NoSuchUpload: once CompleteMultipartUpload
+	// succeeds the multipart ceases to exist. That is the crash-after-complete
+	// window the finalizer has to recognise — HEAD the object key first, and if
+	// it exists at the declared size the publish transaction runs anyway.
 	_, reErr := client.ListParts(ctx, &s3.ListPartsInput{Bucket: &cfg.S3Bucket, Key: &key, UploadId: &uploadID})
 	rep.add("ListParts after complete => NoSuchUpload", reErr != nil && strings.Contains(reErr.Error(), "NoSuchUpload"),
 		"%v", reErr)
@@ -547,7 +553,7 @@ func run(repo, envFile string, pagePort int, skipPW bool) error {
 	rep.add("Range GET returns 206", override206.status == 206,
 		"status=%d content_range=%v", override206.status, rep.Downloads["override_206"].(map[string]any)["content_range"])
 
-	// The load-bearing posture check from PLAN §Sharing: Garage skips the
+	// The load-bearing posture check: Garage skips the
 	// response-content-* overrides on 206, so safety rests on the object itself
 	// never carrying a renderable Content-Type. It must hold on both GETs.
 	rep.add("Range GET carries no renderable Content-Type",

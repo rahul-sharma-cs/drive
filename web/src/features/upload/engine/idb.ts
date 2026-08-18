@@ -1,7 +1,7 @@
 /**
  * Local upload records.
  *
- * PLAN §Client engine state machine: records are keyed by `upload_id` and
+ * Records are keyed by `upload_id` and
  * looked up through a `(fingerprint, parent_id)` index — matching the server's
  * uniqueness rule, so the same file uploading to two folders keeps two records.
  * The record is held in memory and the WHOLE record is written at most ~1 Hz:

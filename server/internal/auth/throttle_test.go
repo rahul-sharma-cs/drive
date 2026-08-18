@@ -12,9 +12,9 @@ import (
 const testWindow = 15 * time.Minute
 
 // backdateThrottle ages every window row for (scope, key) by d. This is the
-// convention PLAN §Testing 3 fixes: durable time state lives in Postgres and
-// every comparison is now() vs a stored value, so tests move the stored value
-// instead of sleeping a wall-clock window.
+// time-control convention throughout the suite: durable time state lives in
+// Postgres and every comparison is now() vs a stored value, so tests move the
+// stored value instead of sleeping a wall-clock window.
 func backdateThrottle(t *testing.T, pool *pgxpool.Pool, scope, key string, d time.Duration) {
 	t.Helper()
 	tag, err := pool.Exec(t.Context(),

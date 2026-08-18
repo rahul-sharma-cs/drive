@@ -1,6 +1,7 @@
 /**
- * Exponential backoff with jitter, capped at 60 s per wait
- * (PLAN §Client engine state machine — hours-long uploads need patient retries).
+ * Exponential backoff with jitter, capped at 60 s per wait. The cap matters:
+ * an upload can run for hours, so retries have to stay patient rather than
+ * escalating into waits nobody would sit through.
  *
  * The RNG is injected so the vitest suite is deterministic.
  */

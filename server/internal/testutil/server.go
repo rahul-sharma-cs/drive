@@ -23,8 +23,9 @@ const bootTimeout = 60 * time.Second
 const healthPoll = 50 * time.Millisecond
 
 // Child is one drive server running as a real process, which is the only way to
-// test what PLAN §Testing 3 asks for: SIGKILL it mid-flight and bring it back on
-// the same port with the same state, because all of the state is in Postgres.
+// test the crash cases honestly: SIGKILL it mid-flight and bring it back on the
+// same port with the same state, because all of the state is in Postgres. An
+// in-process server can be stopped but never killed.
 type Child struct {
 	// URL is the child's origin, e.g. http://localhost:53312.
 	URL  string

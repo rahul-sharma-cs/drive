@@ -16,7 +16,7 @@ import (
 // the server binary ship with no mail sender wired at all: every signup logged
 // "no mail sender configured", returned 200, and left an account that could
 // never be verified or used. Nothing in the suite noticed. Playwright covers
-// this too (PLAN §Testing 4), but that is two phases away, so the guard lives
+// this too, but that is two phases away, so the guard lives
 // here as well: this test talks to the real binary over HTTP and the real
 // Mailpit, so it fails the moment the wiring regresses.
 func TestSignupVerifyLoginThroughRealMail(t *testing.T) {
@@ -48,7 +48,7 @@ func TestSignupVerifyLoginThroughRealMail(t *testing.T) {
 	}
 
 	if want := "Verify your Drive account"; msg.Subject != want {
-		t.Errorf("subject = %q, want %q (PLAN §Mail construction fixes this string)", msg.Subject, want)
+		t.Errorf("subject = %q, want %q (the verification subject is fixed verbatim -- changing it breaks anyone filtering on it)", msg.Subject, want)
 	}
 
 	token := verifyTokenFrom(t, msg.Text)
@@ -74,8 +74,9 @@ func TestSignupVerifyLoginThroughRealMail(t *testing.T) {
 	}
 }
 
-// verifyTokenFrom pulls the raw token out of the ${DRIVE_BASE_URL}/verify?token=
-// link PLAN §Mail construction specifies.
+// verifyTokenFrom pulls the raw token out of the verification mail's
+// ${DRIVE_BASE_URL}/verify?token=<raw> link. That path and query name are fixed:
+// the SPA route /verify reads the token from there and posts it back.
 func verifyTokenFrom(t *testing.T, body string) string {
 	t.Helper()
 	const marker = "/verify?token="

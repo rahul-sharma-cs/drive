@@ -27,9 +27,9 @@ const (
 	PurposeReset  = "reset"
 )
 
-// EmailTokenTTL is how long a verification link stays usable. PLAN fixes no
-// number; two days is long enough to survive a weekend and short enough that a
-// link found in an old mailbox is dead.
+// EmailTokenTTL is how long a verification link stays usable. Nothing external
+// fixes the number; two days is long enough to survive a weekend and short
+// enough that a link found in an old mailbox is dead.
 const EmailTokenTTL = 48 * time.Hour
 
 // RootFolderName is the name of the folder created for every user at signup.
@@ -53,9 +53,10 @@ type Account struct {
 // Verified reports whether the account finished email verification.
 func (a *Account) Verified() bool { return a != nil && a.EmailVerifiedAt != nil }
 
-// CreateUser inserts a user and their root folder in one transaction, as
-// PLAN §schema requires: a user without a root folder has nowhere to put
-// anything, so the two rows are never separately visible.
+// CreateUser inserts a user and their root folder in one transaction: a user
+// without a root folder has nowhere to put anything, so the two rows are never
+// separately visible. A partial unique index on (owner_id) WHERE parent_id IS
+// NULL enforces the one-root-per-user half of that.
 //
 // An address that already exists is not an error and returns (nil, false, nil).
 // The caller answers exactly as it would for a fresh signup -- the API must not

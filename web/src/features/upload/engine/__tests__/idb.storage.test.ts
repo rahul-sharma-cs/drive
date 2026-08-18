@@ -2,8 +2,9 @@
  * `IdbStorage` against a real IndexedDB implementation (fake-indexeddb), plus
  * the two failure modes a round-trip test can never reach.
  *
- * This is the class that implements PLAN's "records keyed by upload_id, looked
- * up via a (fingerprint, parent_id) index" requirement. A typo in the keyPath,
+ * This is the class that keys records by upload_id and looks them up through a
+ * (fingerprint, parent_id) index — mirroring the server's own uniqueness rule,
+ * so the same file uploading to two folders keeps two records. A typo in the keyPath,
  * the index key path, or the upgrade branch ships green everywhere else and
  * only shows up as "resume silently forgot the session" in a browser.
  *

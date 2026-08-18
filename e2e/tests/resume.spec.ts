@@ -68,8 +68,9 @@ test('an upload survives a server restart and resumes from the confirmed parts',
 
   stopServer(); // SIGKILL: no graceful shutdown, exactly like a crash
 
-  // The engine parks rather than failing — the API is unreachable while the
-  // store may still be accepting parts (PLAN §Client engine state machine).
+  // The engine parks rather than failing: an unreachable API while the store
+  // may still be accepting part PUTs is the kill-9 case, so the state machine
+  // goes to paused_backend and probes with backoff instead of giving up.
   await expect(page.getByText(/can't reach the server/i)).toBeVisible({ timeout: 60_000 });
 
   // --- leave the page (the File handle is gone), restart, come back -------

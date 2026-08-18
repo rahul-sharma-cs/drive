@@ -307,14 +307,15 @@ func gcData(size int) []byte {
 
 // ------------------------------------------------- the crash-after-complete --
 
-// The window PLAN singles out: CompleteMultipartUpload succeeded, the process
+// The nastiest window: CompleteMultipartUpload succeeded, the process
 // died before the publish transaction. The multipart no longer exists, so
 // ListParts answers NoSuchUpload -- and the recovery must HEAD the object,
 // find it whole, and publish. Flipping such a session back to 'active' would
 // tell the client to re-upload 50 GB that are already stored.
 //
 // Constructed, not timed: a real out-of-band CompleteMultipartUpload plus SQL
-// state injection, exactly as PLAN §Testing 3 requires.
+// state injection. The real window is milliseconds wide, so no SIGKILL lands
+// in it on demand -- racing for it would buy a flake, not a proof.
 func TestGCRecoversACrashAfterCompleteMultipartUpload(t *testing.T) {
 	w := newWorld(t)
 	dest := w.folder("uploads")
@@ -790,7 +791,7 @@ func TestTheWiringOneLinersTypeCheck(t *testing.T) {
 
 // -------------------------------------------------------------------- unit --
 
-func TestDefaultsMatchThePlan(t *testing.T) {
+func TestDefaultsAreTheProductionNumbers(t *testing.T) {
 	d := Defaults()
 	cases := []struct {
 		name string

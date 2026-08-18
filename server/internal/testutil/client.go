@@ -41,10 +41,10 @@ type Client struct {
 //	owner.Post(t, "/api/folders", map[string]any{...}).Expect(201)
 //
 // The verification step is a direct SQL write rather than the mail round trip
-// on purpose: at this level the mail loop is not what is under test, and
-// Playwright covers signup -> Mailpit -> verify -> login end to end (PLAN
-// §Testing 4). See the note in the package's report about the server binary
-// currently having no mail sender wired at all.
+// on purpose: at this level the mail loop is not what is under test. That does
+// leave a blind spot -- it once hid a server binary with no mail sender wired at
+// all -- so the real loop is covered separately, by
+// TestSignupVerifyLoginThroughRealMail and by Playwright.
 func (h *Harness) NewUser(t testing.TB) *Client {
 	t.Helper()
 	c := h.Anonymous(t)

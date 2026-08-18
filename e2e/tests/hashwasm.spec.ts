@@ -9,10 +9,10 @@ import { fileURLToPath } from 'node:url';
 import type { AddressInfo } from 'node:net';
 
 /**
- * hash-wasm viability — PLAN §Fixed choices makes this the FIRST Phase 4a task:
- * hash-wasm is pinned at 4.12.0 and dormant since Nov 2024, so WASM
- * instantiation must be proven INSIDE A REAL WEB WORKER before the upload
- * engine is built on it. It stays as the permanent regression guard.
+ * hash-wasm viability. hash-wasm is pinned at exactly 4.12.0 and has been
+ * dormant upstream since Nov 2024 — expect no fixes — so WASM instantiation
+ * must be proven INSIDE A REAL WEB WORKER before the upload engine is built on
+ * it. It stays as the permanent regression guard.
  *
  * Self-contained: bundles the real worker sources with esbuild, serves them
  * plus a deterministic fixture from an in-process HTTP server on an ephemeral
@@ -24,7 +24,8 @@ const REPO = join(HERE, '..', '..');
 const ENGINE_HASH_DIR = join(REPO, 'web', 'src', 'features', 'upload', 'engine', 'hash');
 const ESBUILD = join(REPO, 'web', 'node_modules', '.bin', 'esbuild');
 
-const CHUNK = 8 * 1024 * 1024;       // the engine's sub-slice size (PLAN)
+const CHUNK = 8 * 1024 * 1024;       // the engine's sub-slice size: a part is hashed in
+                                     // 8 MiB pieces, never materialized as one buffer
 const FIXTURE_SIZE = 20 * 1024 * 1024; // 8 + 8 + 4 MiB => 3 chunks, last one short
 
 /** Deterministic, non-degenerate bytes: all-zeros would hide chunk-ordering bugs. */

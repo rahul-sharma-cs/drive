@@ -8,8 +8,9 @@ import type { ConflictPolicy, UploadSnapshot } from '../engine/types'
 /**
  * One prompt at a time, for the first conflicted upload.
  *
- * PLAN §Conflict rules: bulk drops never prompt per item — folders reuse, and
- * file collisions get ONE prompt with apply-to-all, defaulting to keep-both.
+ * Bulk drops never prompt per item — folders reuse an existing folder of the
+ * same name, and file collisions get ONE prompt with apply-to-all, defaulting
+ * to keep-both.
  * Rendering only the first conflicted row is what enforces the single slot: a
  * 150-file drop into a folder that already has those names would otherwise
  * stack 150 modals.

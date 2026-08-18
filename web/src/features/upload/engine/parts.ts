@@ -7,7 +7,7 @@
 
 import type { HashLike } from './types'
 
-/** Fingerprint edge-block size (PLAN §Upload protocol). */
+/** Fingerprint edge-block size: the first and last 1 MiB of the file. */
 export const EDGE_BYTES = 1024 * 1024
 
 export interface PartRange {
@@ -29,8 +29,9 @@ export function partCount(fileSize: number, partSize: number): number {
 
 /**
  * S3/Garage return `ETag: "hex"`; some proxies add a `W/` weak prefix.
- * An unnormalized compare always fails and would falsely downgrade integrity
- * (PLAN §Upload protocol, spike-confirmed: normalized ETag == client MD5).
+ * An unnormalized compare always fails and would falsely downgrade integrity.
+ * Normalized, a plain part's ETag equals the client's own MD5 hex — confirmed
+ * against Garage in the day-0 spike.
  */
 export function normalizeEtag(raw: string | null | undefined): string {
   if (!raw) return ''
@@ -72,7 +73,9 @@ export function isFileChangedError(err: unknown): boolean {
 }
 
 /**
- * PLAN: probe with a 1-byte `file.slice(0,1).arrayBuffer()`.
+ * Probe with a 1-byte `file.slice(0,1).arrayBuffer()` — the cheapest way to
+ * tell a file that changed on disk from a network failure, since both surface
+ * as an unhelpful read error.
  * Resolves true when the file is still readable. A 0-byte file has nothing to
  * read, so an empty slice that resolves is still proof the handle is alive.
  */
@@ -87,7 +90,6 @@ export async function probeFile(file: Blob): Promise<boolean> {
 
 /**
  * `sha256(name + size + lastModified + sha256(first 1MiB) + sha256(last 1MiB))`
- * (PLAN §Upload protocol).
  *
  * Encoding pinned — the Go `uploadclient` MUST match this byte for byte or
  * resume silently breaks:

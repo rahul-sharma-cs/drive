@@ -4,7 +4,9 @@
  * duplicate.
  *
  * Two rules from the server contract shape it: every mutation carries
- * `X-Drive-Client` (PLAN §CSRF — GETs are exempt), and errors arrive as the
+ * `X-Drive-Client` (GETs are exempt) — that header plus SameSite=Lax cookies is
+ * the whole CSRF scheme, sound only because the API serves no cross-origin
+ * credentialed CORS — and errors arrive as the
  * canonical `{code, message}` envelope, which becomes an `ApiError` so screens
  * can branch on the code and show the server's own message.
  */
@@ -73,7 +75,7 @@ export interface Page<T> {
   next_cursor: string | null
 }
 
-/** The status shape of `GET /uploads` (PLAN's Appendix), as the UI needs it. */
+/** The upload status wire shape, as the UI needs it. */
 export interface UploadSession {
   upload_id: string
   file_name: string
