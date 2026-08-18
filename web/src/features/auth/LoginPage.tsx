@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import { login } from '../../lib/api'
-import { AuthCard, buttonClass, FormError, inputClass } from '../../ui/controls'
+import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
 import { useSetSession } from './session'
 
 export function LoginPage() {
@@ -26,13 +26,13 @@ export function LoginPage() {
   return (
     <AuthCard title="Sign in to Drive">
       <form
-        className="flex flex-col gap-3"
+        className="flex flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-card"
         onSubmit={(e) => {
           e.preventDefault()
           mutation.mutate()
         }}
       >
-        <label className="flex flex-col gap-1 text-sm">
+        <label className={fieldClass}>
           Email
           <input
             className={inputClass}
@@ -44,7 +44,7 @@ export function LoginPage() {
             onChange={(e) => setEmail(e.target.value)}
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className={fieldClass}>
           Password
           <input
             className={inputClass}
@@ -61,9 +61,9 @@ export function LoginPage() {
           {mutation.isPending ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
-      <p className="text-sm text-neutral-600">
+      <p className="text-[13px] text-ink-3">
         No account?{' '}
-        <Link className="underline" to="/signup">
+        <Link className="font-medium text-accent hover:underline" to="/signup">
           Sign up
         </Link>
       </p>

@@ -21,7 +21,17 @@ createRoot(document.getElementById('root')!).render(
       <BrowserRouter>
         <App />
         {/* Top-right: the upload manager occupies the bottom-right corner. */}
-        <Toaster position="top-right" />
+        <Toaster
+          position="top-right"
+          theme="light"
+          toastOptions={{
+            classNames: {
+              toast: 'rounded-card border border-line bg-surface text-ink shadow-dock',
+              title: 'text-[13px] font-medium',
+              description: 'text-[12px] text-ink-3',
+            },
+          }}
+        />
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,

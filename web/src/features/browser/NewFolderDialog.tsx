@@ -1,8 +1,27 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useState } from 'react'
 
-import { buttonClass, FormError, inputClass, secondaryButtonClass } from '../../ui/controls'
+import { buttonClass, fieldClass, FormError, inputClass, secondaryButtonClass } from '../../ui/controls'
 import { useCreateFolder } from './queries'
+
+/** Folder-with-a-plus: the one glyph the icon set needs only here. */
+function FolderPlusIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="h-4 w-4"
+    >
+      <path d="M1.75 4.25c0-.55.45-1 1-1h3.09c.3 0 .58.13.77.36l.78.93h5.86c.55 0 1 .45 1 1v6.2c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1z" />
+      <path d="M8 7.6v3.4M6.3 9.3h3.4" />
+    </svg>
+  )
+}
 
 /**
  * New Folder.
@@ -29,11 +48,14 @@ export function NewFolderDialog({ parentId }: { parentId: string }) {
         }
       }}
     >
-      <Dialog.Trigger className={secondaryButtonClass}>New folder</Dialog.Trigger>
+      <Dialog.Trigger className={secondaryButtonClass}>
+        <FolderPlusIcon />
+        New folder
+      </Dialog.Trigger>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-neutral-900/20" />
-        <Dialog.Content className="fixed left-1/2 top-1/3 w-80 -translate-x-1/2 rounded-xl bg-white p-5 shadow-lg">
-          <Dialog.Title className="text-base font-medium">New folder</Dialog.Title>
+        <Dialog.Overlay className="scrim fixed inset-0 z-50" />
+        <Dialog.Content className="pop-enter fixed left-1/2 top-[42%] z-50 w-[min(20rem,calc(100vw-2rem))] rounded-pop border border-line bg-surface p-5 shadow-pop">
+          <Dialog.Title className="text-[15px] font-semibold">New folder</Dialog.Title>
           <Dialog.Description className="sr-only">Create a folder in the current folder.</Dialog.Description>
           <form
             className="mt-4 flex flex-col gap-3"
@@ -42,12 +64,12 @@ export function NewFolderDialog({ parentId }: { parentId: string }) {
               create.mutate(name, { onSuccess: () => setOpen(false) })
             }}
           >
-            <label className="flex flex-col gap-1 text-sm">
+            <label className={fieldClass}>
               Name
               <input className={inputClass} value={name} required onChange={(e) => setName(e.target.value)} autoFocus />
             </label>
             <FormError error={create.error} />
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end gap-2 pt-1">
               <Dialog.Close className={secondaryButtonClass} type="button">
                 Cancel
               </Dialog.Close>

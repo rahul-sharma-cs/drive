@@ -15,7 +15,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router'
 
 import { verifyEmail } from '../../lib/api'
-import { AuthCard, FormError } from '../../ui/controls'
+import { AuthCard, buttonClass, FormError } from '../../ui/controls'
 
 export function VerifyPage() {
   const [params] = useSearchParams()
@@ -33,10 +33,10 @@ export function VerifyPage() {
   if (token === '') {
     return (
       <AuthCard title="Verify your email">
-        <p className="text-sm text-neutral-600">
+        <p className="text-sm text-ink-2">
           This link is missing its token. Open the link from the verification email exactly as it arrived.
         </p>
-        <Link className="text-sm underline" to="/login">
+        <Link className="text-[13px] font-medium text-accent hover:underline" to="/login">
           Back to sign in
         </Link>
       </AuthCard>
@@ -45,11 +45,11 @@ export function VerifyPage() {
 
   return (
     <AuthCard title="Verify your email">
-      {isPending && <p className="text-sm text-neutral-600">Verifying…</p>}
+      {isPending && <p className="text-sm text-ink-2">Verifying…</p>}
       {isSuccess && (
         <>
-          <p className="text-sm text-neutral-600">Your email is verified. You can sign in now.</p>
-          <Link className={'text-sm underline'} to="/login">
+          <p className="text-sm text-ink-2">Your email is verified. You can sign in now.</p>
+          <Link className={buttonClass} to="/login">
             Go to sign in
           </Link>
         </>
@@ -57,10 +57,10 @@ export function VerifyPage() {
       {error && (
         <>
           <FormError error={error} />
-          <p className="text-sm text-neutral-600">
+          <p className="text-sm text-ink-2">
             Verification links expire. Sign up again with the same address to get a fresh one.
           </p>
-          <Link className="text-sm underline" to="/signup">
+          <Link className="text-[13px] font-medium text-accent hover:underline" to="/signup">
             Back to sign up
           </Link>
         </>

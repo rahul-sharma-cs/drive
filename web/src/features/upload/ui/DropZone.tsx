@@ -2,7 +2,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 
-import { secondaryButtonClass } from '../../../ui/controls'
+import { buttonClass, secondaryButtonClass } from '../../../ui/controls'
+import { FolderIcon, UploadIcon } from '../../../ui/icons'
 import { childrenKey } from '../../browser/queries'
 import { collectDropEntries, createFolderViaApi, ingest, walkEntries, walkFileList } from '../engine/traverse'
 import type { DropItem, TraverseSink } from '../engine/traverse'
@@ -60,24 +61,34 @@ export function DropZone({ folderId, children }: { folderId: string; children: R
         e.preventDefault()
         setOver(true)
       }}
-      onDragLeave={() => setOver(false)}
+      // `dragleave` also fires when the pointer crosses from this element onto
+      // one of its own children, so the highlight is only dropped once the
+      // pointer has actually left the subtree — otherwise it strobes over
+      // every row it passes.
+      onDragLeave={(e) => {
+        const next = e.relatedTarget
+        if (next instanceof Node && e.currentTarget.contains(next)) return
+        setOver(false)
+      }}
       onDrop={(e) => {
         e.preventDefault()
         setOver(false)
         const entries = collectDropEntries(e.dataTransfer)
         void ingestInto(walkEntries(entries))
       }}
-      className={`flex flex-col gap-3 rounded-xl ${over ? 'outline-2 outline-dashed outline-neutral-400' : ''}`}
+      className="relative flex flex-col gap-3 rounded-card"
       data-testid="drop-zone"
     >
-      <div className="flex items-center gap-2">
-        <button className={secondaryButtonClass} onClick={() => filesInput.current?.click()}>
+      <div className="flex flex-wrap items-center gap-2">
+        <button className={buttonClass} onClick={() => filesInput.current?.click()}>
+          <UploadIcon />
           Upload files
         </button>
         <button className={secondaryButtonClass} onClick={() => folderInput.current?.click()}>
+          <FolderIcon />
           Upload folder
         </button>
-        <span className="text-xs text-neutral-500">…or drop files and folders here</span>
+        <span className="text-[13px] text-ink-3">…or drop files and folders here</span>
         <input
           ref={filesInput}
           type="file"
@@ -105,6 +116,18 @@ export function DropZone({ folderId, children }: { folderId: string; children: R
         />
       </div>
       {children}
+
+      {/* The drop target says so while something is over it, and says nothing
+          otherwise. `pointer-events-none` keeps the drop landing on the
+          section underneath, which is what carries the handler. */}
+      {over && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-card bg-accent-soft/80 ring-2 ring-accent">
+          <span className="flex items-center gap-2 rounded-control bg-surface px-3 py-2 text-sm font-medium text-accent-strong shadow-card">
+            <UploadIcon />
+            Drop to upload here
+          </span>
+        </div>
+      )}
     </section>
   )
 }

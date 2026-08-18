@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { signup } from '../../lib/api'
-import { AuthCard, buttonClass, FormError, inputClass } from '../../ui/controls'
+import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
 
 export function SignupPage() {
   const [email, setEmail] = useState('')
@@ -18,11 +18,11 @@ export function SignupPage() {
         {/* Signup answers identically whether or not the address was free —
             it must not report whether an account exists — so this copy claims
             no more than the server actually promises. */}
-        <p className="text-sm text-neutral-600">
-          If <span className="font-medium">{email}</span> is new here, a verification link is on its way. Open it to
+        <p className="text-sm text-ink-2">
+          If <span className="font-medium text-ink">{email}</span> is new here, a verification link is on its way. Open it to
           finish setting up the account.
         </p>
-        <Link className="text-sm underline" to="/login">
+        <Link className="text-[13px] font-medium text-accent hover:underline" to="/login">
           Back to sign in
         </Link>
       </AuthCard>
@@ -32,13 +32,13 @@ export function SignupPage() {
   return (
     <AuthCard title="Create a Drive account">
       <form
-        className="flex flex-col gap-3"
+        className="flex flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-card"
         onSubmit={(e) => {
           e.preventDefault()
           mutation.mutate()
         }}
       >
-        <label className="flex flex-col gap-1 text-sm">
+        <label className={fieldClass}>
           Name
           <input
             className={inputClass}
@@ -49,7 +49,7 @@ export function SignupPage() {
             onChange={(e) => setDisplayName(e.target.value)}
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className={fieldClass}>
           Email
           <input
             className={inputClass}
@@ -61,7 +61,7 @@ export function SignupPage() {
             onChange={(e) => setEmail(e.target.value)}
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className={fieldClass}>
           Password
           <input
             className={inputClass}
@@ -78,9 +78,9 @@ export function SignupPage() {
           {mutation.isPending ? 'Creating…' : 'Create account'}
         </button>
       </form>
-      <p className="text-sm text-neutral-600">
+      <p className="text-[13px] text-ink-3">
         Already have an account?{' '}
-        <Link className="underline" to="/login">
+        <Link className="font-medium text-accent hover:underline" to="/login">
           Sign in
         </Link>
       </p>

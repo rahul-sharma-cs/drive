@@ -1,8 +1,9 @@
-import { memo, useRef, type ReactNode } from 'react'
+import { memo, useRef, useState, type ReactNode } from 'react'
 
-import { secondaryButtonClass } from '../../../ui/controls'
+import { dangerButtonClass, ghostButtonClass, secondaryButtonClass } from '../../../ui/controls'
+import { ChevronIcon } from '../../../ui/icons'
 import { formatBytes } from '../../../ui/format'
-import type { UploadSnapshot } from '../engine/types'
+import type { UploadSnapshot, UploadState } from '../engine/types'
 import type { UploadActions } from './engineStore'
 import { describeUpload } from './status'
 
@@ -10,6 +11,11 @@ import { describeUpload } from './status'
  * The upload manager: one row per upload, always visible, independent of which
  * folder is on screen. It is presentational — the container feeds it snapshots
  * and actions — so the whole surface is testable without a live engine.
+ *
+ * It sits on the page as a floating translucent layer rather than an opaque
+ * panel bolted to the corner: the file list stays readable underneath it, which
+ * matters because the thing you are usually doing while an upload runs is
+ * looking at the folder it is landing in.
  */
 export function UploadManager({
   items,
@@ -21,48 +27,83 @@ export function UploadManager({
   /** Interrupted server sessions waiting for their file to be picked again. */
   resumable?: ReactNode
 }) {
+  const [open, setOpen] = useState(true)
   if (items.length === 0 && resumable === null) return null
   const finished = items.some((i) => i.state === 'done' || i.state === 'canceled')
 
   return (
     <aside
       aria-label="Uploads"
-      className="fixed bottom-4 right-4 max-h-[60vh] w-96 overflow-y-auto rounded-xl border border-neutral-200 bg-white shadow-lg"
+      className="dock-enter material fixed inset-x-3 bottom-3 z-40 flex max-h-[70vh] flex-col overflow-hidden
+                 rounded-pop border border-line shadow-dock sm:inset-x-auto sm:right-5 sm:bottom-5 sm:w-[26rem]"
     >
-      <header className="flex items-center gap-2 border-b border-neutral-100 px-4 py-2">
-        <h2 className="text-sm font-medium">Uploads</h2>
-        {finished && (
-          <button className={`ml-auto ${secondaryButtonClass}`} onClick={actions.clearFinished}>
-            Clear finished
+      <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+        <div className="min-w-0">
+          <h2 className="text-[13px] font-semibold text-ink">Uploads</h2>
+          <p className="numeric truncate text-ink-3">{summarize(items)}</p>
+        </div>
+        <div className="ml-auto flex items-center gap-1">
+          {finished && (
+            <button className={ghostButtonClass} onClick={actions.clearFinished}>
+              Clear finished
+            </button>
+          )}
+          <button
+            className={ghostButtonClass}
+            aria-expanded={open}
+            aria-label={open ? 'Hide upload details' : 'Show upload details'}
+            onClick={() => setOpen((was) => !was)}
+          >
+            <ChevronIcon className={`h-4 w-4 transition-transform duration-200 ${open ? '' : 'rotate-180'}`} />
           </button>
-        )}
+        </div>
       </header>
-      {resumable}
-      <ul>
-        {items.map((item) => (
-          // Spread, not the object: memo compares props shallowly, and
-          // `getSnapshot` re-mints every row object whenever anything changes.
-          <UploadRow
-            key={item.id}
-            id={item.id}
-            name={item.name}
-            original_name={item.original_name}
-            renamed={item.renamed}
-            size={item.size}
-            state={item.state}
-            progress={item.progress}
-            parts_confirmed={item.parts_confirmed}
-            parts_total={item.parts_total}
-            speed_bps={item.speed_bps}
-            eta_seconds={item.eta_seconds}
-            error={item.error}
-            actions={actions}
-          />
-        ))}
-      </ul>
+      {open && (
+        <div className="overflow-y-auto overscroll-contain">
+          {resumable}
+          <ul>
+            {items.map((item) => (
+              // Spread, not the object: memo compares props shallowly, and
+              // `getSnapshot` re-mints every row object whenever anything changes.
+              <UploadRow
+                key={item.id}
+                id={item.id}
+                name={item.name}
+                original_name={item.original_name}
+                renamed={item.renamed}
+                size={item.size}
+                state={item.state}
+                progress={item.progress}
+                parts_confirmed={item.parts_confirmed}
+                parts_total={item.parts_total}
+                speed_bps={item.speed_bps}
+                eta_seconds={item.eta_seconds}
+                error={item.error}
+                actions={actions}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
     </aside>
   )
 }
+
+/** One line for the whole dock, so a collapsed dock still says what it is doing. */
+function summarize(items: UploadSnapshot[]): string {
+  if (items.length === 0) return 'Waiting for a file'
+  const running = items.filter((i) => RUNNING.has(i.state)).length
+  const waiting = items.filter((i) => WAITING.has(i.state)).length
+  const done = items.filter((i) => i.state === 'done').length
+  const parts: string[] = []
+  if (running > 0) parts.push(`${running} uploading`)
+  if (waiting > 0) parts.push(`${waiting} waiting on you`)
+  if (done > 0) parts.push(`${done} finished`)
+  return parts.length > 0 ? parts.join(' · ') : `${items.length} in the list`
+}
+
+const RUNNING = new Set<UploadState>(['preparing', 'verifying', 'uploading', 'completing'])
+const WAITING = new Set<UploadState>(['conflict', 'failed', 'session_expired', 'error_file_changed', 'paused'])
 
 type RowProps = Pick<
   UploadSnapshot,
@@ -88,72 +129,141 @@ const UploadRow = memo(function UploadRow(props: RowProps) {
   const done = state === 'done' || state === 'canceled'
 
   return (
-    <li className="flex flex-col gap-1 border-b border-neutral-100 px-4 py-3 last:border-b-0">
+    <li className="flex flex-col gap-2 border-b border-line px-4 py-3 last:border-b-0">
       <div className="flex items-baseline gap-2">
-        <span className="truncate text-sm font-medium">{props.name}</span>
+        <span className="min-w-0 truncate text-[13px] font-medium text-ink">{props.name}</span>
         {props.renamed && (
           <span
-            className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800"
+            className="shrink-0 rounded bg-warn-soft px-1.5 py-0.5 text-[11px] font-medium text-warn"
             title={`Saved as “${props.name}” — “${props.original_name}” was already here`}
           >
             renamed
           </span>
         )}
-        <span className="ml-auto shrink-0 text-xs text-neutral-500">{formatBytes(props.size)}</span>
+        <span className="numeric ml-auto shrink-0 text-ink-3">{formatBytes(props.size)}</span>
       </div>
 
-      <div className="h-1 w-full overflow-hidden rounded bg-neutral-100">
-        <div
-          role="progressbar"
-          aria-valuenow={Math.round(props.progress * 100)}
-          aria-label={`${props.name} progress`}
-          className="h-full bg-neutral-900"
-          style={{ width: `${Math.round(props.progress * 100)}%` }}
-        />
-      </div>
+      <PartMeter
+        name={props.name}
+        state={state}
+        progress={props.progress}
+        confirmed={props.parts_confirmed}
+        total={props.parts_total}
+      />
 
-      <p className={`text-xs ${line.needsUser ? 'text-amber-700' : 'text-neutral-500'}`}>{line.text}</p>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <p className={`numeric ${line.needsUser ? 'text-warn' : 'text-ink-3'}`}>{line.text}</p>
 
-      <div className="flex gap-2">
-        {running && (
-          <button className={secondaryButtonClass} onClick={() => actions.pause(id)}>
-            Pause
-          </button>
-        )}
-        {(state === 'paused' || state === 'queued') && (
-          <button className={secondaryButtonClass} onClick={() => actions.resume(id)}>
-            Resume
-          </button>
-        )}
-        {(state === 'failed' || state === 'session_expired') && (
-          <button className={secondaryButtonClass} onClick={() => actions.retry(id)}>
-            Try again
-          </button>
-        )}
-        {state === 'error_file_changed' && (
-          <>
-            <button className={secondaryButtonClass} onClick={() => repick.current?.click()}>
-              Pick the file again
+        <div className="ml-auto flex shrink-0 gap-1">
+          {running && (
+            <button className={ghostButtonClass} onClick={() => actions.pause(id)}>
+              Pause
             </button>
-            <input
-              ref={repick}
-              type="file"
-              aria-label={`Pick ${props.original_name} again`}
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) actions.reselect(id, file)
-                e.target.value = ''
-              }}
-            />
-          </>
-        )}
-        {!done && (
-          <button className={secondaryButtonClass} onClick={() => actions.cancel(id)}>
-            Cancel
-          </button>
-        )}
+          )}
+          {(state === 'paused' || state === 'queued') && (
+            <button className={secondaryButtonClass} onClick={() => actions.resume(id)}>
+              Resume
+            </button>
+          )}
+          {(state === 'failed' || state === 'session_expired') && (
+            <button className={secondaryButtonClass} onClick={() => actions.retry(id)}>
+              Try again
+            </button>
+          )}
+          {state === 'error_file_changed' && (
+            <>
+              <button className={secondaryButtonClass} onClick={() => repick.current?.click()}>
+                Pick the file again
+              </button>
+              <input
+                ref={repick}
+                type="file"
+                aria-label={`Pick ${props.original_name} again`}
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) actions.reselect(id, file)
+                  e.target.value = ''
+                }}
+              />
+            </>
+          )}
+          {!done && (
+            <button className={dangerButtonClass} onClick={() => actions.cancel(id)}>
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
     </li>
   )
 })
+
+/**
+ * Progress, drawn the way this product actually measures it: one segment per
+ * multipart part, filled as the server confirms it. That is not decoration —
+ * a confirmed part is a part that survives a crash, and the segments that are
+ * already lit when a resumed upload appears are exactly the bytes nobody has
+ * to send again.
+ *
+ * Above ~48 parts the segments would be thinner than the gaps between them, so
+ * a large file falls back to a continuous bar carrying the same fraction.
+ */
+function PartMeter({
+  name,
+  state,
+  progress,
+  confirmed,
+  total,
+}: {
+  name: string
+  state: UploadState
+  progress: number
+  confirmed: number
+  total: number
+}) {
+  const pct = Math.round(progress * 100)
+  const fill = METER_FILL[state] ?? 'bg-accent'
+  const segmented = total > 1 && total <= 48
+
+  return (
+    <div
+      role="progressbar"
+      aria-valuenow={pct}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-label={`${name} progress`}
+      className="flex h-1.5 w-full gap-px overflow-hidden rounded-full"
+    >
+      {segmented ? (
+        Array.from({ length: total }, (_, i) => (
+          <span
+            key={i}
+            className={`h-full flex-1 first:rounded-l-full last:rounded-r-full transition-colors duration-200 ${
+              i < confirmed ? fill : 'bg-line'
+            }`}
+          />
+        ))
+      ) : (
+        <span className="h-full w-full overflow-hidden rounded-full bg-line">
+          <span
+            className={`block h-full rounded-full transition-[width] duration-300 ease-out ${fill}`}
+            style={{ width: `${pct}%` }}
+          />
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** Colour is the state: in motion, waiting on you, or failed. */
+const METER_FILL: Partial<Record<UploadState, string>> = {
+  paused: 'bg-warn',
+  paused_offline: 'bg-warn',
+  paused_backend: 'bg-warn',
+  conflict: 'bg-warn',
+  session_expired: 'bg-warn',
+  error_file_changed: 'bg-warn',
+  failed: 'bg-danger',
+  canceled: 'bg-ink-3',
+}

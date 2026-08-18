@@ -1,7 +1,8 @@
 import { useRef } from 'react'
 
 import type { UploadSession } from '../../../lib/api'
-import { secondaryButtonClass } from '../../../ui/controls'
+import { ghostButtonClass, secondaryButtonClass } from '../../../ui/controls'
+import { AlertIcon } from '../../../ui/icons'
 import { formatBytes } from '../../../ui/format'
 
 /**
@@ -58,20 +59,23 @@ function ResumableRow({
   const parentId = session.parent_id ?? rootId
 
   return (
-    <li className="flex flex-col gap-1 border-b border-neutral-100 px-4 py-3 last:border-b-0">
+    <li className="flex flex-col gap-2 border-b border-line bg-warn-soft/50 px-4 py-3 last:border-b-0">
       <div className="flex items-baseline gap-2">
-        <span className="truncate text-sm font-medium">{session.file_name}</span>
-        <span className="ml-auto shrink-0 text-xs text-neutral-500">{formatBytes(session.file_size)}</span>
+        <span className="min-w-0 truncate text-[13px] font-medium text-ink">{session.file_name}</span>
+        <span className="numeric ml-auto shrink-0 text-ink-3">{formatBytes(session.file_size)}</span>
       </div>
-      <p className="text-xs text-amber-700">
-        Interrupted — {done} of {session.parts_total} parts are already uploaded. Pick the same file to carry on from
-        there.
+      <p className="flex items-start gap-1.5 text-[13px] text-warn">
+        <AlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>
+          Interrupted — {done} of {session.parts_total} parts are already uploaded. Pick the same file to carry on from
+          there.
+        </span>
       </p>
-      <div className="flex gap-2">
+      <div className="flex gap-1">
         <button className={secondaryButtonClass} onClick={() => input.current?.click()}>
           Pick the file
         </button>
-        <button className={secondaryButtonClass} onClick={() => onDiscard(session.upload_id)}>
+        <button className={ghostButtonClass} onClick={() => onDiscard(session.upload_id)}>
           Discard
         </button>
         <input

@@ -1,1 +1,231 @@
 @import "tailwindcss";
+
+/**
+ * Drive's visual system.
+ *
+ * The through-line: this is an instrument, not a consumer cloud app. Colour
+ * carries meaning and nothing else — the chrome is strictly achromatic
+ * graphite, and the only three hues in the product are teal (in motion /
+ * stored), amber (waiting on you) and red (destructive or failed). Every
+ * quantity — byte counts, part indices, speeds — is set in the mono face with
+ * tabular figures, because the numbers are the subject.
+ *
+ * Light only, declared rather than defaulted (`color-scheme`), so form controls
+ * and scrollbars render in the palette below instead of a half-dark hybrid.
+ */
+
+@theme {
+  /* Surfaces, back to front. */
+  --color-canvas: #eef1f3;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f7f9fa;
+  --color-line: #e3e7ea;
+  --color-line-strong: #ccd3d8;
+
+  /* Ink, three levels: content, supporting, metadata. */
+  --color-ink: #10161c;
+  --color-ink-2: #4a555f;
+  --color-ink-3: #78838d;
+
+  /* In motion, or stored. The only colour an ordinary success ever gets. */
+  --color-accent: #11726b;
+  --color-accent-strong: #0b5852;
+  --color-accent-soft: #e3f0ee;
+
+  /* Waiting on a person. */
+  --color-warn: #8a5300;
+  --color-warn-soft: #fbf0da;
+
+  /* Destructive, or failed. */
+  --color-danger: #a4231f;
+  --color-danger-soft: #fbe9e7;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --radius-control: 9px;
+  --radius-card: 12px;
+  --radius-pop: 16px;
+
+  --shadow-card: 0 1px 2px rgb(16 22 28 / 0.05), 0 0 0 0.5px rgb(16 22 28 / 0.04);
+  --shadow-dock: 0 18px 40px -18px rgb(16 22 28 / 0.35), 0 2px 8px rgb(16 22 28 / 0.06);
+  --shadow-pop: 0 24px 60px -20px rgb(16 22 28 / 0.45), 0 2px 10px rgb(16 22 28 / 0.08);
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Tracking is size-specific: large text reads too loose at default spacing,
+     small text too tight. One letter-spacing value would be wrong somewhere. */
+  h1,
+  h2 {
+    letter-spacing: -0.014em;
+  }
+
+  /* One focus ring for the whole product, on keyboard focus only. Pointer
+     users never see it; keyboard users always do, including on the dock's
+     controls over their translucent backing. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+    color: var(--color-accent-strong);
+  }
+
+  /* Numbers are the subject matter here, so they get a face of their own and
+     never reflow as their digits change. */
+  .numeric {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.75rem;
+    letter-spacing: -0.01em;
+  }
+}
+
+@layer components {
+  /* The floating layers — dock, dialogs — are translucent material with the
+     page moving under them, not opaque strips laid on top. */
+  .material {
+    background: rgb(255 255 255 / 0.82);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+  }
+
+  /* Loading rows: the shape of the answer before the answer arrives. */
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      var(--color-line) 25%,
+      var(--color-surface-muted) 37%,
+      var(--color-line) 63%
+    );
+    background-size: 400% 100%;
+    animation: drive-shimmer 1.4s ease-in-out infinite;
+  }
+
+  .dock-enter {
+    animation: drive-dock-in 320ms var(--ease-out) both;
+  }
+
+  /* A modal task dims the page behind it and pushes it back — the scrim is
+     what makes "this is blocking" legible without a word of copy. */
+  .scrim {
+    background: rgb(16 22 28 / 0.28);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    animation: drive-fade-in 160ms var(--ease-out) both;
+  }
+
+  .pop-enter {
+    animation: drive-pop-in 200ms var(--ease-out) both;
+  }
+
+  /* The sign-in panel's meter lights its confirmed parts once, on load, and
+     then stays lit. It plays a single time on purpose: a looping progress
+     animation would be decoration, and a slow loop is exactly the thing
+     reduced-motion guidance asks you not to put on a page. */
+  .part-lit {
+    animation: drive-part-lit 380ms var(--ease-out) both;
+  }
+}
+
+@keyframes drive-shimmer {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+
+/* The dock materialises — blur and scale together — rather than fading in as
+   a flat rectangle, so it reads as a surface arriving. */
+@keyframes drive-dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes drive-part-lit {
+  from {
+    opacity: 0.15;
+    transform: scaleY(0.4);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes drive-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes drive-pop-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* Reduced motion means gentler, not absent: colour and opacity still carry
+   meaning, movement and the shimmer stop. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .skeleton {
+    animation: none;
+    background: var(--color-line);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material {
+    background: var(--color-surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}

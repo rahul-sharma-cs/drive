@@ -1,7 +1,8 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useState } from 'react'
 
-import { buttonClass, secondaryButtonClass } from '../../../ui/controls'
+import { buttonClass, ghostButtonClass, secondaryButtonClass } from '../../../ui/controls'
+import { AlertIcon } from '../../../ui/icons'
 import type { ConflictPolicy, UploadSnapshot } from '../engine/types'
 
 /**
@@ -39,23 +40,33 @@ export function ConflictDialog({
   return (
     <Dialog.Root open>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-neutral-900/20" />
-        <Dialog.Content className="fixed left-1/2 top-1/3 w-96 -translate-x-1/2 rounded-xl bg-white p-5 shadow-lg">
-          <Dialog.Title className="text-base font-medium">“{current.original_name}” is already here</Dialog.Title>
-          <Dialog.Description className="mt-2 text-sm text-neutral-600">
+        <Dialog.Overlay className="scrim fixed inset-0 z-50" />
+        <Dialog.Content className="pop-enter fixed left-1/2 top-[42%] z-50 w-[min(24rem,calc(100vw-2rem))] rounded-pop border border-line bg-surface p-5 shadow-pop">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-warn-soft text-warn">
+            <AlertIcon />
+          </span>
+          <Dialog.Title className="mt-3 text-[15px] leading-snug font-semibold">
+            “{current.original_name}” is already here
+          </Dialog.Title>
+          <Dialog.Description className="mt-1.5 text-[13px] text-ink-2">
             Keep both and this upload is saved under a new name. Replace and the file that is there now goes to the
             trash.
           </Dialog.Description>
 
           {others > 0 && (
-            <label className="mt-3 flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
+            <label className="mt-3 flex items-center gap-2 rounded-control bg-surface-muted px-3 py-2 text-[13px] text-ink-2">
+              <input
+                type="checkbox"
+                className="accent-accent"
+                checked={all}
+                onChange={(e) => setAll(e.target.checked)}
+              />
               Do this for the other {others} {others === 1 ? 'file' : 'files'} too
             </label>
           )}
 
-          <div className="mt-4 flex justify-end gap-2">
-            <button className={secondaryButtonClass} onClick={() => onSkip(targets())}>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <button className={ghostButtonClass} onClick={() => onSkip(targets())}>
               Skip
             </button>
             <button className={secondaryButtonClass} onClick={() => onResolve(targets(), 'replace')}>
