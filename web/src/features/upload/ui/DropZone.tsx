@@ -1,7 +1,9 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 
 import { secondaryButtonClass } from '../../../ui/controls'
+import { childrenKey } from '../../browser/queries'
 import { collectDropEntries, createFolderViaApi, ingest, walkEntries, walkFileList } from '../engine/traverse'
 import type { DropItem, TraverseSink } from '../engine/traverse'
 import { uploadActions } from './engineStore'
@@ -23,6 +25,23 @@ export function DropZone({ folderId, children }: { folderId: string; children: R
   const [over, setOver] = useState(false)
   const filesInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
+  const client = useQueryClient()
+
+  /**
+   * Folders are created by `ingest` through a plain fetch inside the engine's
+   * traverse module, which knows nothing about this cache. Without re-reading
+   * the folder afterwards, a dropped tree is invisible until a manual reload —
+   * and an EMPTY dropped folder, which enqueues no upload at all, is invisible
+   * for good (the completion bridge only fires for files, and it invalidates
+   * the file's own parent, which for a nested drop is the new subfolder).
+   */
+  const ingestInto = async (items: Parameters<typeof ingest>[0]) => {
+    try {
+      await ingest(items, folderId, sink)
+    } finally {
+      void client.invalidateQueries({ queryKey: childrenKey(folderId) })
+    }
+  }
 
   const sink: TraverseSink = {
     createFolder: createFolderViaApi,
@@ -46,7 +65,7 @@ export function DropZone({ folderId, children }: { folderId: string; children: R
         e.preventDefault()
         setOver(false)
         const entries = collectDropEntries(e.dataTransfer)
-        void ingest(walkEntries(entries), folderId, sink)
+        void ingestInto(walkEntries(entries))
       }}
       className={`flex flex-col gap-3 rounded-xl ${over ? 'outline-2 outline-dashed outline-neutral-400' : ''}`}
       data-testid="drop-zone"
@@ -80,7 +99,7 @@ export function DropZone({ folderId, children }: { folderId: string; children: R
           {...{ webkitdirectory: '' }}
           onChange={(e) => {
             const files = e.target.files
-            if (files) void ingest(walkFileList(files), folderId, sink)
+            if (files) void ingestInto(walkFileList(files))
             e.target.value = ''
           }}
         />

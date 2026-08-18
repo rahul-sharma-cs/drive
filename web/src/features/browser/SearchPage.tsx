@@ -12,7 +12,7 @@ import { formatBytes } from '../../ui/format'
  */
 export function SearchPage() {
   const [text, setText] = useState('')
-  const q = useDebounced(text, 250)
+  const q = useDebounced(text.trim(), 250)
 
   const results = useQuery({
     queryKey: ['search', q],
@@ -52,7 +52,7 @@ export function SearchPage() {
                   {node.size === null ? 'Folder' : formatBytes(node.size)}
                 </span>
                 {node.kind === 'file' && (
-                  <a className={secondaryButtonClass} href={downloadHref(node.id)}>
+                  <a className={secondaryButtonClass} href={downloadHref(node.id)} target="_blank" rel="noopener">
                     Download
                   </a>
                 )}

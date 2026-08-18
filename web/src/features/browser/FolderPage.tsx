@@ -106,8 +106,11 @@ function Row({ node, onTrash, busy }: { node: DriveNode; onTrash: () => void; bu
       <span className="ml-auto text-xs text-neutral-500">{node.size === null ? '' : formatBytes(node.size)}</span>
       {node.kind === 'file' && (
         // A plain navigation, not a fetch: the endpoint answers 302 to a
-        // presigned URL and the bytes must never pass through this app.
-        <a className={secondaryButtonClass} href={downloadHref(node.id)}>
+        // presigned URL and the bytes must never pass through this app. It goes
+        // to its own tab because the download itself renders nothing (the 302
+        // carries `attachment`), while a 401 or 404 would otherwise replace the
+        // whole app with a JSON error body.
+        <a className={secondaryButtonClass} href={downloadHref(node.id)} target="_blank" rel="noopener">
           Download
         </a>
       )}

@@ -323,6 +323,11 @@ func TestSPACacheHeaders(t *testing.T) {
 	}{
 		{"index", "/", "no-cache"},
 		{"client-side route falls back to index", "/verify", "no-cache"},
+		// A hashed asset the current build no longer has falls back to the
+		// entry document, and must be labelled as the document it actually is
+		// -- labelling that HTML immutable is how a browser gets stuck on a
+		// release that no longer exists.
+		{"stale hashed asset falls back to index", "/assets/index-OLD.js", "no-cache"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

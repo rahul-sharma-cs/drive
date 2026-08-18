@@ -1,5 +1,5 @@
 # Drive — build orchestration.
-# Semantics are frozen by docs/build/PLAN.md §Fixed choices "Makefile targets"
+# Semantics are frozen by the build plan §Fixed choices "Makefile targets"
 # (gitignored, not part of the public repo) — don't diverge without updating
 # that doc first.
 #

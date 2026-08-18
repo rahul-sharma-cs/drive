@@ -8,10 +8,10 @@ import { fileURLToPath } from 'node:url';
 /**
  * The core loop, in a real browser, interrupted for real.
  *
- * This is the proof DEPLOY-PLAN Stage 2 deferred ("server-restart-mid-upload
- * was not tested, by design": the Go `uploadclient` terminates rather than
- * waiting out backend downtime — resting in `paused_backend` is the browser
- * engine's half of the contract, and only a browser can demonstrate it).
+ * The Go `uploadclient` deliberately terminates rather than waiting out backend
+ * downtime, so it cannot show this: resting in `paused_backend` and coming back
+ * is the browser engine's half of the contract, and only a browser can
+ * demonstrate it.
  *
  * The sequence is the product's whole reason to exist:
  *   upload → SIGKILL the server mid-transfer → the manager parks the upload
@@ -64,7 +64,7 @@ test('an upload survives a server restart and resumes from the confirmed parts',
   const confirmedBeforeKill = await waitForConfirmedParts(page, 2);
   expect(confirmedBeforeKill).toBeGreaterThanOrEqual(2);
   expect(confirmedBeforeKill).toBeLessThan(PARTS);
-  const sentBeforeKill = new Set(puts.map(partNumberOf));
+
 
   stopServer(); // SIGKILL: no graceful shutdown, exactly like a crash
 
@@ -94,7 +94,11 @@ test('an upload survives a server restart and resumes from the confirmed parts',
   const confirmedAtReload = new Set(active.confirmed_parts);
   expect(confirmedAtReload.size).toBe(alreadyDone);
 
-  puts.length = 0;
+  // Everything PUT up to this point belongs to the pre-crash attempt. Slicing
+  // one list beats clearing it: Playwright delivers request events
+  // asynchronously, and a PUT that landed just before the SIGKILL can be
+  // reported after the kill returns.
+  const beforeResume = puts.length;
   // The same file, unchanged on disk: the fingerprint covers name, size, mtime
   // and both edge blocks, so a regenerated file would silently start over.
   await page.getByLabel(`Pick ${fixture.name} to resume`).setInputFiles(fixture.path);
@@ -110,14 +114,15 @@ test('an upload survives a server restart and resumes from the confirmed parts',
   // merge ("ListParts wins"), so the browser is never asked for it. What must
   // hold exactly is that no part the server already had is sent again, and
   // that the two sets together cover the file.
-  const resent = puts.map(partNumberOf);
+  const sentBeforeKill = new Set(puts.slice(0, beforeResume).map(partNumberOf));
+  const resent = puts.slice(beforeResume).map(partNumberOf);
   expect(resent.filter((n) => confirmedAtReload.has(n))).toEqual([]);
   // Every part is accounted for: confirmed before the crash, sent before it
   // (and adopted by the merge), or sent now. Nothing was skipped, and the
   // resume sent strictly fewer parts than a fresh upload would have.
   expect(new Set([...resent, ...confirmedAtReload, ...sentBeforeKill]).size).toBe(PARTS);
-  expect(puts.length).toBeLessThanOrEqual(PARTS - alreadyDone);
-  expect(puts.length).toBeLessThan(PARTS);
+  expect(resent.length).toBeLessThanOrEqual(PARTS - alreadyDone);
+  expect(resent.length).toBeLessThan(PARTS);
   expect(sentBeforeKill.size).toBeGreaterThan(0);
 
   // --- the bytes came back byte-identical --------------------------------
@@ -136,7 +141,7 @@ test('an upload survives a server restart and resumes from the confirmed parts',
   console.log(
     `resume proof: ${FILE_SIZE} bytes / ${PARTS} parts · ` +
       `${confirmedBeforeKill} confirmed when the server was killed · ` +
-      `${alreadyDone} in the ledger at reload · ${puts.length} parts re-sent · sha256 match`,
+      `${alreadyDone} in the ledger at reload · ${resent.length} parts re-sent · sha256 match`,
   );
 });
 

@@ -12,6 +12,13 @@ import type { ConflictPolicy, UploadSnapshot } from '../engine/types'
  * Rendering only the first conflicted row is what enforces the single slot: a
  * 150-file drop into a folder that already has those names would otherwise
  * stack 150 modals.
+ *
+ * There is no dismiss path, and that is structural rather than a set of
+ * handlers: `open` is passed as a constant with no `onOpenChange`, so Radix's
+ * escape/click-away route calls a no-op and the dialog closes only when the
+ * upload leaves the `conflict` state — which happens because a button below
+ * was pressed. The upload is blocked until then, and a prompt that could be
+ * dismissed would leave a row looking stuck for no visible reason.
  */
 export function ConflictDialog({
   conflicts,
@@ -33,15 +40,7 @@ export function ConflictDialog({
     <Dialog.Root open>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-neutral-900/20" />
-        <Dialog.Content
-          className="fixed left-1/2 top-1/3 w-96 -translate-x-1/2 rounded-xl bg-white p-5 shadow-lg"
-          // No dismiss-by-escape or click-away: the upload is blocked until a
-          // choice is made, and closing the prompt without one would leave a
-          // row that looks stuck for no visible reason.
-          onEscapeKeyDown={(e) => e.preventDefault()}
-          onPointerDownOutside={(e) => e.preventDefault()}
-          onInteractOutside={(e) => e.preventDefault()}
-        >
+        <Dialog.Content className="fixed left-1/2 top-1/3 w-96 -translate-x-1/2 rounded-xl bg-white p-5 shadow-lg">
           <Dialog.Title className="text-base font-medium">“{current.original_name}” is already here</Dialog.Title>
           <Dialog.Description className="mt-2 text-sm text-neutral-600">
             Keep both and this upload is saved under a new name. Replace and the file that is there now goes to the

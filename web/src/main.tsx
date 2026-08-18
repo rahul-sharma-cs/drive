@@ -20,7 +20,8 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <App />
-        <Toaster position="bottom-right" />
+        {/* Top-right: the upload manager occupies the bottom-right corner. */}
+        <Toaster position="top-right" />
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,

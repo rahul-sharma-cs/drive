@@ -47,7 +47,7 @@ function actions(): UploadActions {
 }
 
 describe('upload manager', () => {
-  it('reports progress from confirmed parts, not bytes on the wire', () => {
+  it('renders the part count and the progress the engine reports', () => {
     render(<UploadManager items={[item()]} actions={actions()} />)
 
     expect(screen.getByText(/2\/4 parts/)).toBeTruthy()

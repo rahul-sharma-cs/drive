@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +12,19 @@ import { DropZone } from '../DropZone'
 // engine, bound to which folder.
 const enqueue = vi.fn()
 vi.mock('../engineStore', () => ({ uploadActions: { enqueue: (...args: unknown[]) => enqueue(...args) } }))
+
+/** Every case needs a client: the drop re-reads the folder when it finishes. */
+function renderZone(folderId = 'folder-42') {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const view = render(
+    <QueryClientProvider client={client}>
+      <DropZone folderId={folderId}>
+        <p>rows</p>
+      </DropZone>
+    </QueryClientProvider>,
+  )
+  return { client, ...view }
+}
 
 function fileEntry(file: File): FileSystemEntry {
   return {
@@ -35,11 +49,7 @@ afterEach(() => {
 
 describe('drop zone', () => {
   it('enqueues picked files against the folder on screen', async () => {
-    render(
-      <DropZone folderId="folder-42">
-        <p>rows</p>
-      </DropZone>,
-    )
+    renderZone()
 
     const one = new File(['a'], 'one.txt')
     const two = new File(['b'], 'two.txt')
@@ -52,11 +62,7 @@ describe('drop zone', () => {
   })
 
   it('collects drop entries synchronously, before the item list dies', async () => {
-    render(
-      <DropZone folderId="folder-42">
-        <p>rows</p>
-      </DropZone>,
-    )
+    renderZone()
 
     const dropped = new File(['x'], 'photo.jpg')
     const items = [{ kind: 'file', webkitGetAsEntry: () => fileEntry(dropped) }]
@@ -69,12 +75,32 @@ describe('drop zone', () => {
     await waitFor(() => expect(enqueue).toHaveBeenCalledWith(dropped, 'folder-42'))
   })
 
+  it('re-reads the folder on screen once the drop has created its folders', async () => {
+    const { client } = renderZone()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    // An EMPTY dropped folder is the case that makes this load-bearing: it
+    // enqueues no upload, so the completion bridge never fires, and without
+    // this the new folder is invisible until a manual reload. A nested drop is
+    // no better — the bridge invalidates the FILE's parent, which is the new
+    // subfolder, not the folder being looked at.
+    const dir = {
+      isFile: false,
+      isDirectory: true,
+      name: 'empty',
+      createReader: () => ({ readEntries: (cb: (e: FileSystemEntry[]) => void) => cb([]) }),
+    } as unknown as FileSystemEntry
+    fireEvent.drop(screen.getByTestId('drop-zone'), {
+      dataTransfer: { items: [{ kind: 'file', webkitGetAsEntry: () => dir }] },
+    })
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['children', 'folder-42'] }))
+    expect(enqueue).not.toHaveBeenCalled()
+  })
+
   it('recreates the tree from the folder picker and enqueues under it', async () => {
-    render(
-      <DropZone folderId="folder-42">
-        <p>rows</p>
-      </DropZone>,
-    )
+    renderZone()
 
     const nested = new File(['x'], 'report.pdf')
     Object.defineProperty(nested, 'webkitRelativePath', { value: 'tree/report.pdf' })

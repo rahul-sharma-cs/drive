@@ -1,6 +1,12 @@
 /**
  * The React side of the upload engine.
  *
+ * It runs one upload at a time (the engine's default `maxActive`, with four
+ * parts of that upload in flight). That is a deliberate choice, not an
+ * oversight: a folder drop is routinely 150 files, and starting 150 sessions at
+ * once would multiply the in-flight bytes counted against the service's storage
+ * cap while making every individual file finish later.
+ *
  * The engine is a module-scope singleton living outside the React tree, so a
  * route change never unmounts an upload. `subscribe` and `getSnapshot` are both
  * pre-bound and identity-stable, and `getSnapshot()` returns a cached object

@@ -26,19 +26,23 @@ afterEach(() => {
 })
 
 describe('trash', () => {
-  it('restores a trashed node and re-reads both the trash and the folders', async () => {
+  it('restores a trashed node, then re-reads the trash and every folder listing', async () => {
     const calls = stubFetch([
       { path: '/api/trash', body: { items: [node({ id: 't1', name: 'old.txt' })], next_cursor: null } },
       { method: 'POST', path: '/api/nodes/t1/restore', body: node({ id: 't1' }) },
     ])
-    renderApp(<TrashPage />)
+    const { client } = renderApp(<TrashPage />)
 
     await screen.findByText('old.txt')
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
     await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
 
     await waitFor(() => expect(calls.some((c) => c.url === '/api/nodes/t1/restore')).toBe(true))
-    // The restored node reappears in a folder listing, so that cache is stale too.
     await waitFor(() => expect(calls.filter((c) => c.url === '/api/trash').length).toBeGreaterThan(1))
+    // The restored node reappears inside a folder, so those listings are stale
+    // too. This screen renders none of them, so the invalidation is the only
+    // observable — asserting only the /api/trash refetch would pass with it gone.
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['children'] }))
   })
 
   it('purges for good through the purge endpoint, not the trash one', async () => {
