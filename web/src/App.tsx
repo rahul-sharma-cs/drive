@@ -5,6 +5,7 @@ import { LoginPage } from './features/auth/LoginPage'
 import { RequireAuth } from './features/auth/RequireAuth'
 import { SignupPage } from './features/auth/SignupPage'
 import { VerifyPage } from './features/auth/VerifyPage'
+import { FolderPage } from './features/browser/FolderPage'
 
 export default function App() {
   return (
@@ -14,7 +15,8 @@ export default function App() {
       <Route path="/verify" element={<VerifyPage />} />
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>
-          <Route index element={<p className="p-6 text-sm text-neutral-500">Your files will appear here.</p>} />
+          <Route index element={<FolderPage />} />
+          <Route path="/folders/:id" element={<FolderPage />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -16,7 +16,7 @@ afterEach(() => {
 
 describe('/verify', () => {
   it('redeems the token from the query string and says so', async () => {
-    const calls = stubFetch([{ status: 200, body: { status: 'ok' } }])
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/verify-email', body: { status: 'ok' } }])
     renderApp(<VerifyPage />, { route: '/verify?token=tok-123' })
 
     expect(await screen.findByText(/your email is verified/i)).toBeTruthy()
@@ -30,7 +30,12 @@ describe('/verify', () => {
 
   it("shows the server's own message when the link is spent", async () => {
     stubFetch([
-      { status: 422, body: { code: 'invalid', message: 'this verification link is invalid or has expired' } },
+      {
+        method: 'POST',
+        path: '/api/auth/verify-email',
+        status: 422,
+        body: { code: 'invalid', message: 'this verification link is invalid or has expired' },
+      },
     ])
     renderApp(<VerifyPage />, { route: '/verify?token=old' })
 
@@ -58,7 +63,7 @@ describe('/login', () => {
       root_id: 'r1',
       email_verified_at: '2026-08-17T00:00:00Z',
     }
-    const calls = stubFetch([{ status: 200, body: user }])
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/login', body: user }])
     const { client } = renderApp(<LoginPage />)
 
     await userEvent.type(screen.getByLabelText(/email/i), 'someone@example.test')
@@ -74,7 +79,12 @@ describe('/login', () => {
 
   it('reports a refused sign-in without touching the session', async () => {
     stubFetch([
-      { status: 401, body: { code: 'unauthorized', message: 'that email and password combination is not right' } },
+      {
+        method: 'POST',
+        path: '/api/auth/login',
+        status: 401,
+        body: { code: 'unauthorized', message: 'that email and password combination is not right' },
+      },
     ])
     const { client } = renderApp(<LoginPage />)
 
@@ -92,7 +102,7 @@ describe('/login', () => {
 
 describe('/signup', () => {
   it('claims nothing about whether the address was free', async () => {
-    const calls = stubFetch([{ status: 200, body: { status: 'ok' } }])
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/signup', body: { status: 'ok' } }])
     renderApp(<SignupPage />)
 
     await userEvent.type(screen.getByLabelText(/name/i), 'Someone')
@@ -113,7 +123,12 @@ describe('/signup', () => {
 
   it('shows the refusal when signups are closed', async () => {
     stubFetch([
-      { status: 403, body: { code: 'unsupported', message: 'Drive is not accepting new accounts right now' } },
+      {
+        method: 'POST',
+        path: '/api/auth/signup',
+        status: 403,
+        body: { code: 'unsupported', message: 'Drive is not accepting new accounts right now' },
+      },
     ])
     renderApp(<SignupPage />)
 
