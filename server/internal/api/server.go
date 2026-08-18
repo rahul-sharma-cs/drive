@@ -130,6 +130,7 @@ func (s *Server) Routes() http.Handler {
 		s.mountNodes(r)
 		s.mountTrash(r)
 		s.mountSearch(r)
+		s.mountUsage(r)
 		s.mountDownload(r)
 		s.mountUploads(r)
 		s.mountUploadComplete(r)

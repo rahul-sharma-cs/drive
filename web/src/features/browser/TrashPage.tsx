@@ -4,6 +4,7 @@ import { listTrash, purgeNode, restoreNode } from '../../lib/api'
 import { Card, dangerButtonClass, EmptyState, FormError, secondaryButtonClass, SkeletonRows } from '../../ui/controls'
 import { FileIcon, FolderIcon, TrashIcon } from '../../ui/icons'
 import { formatBytes } from '../../ui/format'
+import { usageKey } from './queries'
 
 /**
  * The trash: the roots that were deleted, restorable or removable for good.
@@ -20,6 +21,8 @@ export function TrashPage() {
     // from search results, so both of those caches are stale too.
     void client.invalidateQueries({ queryKey: ['children'] })
     void client.invalidateQueries({ queryKey: ['search'] })
+    // Purging is what actually gives the bytes back.
+    void client.invalidateQueries({ queryKey: usageKey })
   }
   const restore = useMutation({ mutationFn: restoreNode, onSuccess: refresh })
   const purge = useMutation({ mutationFn: purgeNode, onSuccess: refresh })

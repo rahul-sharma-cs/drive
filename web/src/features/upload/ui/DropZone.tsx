@@ -10,6 +10,15 @@ import type { DropItem, TraverseSink } from '../engine/traverse'
 import { uploadActions } from './engineStore'
 
 /**
+ * True when a drag carries files from outside the browser. An internal drag —
+ * a row on its way into another folder — carries our own MIME type instead,
+ * and must be left alone so the folder rows can handle it.
+ */
+export function isFileDrag(dt: DataTransfer | null): boolean {
+  return dt !== null && Array.from(dt.types).includes('Files')
+}
+
+/**
  * Both ingress paths for files, wrapped around the folder listing.
  *
  * 1. drag-drop — `collectDropEntries` runs SYNCHRONOUSLY in the handler, before
@@ -58,6 +67,13 @@ export function DropZone({ folderId, children }: { folderId: string; children: R
   return (
     <section
       onDragOver={(e) => {
+        // Only a drag carrying FILES is an upload. A row being dragged inside
+        // the app is a move, and it used to light this whole panel up with
+        // "Drop to upload here" — offering to upload a file that is already
+        // uploaded. `types` is the one part of dataTransfer readable during a
+        // dragover (the payload is not), which is exactly why the decision is
+        // made on it.
+        if (!isFileDrag(e.dataTransfer)) return
         e.preventDefault()
         setOver(true)
       }}
@@ -71,6 +87,7 @@ export function DropZone({ folderId, children }: { folderId: string; children: R
         setOver(false)
       }}
       onDrop={(e) => {
+        if (!isFileDrag(e.dataTransfer)) return
         e.preventDefault()
         setOver(false)
         const entries = collectDropEntries(e.dataTransfer)

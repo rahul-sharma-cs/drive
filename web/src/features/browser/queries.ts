@@ -5,10 +5,20 @@
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { createFolder, getNode, listChildren, trashNode, type DriveNode } from '../../lib/api'
+import {
+  copyNode,
+  createFolder,
+  getNode,
+  getUsage,
+  listChildren,
+  trashNode,
+  updateNode,
+  type DriveNode,
+} from '../../lib/api'
 
 export const childrenKey = (folderId: string) => ['children', folderId] as const
 export const nodeKey = (id: string) => ['node', id] as const
+export const usageKey = ['usage'] as const
 
 export function useChildren(folderId: string) {
   return useInfiniteQuery({
@@ -59,4 +69,63 @@ export function useTrashNode(parentId: string) {
       void client.invalidateQueries({ queryKey: ['trash'] })
     },
   })
+}
+
+/**
+ * Rename and move are one endpoint, so they are one mutation. Both invalidate
+ * the folder on screen; a move additionally invalidates the destination, which
+ * is a folder this screen is not showing but may be one click away.
+ */
+export function useUpdateNode(parentId: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...patch
+    }: {
+      id: string
+      name?: string
+      parent_id?: string
+      conflict_policy?: 'rename' | 'replace'
+    }) => updateNode(id, patch),
+    onSuccess: (node, vars) => {
+      void client.invalidateQueries({ queryKey: childrenKey(parentId) })
+      if (vars.parent_id) void client.invalidateQueries({ queryKey: childrenKey(vars.parent_id) })
+      // A rename changes what the breadcrumb for that folder says, and search
+      // results hold the old name too.
+      void client.invalidateQueries({ queryKey: ['breadcrumbs'] })
+      void client.invalidateQueries({ queryKey: ['search'] })
+      void client.invalidateQueries({ queryKey: nodeKey(node.id) })
+    },
+  })
+}
+
+/** Files only. The server answers a folder with 422 `unsupported`. */
+export function useCopyNode(parentId: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      destination,
+      conflictPolicy,
+    }: {
+      id: string
+      destination: string
+      conflictPolicy?: 'rename' | 'replace'
+    }) => copyNode(id, destination, conflictPolicy),
+    onSuccess: (_node, vars) => {
+      void client.invalidateQueries({ queryKey: childrenKey(parentId) })
+      void client.invalidateQueries({ queryKey: childrenKey(vars.destination) })
+      void client.invalidateQueries({ queryKey: usageKey })
+    },
+  })
+}
+
+/**
+ * How much of the quota this account is using. Refetched on mount rather than
+ * polled: it only moves when this tab does something, and every one of those
+ * things already invalidates it.
+ */
+export function useUsage() {
+  return useQuery({ queryKey: usageKey, queryFn: getUsage, staleTime: 30_000 })
 }

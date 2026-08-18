@@ -66,7 +66,7 @@ describe('drop zone', () => {
 
     const dropped = new File(['x'], 'photo.jpg')
     const items = [{ kind: 'file', webkitGetAsEntry: () => fileEntry(dropped) }]
-    fireEvent.drop(screen.getByTestId('drop-zone'), { dataTransfer: { items } })
+    fireEvent.drop(screen.getByTestId('drop-zone'), { dataTransfer: { types: ['Files'], items } })
     // A DataTransfer's items are invalidated the moment the handler yields.
     // Emptying them here — synchronously after dispatch — is what a real
     // browser does, so a handler that awaited before collecting sees nothing.
@@ -91,12 +91,40 @@ describe('drop zone', () => {
       createReader: () => ({ readEntries: (cb: (e: FileSystemEntry[]) => void) => cb([]) }),
     } as unknown as FileSystemEntry
     fireEvent.drop(screen.getByTestId('drop-zone'), {
-      dataTransfer: { items: [{ kind: 'file', webkitGetAsEntry: () => dir }] },
+      dataTransfer: { types: ['Files'], items: [{ kind: 'file', webkitGetAsEntry: () => dir }] },
     })
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled())
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['children', 'folder-42'] }))
     expect(enqueue).not.toHaveBeenCalled()
+  })
+
+  it('ignores a drag that is a row moving inside the app, not files arriving', async () => {
+    // A row dragged towards another folder used to light this panel up with
+    // "Drop to upload here" and hand its own hyperlink to the upload engine.
+    // Only a drag whose types include `Files` is an upload.
+    renderZone()
+    const zone = screen.getByTestId('drop-zone')
+    const dragged = new File(['x'], 'never-read.jpg')
+
+    fireEvent.dragOver(zone, { dataTransfer: { types: ['application/x-drive-node'] } })
+    expect(screen.queryByText('Drop to upload here')).toBeNull()
+
+    fireEvent.drop(zone, {
+      dataTransfer: {
+        types: ['application/x-drive-node'],
+        items: [{ kind: 'file', webkitGetAsEntry: () => fileEntry(dragged) }],
+      },
+    })
+    await waitFor(() => expect(enqueue).not.toHaveBeenCalled())
+  })
+
+  it('shows the drop target only while files are actually over it', async () => {
+    renderZone()
+    const zone = screen.getByTestId('drop-zone')
+
+    fireEvent.dragOver(zone, { dataTransfer: { types: ['Files'] } })
+    expect(screen.getByText('Drop to upload here')).toBeTruthy()
   })
 
   it('recreates the tree from the folder picker and enqueues under it', async () => {

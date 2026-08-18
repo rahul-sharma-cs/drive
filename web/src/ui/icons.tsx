@@ -118,3 +118,11 @@ export function FolderPlusIcon({ className }: IconProps) {
     </Svg>
   )
 }
+
+export function CloseIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="m4.4 4.4 7.2 7.2M11.6 4.4l-7.2 7.2" />
+    </Svg>
+  )
+}

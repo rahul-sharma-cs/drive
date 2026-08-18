@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 
 import { discardUpload, listUploads } from '../../../lib/api'
 import { useSession } from '../../auth/session'
-import { childrenKey } from '../../browser/queries'
+import { childrenKey, usageKey } from '../../browser/queries'
 import type { ConflictPolicy, UploadSnapshot } from '../engine/types'
 import { ConflictDialog } from './ConflictDialog'
 import { uploadActions, useUploadItems } from './engineStore'
@@ -92,6 +92,8 @@ export function useCompletionBridge(items: UploadSnapshot[]): void {
       // A search view can be showing the folder this file just landed in;
       // nothing else re-reads that cache.
       void client.invalidateQueries({ queryKey: searchKey })
+      // A published file is the one thing that moves the storage meter.
+      void client.invalidateQueries({ queryKey: usageKey })
       toast.success(
         item.renamed
           ? `Uploaded as “${item.name}” — “${item.original_name}” was already there`

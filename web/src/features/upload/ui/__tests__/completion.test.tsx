@@ -97,10 +97,10 @@ describe('completion bridge', () => {
     rerender([done])
     rerender([{ ...done }])
 
-    // Three invalidations per completion — the folder, the session list and any
-    // open search — and the row staying `done` in later snapshots must not
-    // repeat them.
-    expect(invalidate).toHaveBeenCalledTimes(3)
+    // Four invalidations per completion — the folder, the session list, any
+    // open search and the storage meter — and the row staying `done` in later
+    // snapshots must not repeat them.
+    expect(invalidate).toHaveBeenCalledTimes(4)
   })
 
   it('re-reads an open search, which is the other place the new file belongs', () => {

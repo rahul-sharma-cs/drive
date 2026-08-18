@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Route, Routes } from 'react-router'
@@ -104,7 +104,7 @@ describe('file browser', () => {
     ])
 
     await screen.findByText('notes.txt')
-    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete notes.txt' }))
 
     await waitFor(() => {
       const del = calls.find((c) => c.method === 'DELETE')
@@ -158,5 +158,138 @@ describe('file browser', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(document.body.style.pointerEvents).not.toBe('none'))
+  })
+})
+
+describe('selection and the actions it unlocks', () => {
+  const twoRows: StubRoute[] = [
+    { path: '/api/nodes/root-1', body: root },
+    {
+      path: '/api/nodes/root-1/children',
+      body: {
+        items: [
+          folder({ id: 'f1', name: 'Reports' }),
+          folder({ id: 'f2', kind: 'file', name: 'notes.txt', size: 2048 }),
+        ],
+        next_cursor: null,
+      },
+    },
+  ]
+
+  it('offers only the actions the selection can actually carry out', async () => {
+    renderFolder(twoRows)
+    await screen.findByText('notes.txt')
+
+    // Nothing selected: no command bar at all.
+    expect(screen.queryByText(/selected/)).toBeNull()
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select notes.txt' }))
+    const bar = () => screen.getByRole('toolbar', { name: 'Selection actions' })
+    expect(within(bar()).getByText('1 selected')).toBeTruthy()
+    // One file: everything is available.
+    expect(within(bar()).getByRole('button', { name: 'Rename' })).toBeTruthy()
+    expect(within(bar()).getByRole('link', { name: 'Download' })).toBeTruthy()
+    expect(within(bar()).getByRole('button', { name: 'Copy to' })).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select Reports' }))
+    expect(within(bar()).getByText('2 selected')).toBeTruthy()
+    // Rename takes exactly one item, and there is no archive endpoint to
+    // download two things with, so neither is offered for a multi-selection.
+    expect(within(bar()).queryByRole('button', { name: 'Rename' })).toBeNull()
+    expect(within(bar()).queryByRole('link', { name: 'Download' })).toBeNull()
+    // Copy survives, because one of the two is a file.
+    expect(within(bar()).getByRole('button', { name: 'Copy to' })).toBeTruthy()
+  })
+
+  it('renames through the same endpoint a move uses, and re-reads the folder', async () => {
+    const { calls } = renderFolder([
+      ...twoRows,
+      { method: 'PATCH', path: '/api/nodes/f2', body: folder({ id: 'f2', kind: 'file', name: 'renamed.txt' }) },
+    ])
+    await screen.findByText('notes.txt')
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select notes.txt' }))
+    await userEvent.click(
+      within(screen.getByRole('toolbar', { name: 'Selection actions' })).getByRole('button', { name: 'Rename' }),
+    )
+    const field = screen.getByLabelText('Name')
+    await userEvent.clear(field)
+    await userEvent.type(field, 'renamed.txt')
+    await userEvent.click(screen.getByRole('button', { name: 'Rename' }))
+
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === 'PATCH')
+      expect(patch?.url).toBe('/api/nodes/f2')
+      expect(patch!.body).toEqual({ name: 'renamed.txt' })
+    })
+    // The listing is re-read: a rename that only changed the local copy would
+    // disagree with the server the moment anything else refetched.
+    await waitFor(() => expect(calls.filter((c) => c.url === '/api/nodes/root-1/children').length).toBeGreaterThan(1))
+  })
+
+  it('moves a dragged row into the folder it was dropped on', async () => {
+    const { calls } = renderFolder([
+      ...twoRows,
+      { method: 'PATCH', path: '/api/nodes/f2', body: folder({ id: 'f2', kind: 'file', name: 'notes.txt' }) },
+    ])
+    await screen.findByText('notes.txt')
+
+    const rows = screen.getAllByRole('listitem')
+    const fileRow = rows.find((r) => within(r).queryByText('notes.txt'))!
+    const folderRow = rows.find((r) => within(r).queryByText('Reports'))!
+
+    const payload = new Map<string, string>()
+    const dataTransfer = {
+      types: ['application/x-drive-node'],
+      effectAllowed: '',
+      dropEffect: '',
+      setData: (type: string, value: string) => payload.set(type, value),
+      getData: (type: string) => payload.get(type) ?? '',
+    }
+
+    fireEvent.dragStart(fileRow, { dataTransfer })
+    fireEvent.dragOver(folderRow, { dataTransfer })
+    fireEvent.drop(folderRow, { dataTransfer })
+
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === 'PATCH')
+      expect(patch?.url).toBe('/api/nodes/f2')
+      // parent_id, not name: this is a move, and the row carried its own id
+      // even though nothing was selected before the drag started.
+      expect(patch!.body).toEqual({ parent_id: 'f1' })
+    })
+  })
+
+  it('will not drop a folder onto itself', async () => {
+    const { calls } = renderFolder([
+      ...twoRows,
+      { method: 'PATCH', path: '/api/nodes/f2', body: folder({ id: 'f2', kind: 'file', name: 'notes.txt' }) },
+    ])
+    await screen.findByText('Reports')
+
+    const rows = screen.getAllByRole('listitem')
+    const fileRow = rows.find((r) => within(r).queryByText('notes.txt'))!
+    const folderRow = rows.find((r) => within(r).queryByText('Reports'))!
+    const payload = new Map<string, string>()
+    const dataTransfer = {
+      types: ['application/x-drive-node'],
+      effectAllowed: '',
+      dropEffect: '',
+      setData: (type: string, value: string) => payload.set(type, value),
+      getData: (type: string) => payload.get(type) ?? '',
+    }
+
+    // Reports onto Reports: a move that would make the folder its own parent.
+    fireEvent.dragStart(folderRow, { dataTransfer })
+    fireEvent.drop(folderRow, { dataTransfer })
+
+    // Then a drop that IS legal. Asserting the absence of a request on its own
+    // would pass before any request could have been made; making the legal
+    // move the only PATCH is what actually pins the guard.
+    fireEvent.dragStart(fileRow, { dataTransfer })
+    fireEvent.drop(folderRow, { dataTransfer })
+
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1))
+    expect(calls.find((c) => c.method === 'PATCH')!.url).toBe('/api/nodes/f2')
   })
 })

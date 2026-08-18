@@ -118,11 +118,35 @@ export const createFolder = (parentId: string, name: string) =>
 
 export const trashNode = (id: string) => request<void>('DELETE', `/nodes/${id}`)
 
+/**
+ * Rename and move are the same endpoint: a PATCH carrying whichever of the two
+ * fields changed. `conflict_policy` is omitted on the first try so a collision
+ * comes back as an error the person can answer, rather than being resolved
+ * silently on their behalf.
+ */
+export const updateNode = (
+  id: string,
+  patch: { name?: string; parent_id?: string; conflict_policy?: 'rename' | 'replace' },
+) => request<DriveNode>('PATCH', `/nodes/${id}`, patch)
+
+/** Files only — the server answers 422 `unsupported` for a folder. */
+export const copyNode = (id: string, parentId: string, conflictPolicy?: 'rename' | 'replace') =>
+  request<DriveNode>('POST', `/nodes/${id}/copy`, { parent_id: parentId, conflict_policy: conflictPolicy })
+
 export const restoreNode = (id: string) => request<DriveNode>('POST', `/nodes/${id}/restore`)
 
 export const purgeNode = (id: string) => request<void>('DELETE', `/nodes/${id}/purge`)
 
 export const listTrash = () => request<Page<DriveNode>>('GET', '/trash')
+
+/** Quota and max_file_size are null when the deployment sets no cap at all. */
+export interface Usage {
+  used: number
+  quota: number | null
+  max_file_size: number | null
+}
+
+export const getUsage = () => request<Usage>('GET', '/usage')
 
 export const search = (q: string) => request<Page<DriveNode>>('GET', `/search?q=${encodeURIComponent(q)}`)
 

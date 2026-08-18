@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { DriveNode } from '../../../lib/api'
 import { renderApp, stubFetch } from '../../../test/render'
+import { useLocation } from 'react-router'
+
+import { HeaderSearch } from '../../../app/HeaderSearch'
 import { SearchPage } from '../SearchPage'
 import { TrashPage } from '../TrashPage'
 
@@ -72,12 +75,28 @@ describe('trash', () => {
   })
 })
 
+/** Reports the router's location, which is where the query has to end up. */
+function Where() {
+  return <span data-testid="where">{useLocation().search}</span>
+}
+
 describe('search', () => {
+  // The box lives in the chrome and the results live on the screen; rendering
+  // both is the only way to test what a person actually does, because the
+  // query travels between them through the URL.
+  const searchUI = (
+    <>
+      <HeaderSearch />
+      <SearchPage />
+      <Where />
+    </>
+  )
+
   it('queries once the typing settles and lists what matched', async () => {
     const calls = stubFetch([
       { path: /\/api\/search\?q=/, body: { items: [node({ id: 's1', name: 'report.pdf' })], next_cursor: null } },
     ])
-    renderApp(<SearchPage />)
+    renderApp(searchUI)
 
     await userEvent.type(screen.getByLabelText(/search by name/i), 'report')
 
@@ -85,12 +104,27 @@ describe('search', () => {
     // Debounced: six keystrokes must not be six ILIKE queries.
     expect(calls.length).toBeLessThan(6)
     expect(calls[calls.length - 1].url).toBe('/api/search?q=report')
-    expect(screen.getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/api/files/s1/download')
+    expect(screen.getByRole('link', { name: 'Download report.pdf' }).getAttribute('href')).toBe(
+      '/api/files/s1/download',
+    )
+  })
+
+  it('puts the query in the URL, so a search is a place and not a mode', async () => {
+    stubFetch([{ path: /\/api\/search\?q=/, body: { items: [], next_cursor: null } }])
+    renderApp(searchUI)
+
+    await userEvent.type(screen.getByLabelText(/search by name/i), 'invoice')
+
+    // MemoryRouter, so the location is read through the router rather than
+    // through window.location.
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toContain('q=invoice'))
+    // And the screen reads it from there rather than from its own state.
+    expect(await screen.findByText(/Nothing matches/)).toBeTruthy()
   })
 
   it('asks for nothing until something is typed', async () => {
     const calls = stubFetch([])
-    renderApp(<SearchPage />)
+    renderApp(searchUI)
 
     await waitFor(() => expect(screen.getByLabelText(/search by name/i)).toBeTruthy())
     expect(calls).toHaveLength(0)
