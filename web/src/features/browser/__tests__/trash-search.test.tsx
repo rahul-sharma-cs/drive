@@ -43,6 +43,9 @@ describe('trash', () => {
     // too. This screen renders none of them, so the invalidation is the only
     // observable — asserting only the /api/trash refetch would pass with it gone.
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['children'] }))
+    // Same argument for an open search view: the restored node belongs in
+    // those results again, and nothing else re-reads them.
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['search'] }))
   })
 
   it('purges for good through the purge endpoint, not the trash one', async () => {

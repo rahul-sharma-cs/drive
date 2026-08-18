@@ -16,8 +16,10 @@ export function TrashPage() {
 
   const refresh = () => {
     void client.invalidateQueries({ queryKey: ['trash'] })
-    // A restored node reappears in a folder listing, so those are stale too.
+    // A restored node reappears in a folder listing, and a purged one vanishes
+    // from search results, so both of those caches are stale too.
     void client.invalidateQueries({ queryKey: ['children'] })
+    void client.invalidateQueries({ queryKey: ['search'] })
   }
   const restore = useMutation({ mutationFn: restoreNode, onSuccess: refresh })
   const purge = useMutation({ mutationFn: purgeNode, onSuccess: refresh })

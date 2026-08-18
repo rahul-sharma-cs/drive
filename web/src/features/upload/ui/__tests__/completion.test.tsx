@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { UploadSnapshot } from '../../engine/types'
 import { useCompletionBridge } from '../UploadDock'
@@ -58,6 +58,8 @@ function mount(items: UploadSnapshot[]) {
 }
 
 describe('completion bridge', () => {
+  beforeEach(() => success.mockClear())
+
   it('re-reads the destination folder when an upload publishes', () => {
     const { invalidate, rerender } = mount([item()])
     // Nothing has finished yet, so nothing is re-read.
@@ -87,8 +89,27 @@ describe('completion bridge', () => {
     rerender([done])
     rerender([{ ...done }])
 
-    // Two invalidations per completion — the folder and the session list — and
-    // the row staying `done` in later snapshots must not repeat them.
-    expect(invalidate).toHaveBeenCalledTimes(2)
+    // Three invalidations per completion — the folder, the session list and any
+    // open search — and the row staying `done` in later snapshots must not
+    // repeat them.
+    expect(invalidate).toHaveBeenCalledTimes(3)
+  })
+
+  it('re-reads an open search, which is the other place the new file belongs', () => {
+    const { invalidate, rerender } = mount([item()])
+
+    rerender([item({ state: 'done', progress: 1 })])
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['search'] })
+  })
+
+  it('stays quiet about uploads that were already finished when it mounted', () => {
+    // The dock remounts on a client-side logout then login, over engine rows
+    // that finished before it existed. Announcing those again would toast a
+    // completion that happened minutes ago.
+    const { invalidate } = mount([item({ state: 'done', progress: 1 })])
+
+    expect(success).not.toHaveBeenCalled()
+    expect(invalidate).not.toHaveBeenCalled()
   })
 })

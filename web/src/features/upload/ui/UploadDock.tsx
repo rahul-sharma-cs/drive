@@ -13,6 +13,7 @@ import { ResumableUploads } from './ResumableUploads'
 import { UploadManager } from './UploadManager'
 
 export const uploadsKey = ['uploads'] as const
+export const searchKey = ['search'] as const
 
 /** The manager, wired to the singleton. Mounted once, in the app layout. */
 export function UploadDock() {
@@ -73,20 +74,29 @@ export function UploadDock() {
  */
 export function useCompletionBridge(items: UploadSnapshot[]): void {
   const client = useQueryClient()
-  const seen = useRef(new Map<string, string>())
+  // Seeded from whatever the engine already holds at first render, not empty.
+  // The engine outlives this component: a client-side logout then login
+  // remounts the dock over rows that are already `done`, and an empty map
+  // would read every one of them as a fresh completion and announce it again.
+  const seen = useRef<Map<string, string> | null>(null)
+  if (seen.current === null) seen.current = new Map(items.map((i) => [i.id, i.state]))
+  const previously = seen.current
 
   useEffect(() => {
     for (const item of items) {
-      const previous = seen.current.get(item.id)
-      seen.current.set(item.id, item.state)
+      const previous = previously.get(item.id)
+      previously.set(item.id, item.state)
       if (previous === item.state || item.state !== 'done') continue
       void client.invalidateQueries({ queryKey: childrenKey(item.parent_id) })
       void client.invalidateQueries({ queryKey: uploadsKey })
+      // A search view can be showing the folder this file just landed in;
+      // nothing else re-reads that cache.
+      void client.invalidateQueries({ queryKey: searchKey })
       toast.success(
         item.renamed
           ? `Uploaded as “${item.name}” — “${item.original_name}” was already there`
           : `Uploaded ${item.name}`,
       )
     }
-  }, [items, client])
+  }, [items, client, previously])
 }

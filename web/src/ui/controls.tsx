@@ -165,9 +165,7 @@ function ThesisPanel() {
               />
             ))}
           </div>
-          <p className="numeric mt-2 text-canvas/50">
-            A resumed upload: the lit parts are already stored · {total - confirmed} left to send
-          </p>
+          <p className="numeric mt-2 text-canvas/50">A resumed upload — the lit parts are already stored</p>
         </div>
       </div>
 
