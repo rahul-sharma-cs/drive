@@ -309,3 +309,38 @@ func TestLivezIsAliveWithoutADatabase(t *testing.T) {
 		t.Errorf("/healthz with no database: status %d, want 503 -- readiness must still mean ready", rec.Code)
 	}
 }
+
+// The entry document must never be cached: it names the hashed asset files, so
+// a stale copy points at assets a new release no longer has. The assets
+// themselves carry a content hash and are immutable by construction.
+func TestSPACacheHeaders(t *testing.T) {
+	h := newTestServer(t)
+
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"index", "/", "no-cache"},
+		{"client-side route falls back to index", "/verify", "no-cache"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if got := rec.Header().Get("Cache-Control"); got != tc.want {
+				t.Fatalf("Cache-Control for %s = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
+
+	// The hashed assets are asserted on the rule rather than through a request:
+	// which files exist under assets/ depends on whether the SPA has been built,
+	// and a fresh clone embeds only the placeholder index.html.
+	if got := spaCacheControl("assets/index-0123456789.js"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("Cache-Control for a hashed asset = %q", got)
+	}
+	if got := spaCacheControl("index.html"); got != "no-cache" {
+		t.Fatalf("Cache-Control for the entry document = %q", got)
+	}
+}

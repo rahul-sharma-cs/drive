@@ -209,9 +209,26 @@ func (s *Server) spaHandler() http.HandlerFunc {
 		if _, err := fs.Stat(dist, name); err != nil {
 			r = r.Clone(r.Context())
 			r.URL.Path = "/"
+			name = "index.html"
 		}
+		w.Header().Set("Cache-Control", spaCacheControl(name))
 		files.ServeHTTP(w, r)
 	}
+}
+
+// spaCacheControl decides how long a served SPA file may be cached.
+//
+// The build's asset names carry a content hash, so they can be kept forever;
+// the entry document names them and must not be, or a browser goes on serving
+// the previous release's HTML -- pointing at asset files that no longer exist
+// -- for as long as its heuristic cache decides to. Note the caller passes the
+// name it actually serves, so a client-side route that falls back to index.html
+// is answered as the document, not as whatever the URL looked like.
+func spaCacheControl(name string) string {
+	if strings.HasPrefix(name, "assets/") {
+		return "public, max-age=31536000, immutable"
+	}
+	return "no-cache"
 }
 
 // ---------------------------------------------------------------- responses --

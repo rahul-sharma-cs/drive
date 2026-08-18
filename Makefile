@@ -96,6 +96,13 @@ e2e: infra-init-test build
 	if [ "$$healthy" -ne 1 ]; then echo "e2e: server did not become healthy at $$base within 60s" >&2; exit 1; fi; \
 	cd e2e && E2E_BASE_URL="$$base" npx playwright test --project=chromium --workers=1 --retries=0
 
+# The browser resume proof: it spawns, SIGKILLs and restarts the server itself
+# mid-upload, so it cannot share `make e2e`'s single server and is excluded from
+# that run by playwright.config.ts unless DRIVE_RESUME_SPEC is set.
+e2e-resume: infra-init-test build
+	cd e2e && DRIVE_RESUME_SPEC=1 npx playwright test resume.spec.ts \
+		--project=chromium --workers=1 --retries=0
+
 # Idempotent: a second run is a no-op once the users exist.
 seed:
 	go run ./server/cmd/seed -env-file .env
