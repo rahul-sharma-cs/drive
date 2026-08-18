@@ -1,22 +1,23 @@
-// Holding page. The API is live and complete; the interface is not built yet,
-// so this says so rather than showing an empty file browser. It is replaced
-// wholesale by the real routes and screens.
-function App() {
+import { Navigate, Route, Routes } from 'react-router'
+
+import { AppLayout } from './app/AppLayout'
+import { LoginPage } from './features/auth/LoginPage'
+import { RequireAuth } from './features/auth/RequireAuth'
+import { SignupPage } from './features/auth/SignupPage'
+import { VerifyPage } from './features/auth/VerifyPage'
+
+export default function App() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center gap-4 px-6">
-      <h1 className="text-3xl font-semibold tracking-tight">Drive</h1>
-      <p className="text-base leading-relaxed text-neutral-600">
-        A self-hosted file platform. Uploads are resumable by design: a transfer
-        survives a lost connection, a closed laptop, a restarted server. Pick
-        the same file again and it carries on from the last confirmed part
-        rather than starting over.
-      </p>
-      <p className="text-base leading-relaxed text-neutral-600">
-        The server is running here. The web interface is still being built, so
-        there is nothing to sign in to yet.
-      </p>
-    </main>
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/signup" element={<SignupPage />} />
+      <Route path="/verify" element={<VerifyPage />} />
+      <Route element={<RequireAuth />}>
+        <Route element={<AppLayout />}>
+          <Route index element={<p className="p-6 text-sm text-neutral-500">Your files will appear here.</p>} />
+        </Route>
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }
-
-export default App
