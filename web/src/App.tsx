@@ -6,6 +6,8 @@ import { RequireAuth } from './features/auth/RequireAuth'
 import { SignupPage } from './features/auth/SignupPage'
 import { VerifyPage } from './features/auth/VerifyPage'
 import { FolderPage } from './features/browser/FolderPage'
+import { SearchPage } from './features/browser/SearchPage'
+import { TrashPage } from './features/browser/TrashPage'
 
 export default function App() {
   return (
@@ -17,6 +19,8 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route index element={<FolderPage />} />
           <Route path="/folders/:id" element={<FolderPage />} />
+          <Route path="/trash" element={<TrashPage />} />
+          <Route path="/search" element={<SearchPage />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

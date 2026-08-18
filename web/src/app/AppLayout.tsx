@@ -26,6 +26,10 @@ export function AppLayout() {
         <Link to="/" className="text-base font-semibold tracking-tight">
           Drive
         </Link>
+        <nav className="flex gap-4 text-sm text-neutral-600">
+          <Link to="/search">Search</Link>
+          <Link to="/trash">Trash</Link>
+        </nav>
         <span className="ml-auto text-sm text-neutral-500">{user.email}</span>
         <button className={secondaryButtonClass} onClick={() => signOut.mutate()} disabled={signOut.isPending}>
           Sign out
