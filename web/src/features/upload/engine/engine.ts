@@ -12,7 +12,7 @@
  */
 
 import { HttpUploadApi, xhrPutPart } from './api'
-import { spawnMd5Worker, spawnSha256Worker } from './hash/hash'
+import { spawnMd5Worker, spawnSha256Worker } from './hash/spawn'
 import { IdbStorage, RecordCache, type RecordStorage } from './idb'
 import { UploadMachine, type MachineDeps } from './machine'
 import type {

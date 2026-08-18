@@ -5,6 +5,7 @@ import { downloadHref, type DriveNode } from '../../lib/api'
 import { secondaryButtonClass } from '../../ui/controls'
 import { formatBytes } from '../../ui/format'
 import { useSession } from '../auth/session'
+import { DropZone } from '../upload/ui/DropZone'
 import { NewFolderDialog } from './NewFolderDialog'
 import { useBreadcrumbs, useChildren, useTrashNode } from './queries'
 
@@ -36,7 +37,8 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
         </div>
       </div>
 
-      <section className="rounded-xl border border-neutral-200 bg-white">
+      <DropZone folderId={folderId}>
+        <section className="rounded-xl border border-neutral-200 bg-white">
         {children.isPending && <p className="p-4 text-sm text-neutral-500">Loading…</p>}
         {children.error && (
           <p role="alert" className="p-4 text-sm text-red-700">
@@ -60,7 +62,8 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
             {children.isFetchingNextPage ? 'Loading…' : 'Load more'}
           </button>
         )}
-      </section>
+        </section>
+      </DropZone>
     </main>
   )
 }

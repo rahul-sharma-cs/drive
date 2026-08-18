@@ -4,6 +4,7 @@ import { Link, Outlet, useNavigate } from 'react-router'
 import { logout } from '../lib/api'
 import { secondaryButtonClass } from '../ui/controls'
 import { useSession, useSetSession } from '../features/auth/session'
+import { UploadDock } from '../features/upload/ui/UploadDock'
 
 /** The signed-in chrome: one header, one outlet. */
 export function AppLayout() {
@@ -31,6 +32,9 @@ export function AppLayout() {
         </button>
       </header>
       <Outlet />
+      {/* Mounted once, here: the engine outlives route changes, and so must the
+          manager that shows what it is doing. */}
+      <UploadDock />
     </div>
   )
 }

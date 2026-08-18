@@ -94,10 +94,8 @@ export class HashClient {
   }
 }
 
-export function spawnMd5Worker(): HashClient {
-  return new HashClient(() => new Worker(new URL('./md5worker.ts', import.meta.url), { type: 'module' }))
-}
-
-export function spawnSha256Worker(): HashClient {
-  return new HashClient(() => new Worker(new URL('./sha256worker.ts', import.meta.url), { type: 'module' }))
-}
+// The two spawners live in ./spawn.ts, NOT here. Both worker files import this
+// module for HASH_CHUNK_SIZE and the message types, so a `new Worker(new
+// URL('./md5worker.ts'))` in this file makes the worker graph circular
+// (md5worker -> hash -> sha256worker -> hash -> ...) and Vite refuses to bundle
+// it. Nothing catches that until the engine is imported by the app.
