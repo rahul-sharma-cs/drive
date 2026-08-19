@@ -4,7 +4,7 @@ A self-hosted file store built around one hard problem: **uploading a very large
 
 One Go binary serves the API and the React app. File bytes never pass through it — the browser talks straight to S3-compatible object storage over presigned URLs, and the server authorizes, presigns, and keeps the ledger. An interrupted upload resumes from the last part the server confirmed, whether it was interrupted by a dropped connection, a closed tab, or the server process being killed mid-transfer.
 
-**Live:** <https://drive.rahulsharma-cs.site> — a deployment I run and use. Account creation is currently closed, so the tour is the screenshot below.
+**Live:** <https://drive.rahulsharma-cs.site> — a deployment I run and use. Sign-ups are open; verification email arrives in a few seconds. Accounts get 3 GB, single files up to 2 GB.
 
 ![The file browser with a 420 MiB upload in flight. The upload manager draws one segment per multipart part, lit as the server confirms it.](.github/media/drive.png)
 
@@ -14,10 +14,13 @@ One Go binary serves the API and the React app. File bytes never pass through it
 - **Pause, resume, cancel, retry** per upload, from a manager that lives outside the React tree — navigating between folders never interrupts a transfer.
 - **Folder drag-and-drop** (full directory trees) plus a folder picker, both normalized through the same traversal.
 - **Name conflicts** resolved with keep-both / replace / skip — one prompt at a time, with an apply-to-all for the rest of the drop, so 150 colliding files can't stack 150 modals.
+- **A file manager, not a list.** Rows select — click, cmd/ctrl-click, checkbox — and a command bar offers only what the selection can actually carry out: rename needs exactly one item, download needs exactly one file (there is no archive endpoint, and a button that silently downloaded one of five would be a lie), copy is files-only because the server refuses a folder copy.
+- **Move and copy**, either through a destination picker that walks one folder at a time, or by dragging rows onto a folder row or a breadcrumb ancestor. A copy is a metadata copy — it points at the same stored blob, so it costs a row, not the bytes.
+- **A storage meter** in the rail that counts the same bytes the upload path counts when it decides whether to refuse — a meter that disagreed with the refusal would be worse than none.
 - **Accounts** with email verification, Argon2id password hashing, durable rate limits and an Argon2 concurrency semaphore.
-- **Folders, trash with restore and purge, name search, downloads** through short-lived presigned GETs that force `Content-Disposition: attachment`, over objects deliberately stored with no content type — so even a partial response can't render as HTML.
+- **Folders, trash with restore and purge, name search from the chrome** (the query lives in the URL, so a search is a location rather than a mode)**, downloads** through short-lived presigned GETs that force `Content-Disposition: attachment`, over objects deliberately stored with no content type — so even a partial response can't render as HTML.
 - **Garbage collection** of unreferenced blobs and abandoned multipart uploads, on an in-process hourly ticker with a pass at startup.
-- **Storage limits** that actually bind: a per-file maximum, a per-user quota, and a service-wide stored-bytes cap checked before a session is created.
+- **Storage limits** that actually bind: a per-file maximum, a per-user quota, and a service-wide stored-bytes cap checked before a session is created. On the deployment above those are 2 GB, 3 GB and 8 GB — the last one is the object store's spend control, since the store itself has none.
 
 ## What it does not do
 
@@ -25,10 +28,11 @@ Named plainly, because a portfolio project that overstates itself is worse than 
 
 - **No sharing.** No share links, no public pages, no permissions beyond "the owner". The schema has tables for it; there are no endpoints and no UI.
 - **No previews or thumbnails.** Files go in and come out as bytes.
-- **No password reset**, no session management screen, no move/copy/rename in the UI, no grid view, no multi-select.
+- **No password reset.** If you forget it, the account is gone — this is the next thing being built.
+- **No grid view, no context menus, no folder item counts, no sortable columns, no session management screen.**
 - **No mobile app, no CLI, no public API tokens.**
 
-Sharing and previews are the next things worth building. Nothing above is stubbed or half-wired — it is simply not there.
+Password reset, then sharing, then previews are the next things worth building. Nothing above is stubbed or half-wired — it is simply not there.
 
 ## How the resume actually works
 
