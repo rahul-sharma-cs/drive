@@ -26,6 +26,16 @@ const (
 	GiB int64 = 1 << 30
 )
 
+// Decimal units, for the sizes a person is quoted rather than the ones a
+// buffer is cut to. Part sizes stay binary because S3's 5 MiB floor is binary;
+// quotas and file limits are decimal because that is what "2 GB of storage"
+// means everywhere a user has seen the phrase.
+const (
+	KB int64 = 1000
+	MB int64 = 1000 * KB
+	GB int64 = 1000 * MB
+)
+
 // DefaultS3Region is Garage's s3_api.s3_region from garage.toml; a mismatch
 // signs requests the store then rejects with SignatureDoesNotMatch. R2 wants
 // "auto", set through DRIVE_S3_REGION.
@@ -299,8 +309,12 @@ func reachHTTP(ctx context.Context, endpoint string) error {
 	return nil
 }
 
-// ParseSize parses a byte size: a plain byte count ("104857600") or a value
-// with a KiB/MiB/GiB suffix ("100MiB").
+// ParseSize parses a byte size: a plain byte count ("104857600"), a binary
+// suffix ("100MiB") or a decimal one ("2GB").
+//
+// The binary suffixes are matched first and the bare "B" last, because every
+// suffix here ends in one: testing "B" early would strip it off "100MiB" and
+// leave "100Mi" to fail as a number.
 func ParseSize(s string) (int64, error) {
 	t := strings.TrimSpace(s)
 	if t == "" {
@@ -311,7 +325,7 @@ func ParseSize(s string) (int64, error) {
 	for _, u := range []struct {
 		suffix string
 		mult   int64
-	}{{"KIB", KiB}, {"MIB", MiB}, {"GIB", GiB}, {"B", 1}} {
+	}{{"KIB", KiB}, {"MIB", MiB}, {"GIB", GiB}, {"KB", KB}, {"MB", MB}, {"GB", GB}, {"B", 1}} {
 		if strings.HasSuffix(strings.ToUpper(t), u.suffix) {
 			unit = u.mult
 			t = strings.TrimSpace(t[:len(t)-len(u.suffix)])
@@ -321,7 +335,7 @@ func ParseSize(s string) (int64, error) {
 
 	n, err := strconv.ParseInt(t, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid size %q: want bytes or a KiB/MiB/GiB value", s)
+		return 0, fmt.Errorf("invalid size %q: want bytes, or a KiB/MiB/GiB or KB/MB/GB value", s)
 	}
 	if n < 0 {
 		return 0, fmt.Errorf("invalid size %q: must not be negative", s)

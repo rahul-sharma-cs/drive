@@ -89,14 +89,19 @@ func (s *Server) withinCapacity(w http.ResponseWriter, r *http.Request, store *u
 
 // humanBytes renders a byte count the way a limit should read in a message to a
 // person: whole units, no more precision than the number deserves.
+//
+// Decimal, matching the browser's own formatter and the quotas as they are
+// configured. A refusal that quoted 2 GiB against a meter reading 2 GB would
+// make the user do arithmetic to find out which of the two numbers is the one
+// that just stopped them.
 func humanBytes(n int64) string {
 	switch {
-	case n >= config.GiB:
-		return fmt.Sprintf("%.3g GiB", float64(n)/float64(config.GiB))
-	case n >= config.MiB:
-		return fmt.Sprintf("%.3g MiB", float64(n)/float64(config.MiB))
-	case n >= config.KiB:
-		return fmt.Sprintf("%.3g KiB", float64(n)/float64(config.KiB))
+	case n >= config.GB:
+		return fmt.Sprintf("%.3g GB", float64(n)/float64(config.GB))
+	case n >= config.MB:
+		return fmt.Sprintf("%.3g MB", float64(n)/float64(config.MB))
+	case n >= config.KB:
+		return fmt.Sprintf("%.3g KB", float64(n)/float64(config.KB))
 	default:
 		return fmt.Sprintf("%d bytes", n)
 	}

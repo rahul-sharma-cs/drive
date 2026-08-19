@@ -69,7 +69,7 @@ describe('file browser', () => {
       '/folders/f1',
     )
     expect(screen.getByText('notes.txt')).toBeTruthy()
-    expect(screen.getByText('2.0 KiB')).toBeTruthy()
+    expect(screen.getByText('2.0 KB')).toBeTruthy()
     // Download is a navigation to the 302, never a fetch: the bytes come from
     // the object store directly and must not pass through this app.
     const download = screen.getByRole('link', { name: 'Download' })

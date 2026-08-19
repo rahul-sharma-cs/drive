@@ -22,9 +22,14 @@ func TestParseSize(t *testing.T) {
 		{in: "104857600", want: 100 * MiB},
 		{in: "512KiB", want: 512 * KiB},
 		{in: "2GiB", want: 2 * GiB},
+		// Decimal suffixes: what a quota is quoted in. "MB" must not be
+		// mistaken for the bare "B" case, which would leave "10M" to parse.
+		{in: "10MB", want: 10 * MB},
+		{in: "3GB", want: 3 * GB},
+		{in: "512kb", want: 512 * KB},
+		{in: "2GB", want: 2_000_000_000},
 		{in: "0", want: 0},
 		{in: "", wantErr: true},
-		{in: "10MB", wantErr: true},
 		{in: "abc", wantErr: true},
 		{in: "-5MiB", wantErr: true},
 	}
