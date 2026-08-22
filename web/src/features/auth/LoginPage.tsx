@@ -11,13 +11,18 @@ import {
   inputClass,
   secondaryButtonClass,
 } from '../../ui/controls'
-import { emailHint, invalidEmailClass, isPlausibleEmail } from './email'
+import { emailHint, isPlausibleEmail } from './email'
+import { invalidFieldClass } from './fields'
 import { useSetSession } from './session'
 
 export function LoginPage() {
   const [email, setEmail] = useState('')
   const [emailJudged, setEmailJudged] = useState(false)
   const [password, setPassword] = useState('')
+  // A refusal describes the pair that was sent. Editing either half of it makes
+  // the refusal a statement about credentials nobody has tried yet, so the red
+  // comes off the moment the person starts fixing it.
+  const [refusalDismissed, setRefusalDismissed] = useState(false)
   const navigate = useNavigate()
   const setSession = useSetSession()
 
@@ -41,6 +46,19 @@ export function LoginPage() {
   // message would quietly stop offering the one button that fixes it.
   const unverified = mutation.error instanceof ApiError && mutation.error.code === 'email_unverified'
 
+  // The one refusal that is about the two fields themselves. It is deliberately
+  // the same answer for a wrong password and an address with no account -- the
+  // server will not say which, and neither will this screen -- so both fields
+  // carry it and the message sits under the pair rather than naming one of
+  // them. A spent budget (429) is not this: the credentials were never judged,
+  // so nothing turns red for it.
+  const refused = mutation.error instanceof ApiError && mutation.error.code === 'unauthorized'
+  const showRefusal = refused && !refusalDismissed
+
+  // Both fields stop being wrong together, because it was never established
+  // which of them was.
+  const clearRefusal = () => setRefusalDismissed(true)
+
   return (
     <AuthCard title="Sign in to Drive">
       <form
@@ -55,6 +73,9 @@ export function LoginPage() {
           // submit with a bad address in it would just quietly do nothing.
           setEmailJudged(true)
           if (!isPlausibleEmail(email)) return
+          // A fresh attempt: whatever the last one was told stops being
+          // dismissed, so a second wrong password paints the fields again.
+          setRefusalDismissed(false)
           mutation.mutate()
         }}
       >
@@ -62,18 +83,19 @@ export function LoginPage() {
           <label className={fieldClass}>
             Email
             <input
-              className={`${inputClass} ${invalidEmailClass}`}
+              className={`${inputClass} ${invalidFieldClass}`}
               type="email"
               name="email"
               autoComplete="email"
               inputMode="email"
               spellCheck={false}
               required
-              aria-invalid={emailBad || undefined}
+              aria-invalid={emailBad || showRefusal || undefined}
               aria-describedby={emailBad ? 'login-email-hint' : undefined}
               value={email}
               onChange={(e) => {
                 setEmail(e.target.value)
+                clearRefusal()
                 // Whatever the resend last said — a link is on its way, or the
                 // mailer refused — was about the address that was in this field
                 // at the time. Once it is edited, both are claims about somebody
@@ -93,19 +115,35 @@ export function LoginPage() {
             </p>
           )}
         </div>
-        <label className={fieldClass}>
-          Password
-          <input
-            className={inputClass}
-            type="password"
-            name="password"
-            autoComplete="current-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </label>
-        <FormError error={mutation.error} />
+        <div className="flex flex-col gap-1.5">
+          <label className={fieldClass}>
+            Password
+            <input
+              className={`${inputClass} ${invalidFieldClass}`}
+              type="password"
+              name="password"
+              autoComplete="current-password"
+              required
+              aria-invalid={showRefusal || undefined}
+              aria-describedby={showRefusal ? 'login-refusal' : undefined}
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value)
+                clearRefusal()
+              }}
+            />
+          </label>
+          {showRefusal && (
+            <p id="login-refusal" role="alert" className="text-[13px] text-danger">
+              {(mutation.error as ApiError).message}
+            </p>
+          )}
+        </div>
+        {/* The refusal above owns its own message. Everything else -- a spent
+            budget, an unverified address, a server that fell over -- still
+            speaks in the form's own voice, uncoloured and unattached to a
+            field. */}
+        {!refused && <FormError error={mutation.error} />}
         {unverified &&
           (resend.isSuccess ? (
             <p className="text-[13px] text-ink-2">

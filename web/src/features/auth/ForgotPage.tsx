@@ -4,7 +4,8 @@ import { Link } from 'react-router'
 
 import { ApiError, requestReset } from '../../lib/api'
 import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
-import { emailHint, invalidEmailClass, isPlausibleEmail } from './email'
+import { emailHint, isPlausibleEmail } from './email'
+import { invalidFieldClass } from './fields'
 
 /**
  * `/forgot` — ask for a reset link.
@@ -64,7 +65,7 @@ export function ForgotPage() {
           <label className={fieldClass}>
             Email
             <input
-              className={`${inputClass} ${invalidEmailClass}`}
+              className={`${inputClass} ${invalidFieldClass}`}
               type="email"
               name="email"
               autoComplete="email"

@@ -304,3 +304,30 @@ describe('the sessions section', () => {
     expect(client.getQueryData(['children', 'root-1'])).toBeUndefined()
   })
 })
+
+describe('the new-password rule on the account screen', () => {
+  it('states the rule, turns it red on a short password, and spends no budget', async () => {
+    const { calls } = renderAccount([{ method: 'POST', path: '/api/auth/password', status: 204 }])
+
+    const field = screen.getByLabelText('New password')
+    // On screen from the start, quiet.
+    expect(screen.getByText('At least 8 characters').className).toContain('text-ink-3')
+    expect(field.getAttribute('aria-describedby')).toBe('account-password-hint')
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+
+    await userEvent.type(screen.getByLabelText('Current password'), 'old-passphrase')
+    await userEvent.type(field, 'short')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'short')
+    await userEvent.click(screen.getByRole('button', { name: 'Change password' }))
+
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByText('At least 8 characters').className).toContain('text-danger')
+    // This endpoint reaches Argon2 twice and is rate-limited for it. A password
+    // the server is going to refuse on length should never cost a request.
+    expect(calls.filter((c) => c.url === '/api/auth/password')).toHaveLength(0)
+
+    await userEvent.type(field, 'ened')
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.getByText('At least 8 characters').className).toContain('text-ink-3')
+  })
+})

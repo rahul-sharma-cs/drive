@@ -4,6 +4,8 @@ import { Link, useSearchParams } from 'react-router'
 
 import { ApiError, confirmReset } from '../../lib/api'
 import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
+import { invalidFieldClass } from './fields'
+import { isAcceptablePassword, passwordHint } from './password'
 
 /**
  * `/reset?token=…` — the landing page for the link in the reset mail. The path
@@ -21,8 +23,11 @@ export function ResetPage() {
   const token = (params.get('token') ?? '').trim()
 
   const [password, setPassword] = useState('')
+  const [passwordJudged, setPasswordJudged] = useState(false)
   const [confirm, setConfirm] = useState('')
   const [mismatch, setMismatch] = useState(false)
+
+  const passwordBad = passwordJudged && !isAcceptablePassword(password)
 
   const mutation = useMutation({ mutationFn: () => confirmReset(token, password) })
 
@@ -65,8 +70,13 @@ export function ResetPage() {
     <AuthCard title="Set a new password">
       <form
         className="flex flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-card"
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
+          // The length rule first: a password too short to be accepted is worth
+          // saying so about even if the repeat below it also disagrees.
+          setPasswordJudged(true)
+          if (!isAcceptablePassword(password)) return
           if (password !== confirm) {
             setMismatch(true)
             mutation.reset()
@@ -76,21 +86,34 @@ export function ResetPage() {
           mutation.mutate()
         }}
       >
-        <label className={fieldClass}>
-          New password
-          <input
-            className={inputClass}
-            type="password"
-            name="new_password"
-            autoComplete="new-password"
-            required
-            value={password}
-            onChange={(e) => {
-              setPassword(e.target.value)
-              setMismatch(false)
-            }}
-          />
-        </label>
+        <div className="flex flex-col gap-1.5">
+          <label className={fieldClass}>
+            New password
+            <input
+              className={`${inputClass} ${invalidFieldClass}`}
+              type="password"
+              name="new_password"
+              autoComplete="new-password"
+              required
+              aria-invalid={passwordBad || undefined}
+              aria-describedby="reset-password-hint"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value)
+                setMismatch(false)
+              }}
+              onBlur={() => {
+                if (password !== '') setPasswordJudged(true)
+              }}
+            />
+          </label>
+          <p
+            id="reset-password-hint"
+            className={`text-[13px] ${passwordBad ? 'text-danger' : 'text-ink-3'}`}
+          >
+            {passwordHint(password)}
+          </p>
+        </div>
         <label className={fieldClass}>
           Confirm new password
           <input

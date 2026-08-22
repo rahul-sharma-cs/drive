@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 
 import { changePassword } from '../../lib/api'
 import { FormError } from '../../ui/controls'
+import { isAcceptablePassword, passwordHint } from '../auth/password'
 import { sessionsKey } from './SessionsSection'
 
 /**
@@ -23,6 +24,9 @@ export function PasswordSection() {
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
   const [mismatch, setMismatch] = useState(false)
+  const [nextJudged, setNextJudged] = useState(false)
+
+  const nextBad = nextJudged && !isAcceptablePassword(next)
 
   const change = useMutation({
     mutationFn: () => changePassword(current, next),
@@ -30,6 +34,7 @@ export function PasswordSection() {
       setCurrent('')
       setNext('')
       setConfirm('')
+      setNextJudged(false)
       // The server revoked every other session inside the same transaction, so
       // the list below this form is now describing devices that no longer have
       // a session — with a live Revoke button on each. It has to be re-read, not
@@ -50,8 +55,18 @@ export function PasswordSection() {
 
       <form
         className="mt-4 flex flex-col gap-4"
+        // No `noValidate` here, unlike the signed-out forms: this form has a
+        // "current password" field, and letting an empty one through to the
+        // server would spend the change budget -- the endpoint reaches Argon2
+        // twice and is rate-limited for it -- on a request that cannot succeed.
+        // The browser's own required check is doing useful work; the length
+        // rule below is about a password that is filled in and still too short.
         onSubmit={(e) => {
           e.preventDefault()
+          // The length rule first: a new password too short to be accepted is
+          // worth saying so about even if the repeat below it also disagrees.
+          setNextJudged(true)
+          if (!isAcceptablePassword(next)) return
           if (next !== confirm) {
             setMismatch(true)
             change.reset()
@@ -73,20 +88,36 @@ export function PasswordSection() {
           />
         </label>
 
-        <label className="flex flex-col gap-1.5 text-[13px] font-medium text-ink-2">
-          New password
-          <Input
-            type="password"
-            name="new_password"
-            autoComplete="new-password"
-            required
-            value={next}
-            onChange={(e) => {
-              setNext(e.target.value)
-              setMismatch(false)
-            }}
-          />
-        </label>
+        <div className="flex flex-col gap-1.5">
+          <label className="flex flex-col gap-1.5 text-[13px] font-medium text-ink-2">
+            New password
+            <Input
+              type="password"
+              name="new_password"
+              autoComplete="new-password"
+              required
+              aria-invalid={nextBad || undefined}
+              aria-describedby="account-password-hint"
+              value={next}
+              onChange={(e) => {
+                setNext(e.target.value)
+                setMismatch(false)
+              }}
+              onBlur={() => {
+                if (next !== '') setNextJudged(true)
+              }}
+            />
+          </label>
+          {/* Outside the label on purpose: inside it, this line would be read
+              out as part of the field's name. The Input already carries its own
+              aria-invalid treatment, so only the colour is set here. */}
+          <p
+            id="account-password-hint"
+            className={`text-[13px] ${nextBad ? 'text-danger' : 'text-ink-3'}`}
+          >
+            {passwordHint(next)}
+          </p>
+        </div>
 
         <label className="flex flex-col gap-1.5 text-[13px] font-medium text-ink-2">
           Confirm new password

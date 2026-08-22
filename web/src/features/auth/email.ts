@@ -35,12 +35,3 @@ export function emailHint(value: string): string {
     ? 'Enter an email address'
     : 'That doesn’t look like an email address — check the part after the @'
 }
-
-/**
- * The danger treatment for the field itself, layered onto `inputClass`. Driven
- * off `aria-invalid` rather than a conditional class so the assistive-tech
- * signal and the visible one cannot come apart.
- */
-export const invalidEmailClass =
-  'aria-invalid:border-danger aria-invalid:ring-2 aria-invalid:ring-danger/20 ' +
-  'aria-invalid:focus:border-danger aria-invalid:focus:ring-danger/20'

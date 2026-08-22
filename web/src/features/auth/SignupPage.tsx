@@ -4,17 +4,21 @@ import { Link } from 'react-router'
 
 import { signup } from '../../lib/api'
 import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
-import { emailHint, invalidEmailClass, isPlausibleEmail } from './email'
+import { emailHint, isPlausibleEmail } from './email'
+import { invalidFieldClass } from './fields'
+import { isAcceptablePassword, passwordHint } from './password'
 
 export function SignupPage() {
   const [email, setEmail] = useState('')
   const [emailJudged, setEmailJudged] = useState(false)
   const [password, setPassword] = useState('')
+  const [passwordJudged, setPasswordJudged] = useState(false)
   const [displayName, setDisplayName] = useState('')
 
   // Judged on the way out of the field, not on every keystroke: nobody wants to
   // be told their address is wrong while they are still halfway through it.
   const emailBad = emailJudged && !isPlausibleEmail(email)
+  const passwordBad = passwordJudged && !isAcceptablePassword(password)
 
   const mutation = useMutation({ mutationFn: () => signup(email, password, displayName) })
 
@@ -45,10 +49,11 @@ export function SignupPage() {
         noValidate
         onSubmit={(e) => {
           e.preventDefault()
-          // Pressing the button counts as judging the field — otherwise a
+          // Pressing the button counts as judging the fields — otherwise a
           // submit with a bad address in it would just quietly do nothing.
           setEmailJudged(true)
-          if (!isPlausibleEmail(email)) return
+          setPasswordJudged(true)
+          if (!isPlausibleEmail(email) || !isAcceptablePassword(password)) return
           mutation.mutate()
         }}
       >
@@ -67,7 +72,7 @@ export function SignupPage() {
           <label className={fieldClass}>
             Email
             <input
-              className={`${inputClass} ${invalidEmailClass}`}
+              className={`${inputClass} ${invalidFieldClass}`}
               type="email"
               name="email"
               autoComplete="email"
@@ -91,18 +96,34 @@ export function SignupPage() {
             </p>
           )}
         </div>
-        <label className={fieldClass}>
-          Password
-          <input
-            className={inputClass}
-            type="password"
-            name="password"
-            autoComplete="new-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </label>
+        <div className="flex flex-col gap-1.5">
+          <label className={fieldClass}>
+            Password
+            <input
+              className={`${inputClass} ${invalidFieldClass}`}
+              type="password"
+              name="password"
+              autoComplete="new-password"
+              required
+              aria-invalid={passwordBad || undefined}
+              aria-describedby="signup-password-hint"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onBlur={() => {
+                if (password !== '') setPasswordJudged(true)
+              }}
+            />
+          </label>
+          {/* The rule, on screen before it is broken. It is the same line
+              either way — only its colour changes — so nothing appears or
+              moves under the field at the moment the person gets it wrong. */}
+          <p
+            id="signup-password-hint"
+            className={`text-[13px] ${passwordBad ? 'text-danger' : 'text-ink-3'}`}
+          >
+            {passwordHint(password)}
+          </p>
+        </div>
         <FormError error={mutation.error} />
         <button className={buttonClass} type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? 'Creating…' : 'Create account'}

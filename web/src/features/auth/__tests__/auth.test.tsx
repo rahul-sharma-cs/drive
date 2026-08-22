@@ -531,3 +531,181 @@ describe('an address that cannot be an email', () => {
     expect(screen.queryByText(/look like an email address/i)).toBeNull()
   })
 })
+
+/**
+ * The password half of the same idea: say the rule before it is broken, and
+ * when a sign-in is refused, colour the two fields the refusal is about.
+ */
+describe('a password the server would refuse', () => {
+  it('shows the rule on /signup, turns it red when it is broken, and sends nothing', async () => {
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/signup', body: { status: 'ok' } }])
+    renderApp(<SignupPage />)
+
+    const field = screen.getByLabelText(/^password$/i)
+    // The rule is on screen from the start, quiet — not sprung on somebody
+    // after they have already got it wrong.
+    const hint = screen.getByText('At least 8 characters')
+    expect(hint.className).toContain('text-ink-3')
+    expect(field.getAttribute('aria-describedby')).toBe(hint.getAttribute('id'))
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+
+    await userEvent.type(screen.getByLabelText(/name/i), 'Someone')
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone@example.test')
+    await userEvent.type(field, 'short')
+    await userEvent.tab()
+
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByText('At least 8 characters').className).toContain('text-danger')
+
+    await userEvent.click(screen.getByRole('button', { name: /create account/i }))
+    expect(calls).toHaveLength(0)
+
+    // Nine characters now, and the field stops being wrong the moment it is.
+    await userEvent.type(field, 'ened')
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.getByText('At least 8 characters').className).toContain('text-ink-3')
+
+    await userEvent.click(screen.getByRole('button', { name: /create account/i }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].body).toEqual({
+      email: 'someone@example.test',
+      password: 'shortened',
+      display_name: 'Someone',
+    })
+  })
+})
+
+describe('a refused sign-in', () => {
+  const refusal = {
+    code: 'unauthorized',
+    message: 'that email and password combination is not right',
+  }
+
+  it('colours both fields and puts the server’s own words under the password', async () => {
+    stubFetch([{ method: 'POST', path: '/api/auth/login', status: 401, body: refusal }])
+    renderApp(<LoginPage />)
+
+    const email = screen.getByLabelText(/email/i)
+    const password = screen.getByLabelText(/password/i)
+    await userEvent.type(email, 'someone@example.test')
+    await userEvent.type(password, 'not-the-password')
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    // Both, because the server did not say which one was wrong -- and it never
+    // will: "no such account" would be an account-existence oracle.
+    await waitFor(() => expect(email.getAttribute('aria-invalid')).toBe('true'))
+    expect(password.getAttribute('aria-invalid')).toBe('true')
+
+    const message = screen.getByText(refusal.message)
+    expect(password.getAttribute('aria-describedby')).toBe(message.getAttribute('id'))
+    expect(screen.queryByText(/no such account|not registered|unknown email/i)).toBeNull()
+    // Once, not twice: the form-level error must not restate what the field
+    // already says.
+    expect(screen.getAllByText(refusal.message)).toHaveLength(1)
+  })
+
+  it('lets go of the red as soon as either field is edited', async () => {
+    stubFetch([{ method: 'POST', path: '/api/auth/login', status: 401, body: refusal }])
+    renderApp(<LoginPage />)
+
+    const email = screen.getByLabelText(/email/i)
+    const password = screen.getByLabelText(/password/i)
+    await userEvent.type(email, 'someone@example.test')
+    await userEvent.type(password, 'not-the-password')
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await waitFor(() => expect(password.getAttribute('aria-invalid')).toBe('true'))
+
+    // Editing the password: that refusal was about a pair that no longer
+    // exists, so it stops being shown about this one.
+    await userEvent.type(password, '!')
+    expect(password.getAttribute('aria-invalid')).toBeNull()
+    expect(email.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.queryByText(refusal.message)).toBeNull()
+  })
+
+  it('lets go of the red when the email is the half being fixed', async () => {
+    stubFetch([{ method: 'POST', path: '/api/auth/login', status: 401, body: refusal }])
+    renderApp(<LoginPage />)
+
+    const email = screen.getByLabelText(/email/i)
+    const password = screen.getByLabelText(/password/i)
+    await userEvent.type(email, 'someone@example.test')
+    await userEvent.type(password, 'not-the-password')
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await waitFor(() => expect(email.getAttribute('aria-invalid')).toBe('true'))
+
+    await userEvent.type(email, 'x')
+    expect(email.getAttribute('aria-invalid')).toBeNull()
+    expect(password.getAttribute('aria-invalid')).toBeNull()
+  })
+
+  it('stays calm for a spent budget, which says nothing about the credentials', async () => {
+    stubFetch([
+      {
+        method: 'POST',
+        path: '/api/auth/login',
+        status: 429,
+        body: {
+          code: 'rate_limited',
+          message: 'too many sign-in attempts for this address. Try again in a few minutes.',
+        },
+      },
+    ])
+    renderApp(<LoginPage />)
+
+    const email = screen.getByLabelText(/email/i)
+    const password = screen.getByLabelText(/password/i)
+    await userEvent.type(email, 'someone@example.test')
+    await userEvent.type(password, 'hunter2hunter2')
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    expect(await screen.findByText(/too many sign-in attempts/i)).toBeTruthy()
+    // The credentials were never judged, so nothing about them is wrong yet.
+    expect(email.getAttribute('aria-invalid')).toBeNull()
+    expect(password.getAttribute('aria-invalid')).toBeNull()
+  })
+
+  it('does not colour the fields for an unverified address, whose password was right', async () => {
+    stubFetch([
+      {
+        method: 'POST',
+        path: '/api/auth/login',
+        status: 401,
+        body: { code: 'email_unverified', message: 'verify your email first: check your inbox' },
+      },
+    ])
+    renderApp(<LoginPage />)
+
+    const email = screen.getByLabelText(/email/i)
+    const password = screen.getByLabelText(/password/i)
+    await userEvent.type(email, 'someone@example.test')
+    await userEvent.type(password, 'hunter2hunter2')
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    // This one is also a 401, and it means the opposite: the credentials were
+    // accepted. Painting them red would be telling somebody to fix what they
+    // got right.
+    expect(await screen.findByRole('button', { name: 'Resend verification' })).toBeTruthy()
+    expect(email.getAttribute('aria-invalid')).toBeNull()
+    expect(password.getAttribute('aria-invalid')).toBeNull()
+  })
+})
+
+describe('/reset', () => {
+  it('holds a too-short new password back before it costs the link a redemption', async () => {
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/password-reset/confirm', status: 204 }])
+    renderApp(<ResetPage />, { route: '/reset?token=tok-1' })
+
+    const field = screen.getByLabelText('New password')
+    expect(screen.getByText('At least 8 characters').className).toContain('text-ink-3')
+
+    await userEvent.type(field, 'short')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'short')
+    await userEvent.click(screen.getByRole('button', { name: 'Set password' }))
+
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByText('At least 8 characters').className).toContain('text-danger')
+    // A reset token is spent by the attempt, not by the outcome.
+    expect(calls).toHaveLength(0)
+  })
+})
