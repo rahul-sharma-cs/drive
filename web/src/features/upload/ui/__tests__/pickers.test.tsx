@@ -14,17 +14,23 @@ import { openPicker, UploadPickers } from '../pickers'
 const enqueue = vi.fn()
 vi.mock('../engineStore', () => ({ uploadActions: { enqueue: (...args: unknown[]) => enqueue(...args) } }))
 
-/** Every case needs a client: a picked tree re-reads the folder when it lands. */
+/**
+ * Every case needs a client: a picked tree re-reads the folder when it lands.
+ *
+ * `moveTo` is the app going somewhere else while the OS chooser is still up —
+ * a 401 bouncing through `RequireAuth`, or another tab signing out.
+ */
 function renderPickers(folderId = 'folder-42') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const view = render(
+  const tree = (id: string) => (
     <QueryClientProvider client={client}>
-      <CurrentFolderProvider folderId={folderId}>
+      <CurrentFolderProvider folderId={id}>
         <UploadPickers />
       </CurrentFolderProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
-  return { client, ...view }
+  const view = render(tree(folderId))
+  return { client, ...view, moveTo: (id: string) => view.rerender(tree(id)) }
 }
 
 beforeEach(() => {
@@ -91,9 +97,39 @@ describe('the file pickers', () => {
     const files = vi.spyOn(screen.getByLabelText('Upload files'), 'click')
     const folder = vi.spyOn(screen.getByLabelText('Upload folder'), 'click')
 
-    openPicker('folder')
+    openPicker('folder', 'folder-42')
 
     expect(folder).toHaveBeenCalledTimes(1)
     expect(files).not.toHaveBeenCalled()
+  })
+
+  it('enqueues into the folder the picker was opened on, not the one on screen when it closes', async () => {
+    const { moveTo } = renderPickers('f9')
+
+    openPicker('files', 'f9')
+    moveTo('root-1')
+
+    const one = new File(['a'], 'one.txt')
+    await userEvent.upload(screen.getByLabelText('Upload files'), [one])
+
+    // The `change` fires an unbounded time after the click — a person can sit in
+    // the OS chooser for a minute — and the destination they chose is the one
+    // that was on screen when they opened it.
+    expect(enqueue).toHaveBeenCalledWith(one, 'f9')
+  })
+
+  it('re-reads the folder the folder picker was opened on, not the one it landed back in', async () => {
+    const { client, moveTo } = renderPickers('f9')
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    openPicker('folder', 'f9')
+    moveTo('root-1')
+
+    const nested = new File(['x'], 'report.pdf')
+    Object.defineProperty(nested, 'webkitRelativePath', { value: 'tree/report.pdf' })
+    await userEvent.upload(screen.getByLabelText('Upload folder'), [nested])
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['children', 'f9'] }))
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['children', 'root-1'] })
   })
 })

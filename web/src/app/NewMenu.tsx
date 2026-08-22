@@ -22,10 +22,12 @@ import { useCurrentFolder } from './CurrentFolder'
  * rail, on every screen — rather than three controls that used to sit on the
  * folder page and vanish the moment you searched for something.
  *
- * All three land in `useCurrentFolder()`, so the menu itself holds no notion of
- * a destination. What changes off a folder screen is only the wording: on
- * search results there is no "here", so the items name where the files will
- * actually go.
+ * All three land in `useCurrentFolder()` — the menu reads the destination, it
+ * does not decide it — and the two uploads hand it to the picker at the click,
+ * because that is the last moment it is still certainly the folder the person
+ * is looking at. What changes off a folder screen is only the wording: on search
+ * results there is no "here", so the items name where the files will actually
+ * go.
  */
 export function NewMenu() {
   const folderId = useCurrentFolder()
@@ -50,11 +52,11 @@ export function NewMenu() {
             New folder
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => openPicker('files')}>
+          <DropdownMenuItem onSelect={() => openPicker('files', folderId)}>
             <Upload />
             {here ? 'Upload files' : 'Upload files to My Drive'}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => openPicker('folder')}>
+          <DropdownMenuItem onSelect={() => openPicker('folder', folderId)}>
             <FolderUp />
             {here ? 'Upload folder' : 'Upload folder to My Drive'}
           </DropdownMenuItem>

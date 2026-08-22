@@ -1,5 +1,4 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useRef } from 'react'
 import { toast } from 'sonner'
 
 import { useCurrentFolder } from '../../../app/CurrentFolder'
@@ -20,12 +19,40 @@ type PickerKind = 'files' | 'folder'
 const inputs: Record<PickerKind, HTMLInputElement | null> = { files: null, folder: null }
 
 /**
- * Open the OS file chooser. Must be called synchronously from a real user
- * gesture — an `await` first spends the transient activation and the browser
+ * Where each picker's next batch is going, written when the chooser opens and
+ * taken when it closes.
+ *
+ * The `change` event fires an unbounded time after the click — a person can sit
+ * in the OS chooser for a minute, and the app keeps running behind it: a 401
+ * bounces through `RequireAuth`, another tab signs out, a link is followed on a
+ * second window. The destination has to be the folder that was on screen when
+ * they asked for the chooser, so it is captured then rather than read back out
+ * of the app afterwards.
+ */
+const pending: Record<PickerKind, string | null> = { files: null, folder: null }
+
+/**
+ * Open the OS file chooser on `target`. Must be called synchronously from a real
+ * user gesture — an `await` first spends the transient activation and the browser
  * silently ignores the click.
  */
-export function openPicker(kind: PickerKind): void {
+export function openPicker(kind: PickerKind, target: string): void {
+  pending[kind] = target
   inputs[kind]?.click()
+}
+
+/**
+ * The destination for the batch that just arrived, consumed as it is read.
+ *
+ * The fallback is not a convenience: the inputs are `hidden`, so nothing a
+ * person can do reaches them except through `openPicker` — but automation drives
+ * them directly (`setInputFiles`), and for those the folder on screen is the
+ * only answer there is.
+ */
+function takeTarget(kind: PickerKind, onScreen: string): string {
+  const target = pending[kind] ?? onScreen
+  pending[kind] = null
+  return target
 }
 
 const sink: TraverseSink = {
@@ -78,12 +105,6 @@ export function UploadPickers() {
   const folderId = useCurrentFolder()
   const ingestInto = useIngest()
 
-  // The picker's `change` fires an unbounded time after the click — a person can
-  // sit in the OS chooser for a minute — but it fires on whatever folder was
-  // current when they opened it, which is the one they meant.
-  const current = useRef(folderId)
-  current.current = folderId
-
   return (
     <>
       <input
@@ -98,7 +119,7 @@ export function UploadPickers() {
         aria-label="Upload files"
         className="hidden"
         onChange={(e) => {
-          const target = current.current
+          const target = takeTarget('files', folderId)
           const files = e.target.files
           if (files) for (const file of files) uploadActions.enqueue(file, target)
           e.target.value = ''
@@ -117,7 +138,7 @@ export function UploadPickers() {
         // Not in React's attribute types; the DOM property is what Chromium reads.
         {...{ webkitdirectory: '' }}
         onChange={(e) => {
-          const target = current.current
+          const target = takeTarget('folder', folderId)
           const files = e.target.files
           if (files) void ingestInto(walkFileList(files), target)
           e.target.value = ''
