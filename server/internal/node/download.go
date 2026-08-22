@@ -18,13 +18,18 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Download is everything the download endpoint needs: which object to sign, and
-// the name to hand the browser.
+// Download is everything the download and preview endpoints need: which object
+// to sign, the name to hand the browser, and the MIME the uploader declared.
+//
+// Mime is untrusted -- it is whatever the client sent at create time -- and is
+// empty when the column is null. Nothing may serve it back as a content type;
+// it is a key into upload.PreviewContentType and nothing else.
 type Download struct {
 	NodeID    uuid.UUID
 	Name      string
 	Size      int64
 	ObjectKey string
+	Mime      string
 }
 
 // Download resolves a file node the caller owns to its stored object.
@@ -35,14 +40,14 @@ type Download struct {
 // signing a URL for bytes that are not there.
 func (s *Store) Download(ctx context.Context, ownerID, id uuid.UUID) (Download, error) {
 	const q = `
-		SELECT n.id, n.name, b.size, b.object_key
+		SELECT n.id, n.name, b.size, b.object_key, COALESCE(n.mime, '')
 		  FROM nodes n
 		  JOIN blobs b ON b.id = n.blob_id
 		 WHERE n.id = $1 AND n.owner_id = $2
 		   AND n.kind = 'file' AND n.deleted_at IS NULL`
 
 	var d Download
-	if err := s.db.QueryRow(ctx, q, id, ownerID).Scan(&d.NodeID, &d.Name, &d.Size, &d.ObjectKey); err != nil {
+	if err := s.db.QueryRow(ctx, q, id, ownerID).Scan(&d.NodeID, &d.Name, &d.Size, &d.ObjectKey, &d.Mime); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Download{}, ErrNotFound
 		}
