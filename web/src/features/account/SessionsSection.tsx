@@ -89,6 +89,12 @@ export function SessionsSection() {
       setSession(null)
       client.clear()
     },
+    // Silence would be the worst answer here: nothing on this screen moves when
+    // the call fails, so a person who pressed the button in the confirmation
+    // dialog is left looking at the same sessions with no idea whether they are
+    // signed in everywhere or nowhere. The dialog stays open on purpose —
+    // trying again is the next thing they will want.
+    onError: (err: unknown) => toast.error((err as Error)?.message ?? 'Could not sign the other devices out'),
   })
 
   const items = sessions.data?.items ?? []

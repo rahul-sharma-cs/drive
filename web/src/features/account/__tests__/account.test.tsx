@@ -254,6 +254,31 @@ describe('the sessions section', () => {
     expect(screen.getByText('Chrome on macOS')).toBeTruthy()
   })
 
+  it('says so when signing out everywhere fails, rather than looking like nothing happened', async () => {
+    const { client } = renderAccount([
+      {
+        method: 'POST',
+        path: '/api/auth/logout-all',
+        status: 500,
+        body: { code: 'internal', message: 'something went wrong on our side' },
+      },
+    ])
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign out everywhere' }))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }))
+
+    // The failure path is invisible on this screen: no row moves, no navigation
+    // happens, the button goes back to how it looked. Without a word from the
+    // app, "every browser is signed out" and "nothing at all happened" look
+    // exactly alike — and one of them is the reason the person pressed it.
+    expect(await screen.findByText('something went wrong on our side')).toBeTruthy()
+    expect(screen.queryByText('login')).toBeNull()
+    expect(client.getQueryData(meKey)).toEqual(user)
+    // Still asking, because trying again is the next thing they will want.
+    expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+
   it('signs out everywhere behind a confirmation, and leaves for the sign-in screen', async () => {
     const { calls, client } = renderAccount([
       { method: 'POST', path: '/api/auth/logout-all', status: 204 },

@@ -2,7 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
-import { confirmReset } from '../../lib/api'
+import { ApiError, confirmReset } from '../../lib/api'
 import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
 
 /**
@@ -25,6 +25,14 @@ export function ResetPage() {
   const [mismatch, setMismatch] = useState(false)
 
   const mutation = useMutation({ mutationFn: () => confirmReset(token, password) })
+
+  // A spent or expired link is the ordinary failure here, and the way out is
+  // another link — not another attempt with the same one. Anything else is not
+  // that: a busy server or a refused budget answers 429, the link in hand is
+  // still good, and sending the person off to /forgot would throw it away for
+  // a failure that had nothing to do with it.
+  const spent =
+    mutation.error instanceof ApiError && mutation.error.status === 422 && mutation.error.code === 'invalid'
 
   if (token === '') {
     return (
@@ -109,9 +117,7 @@ export function ResetPage() {
           {mutation.isPending ? 'Setting…' : 'Set password'}
         </button>
       </form>
-      {mutation.isError && (
-        // A spent or expired link is the ordinary failure here, and the way out
-        // is another link — not another attempt with the same one.
+      {spent && (
         <p className="text-[13px] text-ink-3">
           Reset links expire an hour after they are sent.{' '}
           <Link className="font-medium text-teal hover:underline" to="/forgot">

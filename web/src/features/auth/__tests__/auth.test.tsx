@@ -180,6 +180,59 @@ describe('an unverified account signing in', () => {
     expect(screen.queryByRole('button', { name: 'Resend verification' })).toBeNull()
   })
 
+  it('shows the mailer’s refusal instead of failing back to an unchanged button', async () => {
+    stubFetch([
+      { method: 'POST', path: '/api/auth/login', status: 401, body: refusal },
+      {
+        method: 'POST',
+        path: '/api/auth/resend-verification',
+        status: 429,
+        body: { code: 'rate_limited', message: 'too many requests. Try again later.' },
+      },
+    ])
+    renderApp(<LoginPage />)
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone@example.test')
+    await userEvent.type(screen.getByLabelText(/password/i), 'hunter2hunter2')
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Resend verification' }))
+
+    // A button that fails back to exactly how it looked before the press says
+    // nothing happened, so the person presses it again — against a budget that
+    // has already refused them once.
+    await waitFor(() =>
+      expect(screen.getAllByRole('alert').map((a) => a.textContent)).toContain('too many requests. Try again later.'),
+    )
+
+    await userEvent.clear(screen.getByLabelText(/email/i))
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone-else@example.test')
+    // That refusal was about the mailbox that was in the field at the time.
+    expect(screen.getAllByRole('alert').map((a) => a.textContent)).not.toContain('too many requests. Try again later.')
+  })
+
+  it('stops claiming a link is on its way once the address underneath it changes', async () => {
+    stubFetch([
+      { method: 'POST', path: '/api/auth/login', status: 401, body: refusal },
+      { method: 'POST', path: '/api/auth/resend-verification', body: { status: 'ok' } },
+    ])
+    renderApp(<LoginPage />)
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone@example.test')
+    await userEvent.type(screen.getByLabelText(/password/i), 'hunter2hunter2')
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Resend verification' }))
+    expect(await screen.findByText(/a fresh link is on its way/i)).toBeTruthy()
+
+    await userEvent.clear(screen.getByLabelText(/email/i))
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone-else@example.test')
+
+    // Someone correcting a typo in the address is the likeliest person to be
+    // here. Left standing, that sentence tells them a link is on its way to the
+    // address they have just typed — and hides the button that would send one.
+    expect(screen.queryByText(/a fresh link is on its way/i)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Resend verification' })).toBeTruthy()
+  })
+
   it('offers nothing to resend when the credentials were simply wrong', async () => {
     stubFetch([
       {
@@ -317,6 +370,31 @@ describe('/reset', () => {
     await userEvent.clear(screen.getByLabelText('New password'))
     await userEvent.type(screen.getByLabelText('New password'), 'a-different-passphrase')
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('offers another link only when this one is spent, never when the server was simply busy', async () => {
+    stubFetch([
+      {
+        method: 'POST',
+        path: '/api/auth/password-reset/confirm',
+        status: 429,
+        body: { code: 'rate_limited', message: 'we are busy right now. Try again in a moment.' },
+      },
+    ])
+    renderApp(<ResetPage />, { route: '/reset?token=reset-tok-1' })
+
+    await userEvent.type(screen.getByLabelText('New password'), 'a-new-passphrase')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'a-new-passphrase')
+    await userEvent.click(screen.getByRole('button', { name: 'Set password' }))
+
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      'we are busy right now. Try again in a moment.',
+    )
+    // The link in hand is still good — the server just could not do the work
+    // this second. Sending the person off to ask for a new one spends the one
+    // they have on a failure that had nothing to do with it.
+    expect(screen.queryByRole('link', { name: 'Send another reset link' })).toBeNull()
   })
 
   it('never posts an empty token', async () => {

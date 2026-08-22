@@ -55,7 +55,14 @@ export function LoginPage() {
             autoComplete="email"
             required
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value)
+              // Whatever the resend last said — a link is on its way, or the
+              // mailer refused — was about the address that was in this field
+              // at the time. Once it is edited, both are claims about somebody
+              // else's mailbox.
+              resend.reset()
+            }}
           />
         </label>
         <label className={fieldClass}>
@@ -77,14 +84,20 @@ export function LoginPage() {
               If that account still needs verifying, a fresh link is on its way.
             </p>
           ) : (
-            <button
-              type="button"
-              className={secondaryButtonClass}
-              disabled={resend.isPending}
-              onClick={() => resend.mutate()}
-            >
-              {resend.isPending ? 'Sending…' : 'Resend verification'}
-            </button>
+            <>
+              {/* The mail endpoints refuse under their own budgets, and a
+                  button that fails back to exactly how it looked before the
+                  press invites being pressed again until one of them does. */}
+              <FormError error={resend.error} />
+              <button
+                type="button"
+                className={secondaryButtonClass}
+                disabled={resend.isPending}
+                onClick={() => resend.mutate()}
+              >
+                {resend.isPending ? 'Sending…' : 'Resend verification'}
+              </button>
+            </>
           ))}
         <button className={buttonClass} type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? 'Signing in…' : 'Sign in'}
