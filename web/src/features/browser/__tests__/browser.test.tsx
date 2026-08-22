@@ -86,11 +86,11 @@ describe('file browser', () => {
       'pathname',
       '/folders/f1',
     )
-    expect(screen.getByText('notes.txt')).toBeTruthy()
     expect(screen.getByText('2.0 KB')).toBeTruthy()
-    // Download is a navigation to the 302, never a fetch: the bytes come from
-    // the object store directly and must not pass through this app.
-    const download = screen.getByRole('link', { name: 'Download' })
+    // The name is the affordance that opens a file, so it is the name that
+    // carries the endpoint. It is a navigation to the 302 and never a fetch:
+    // the bytes come from the object store and must not pass through this app.
+    const download = screen.getByRole('link', { name: 'notes.txt' })
     expect(download.getAttribute('href')).toBe('/api/files/f2/download')
   })
 
@@ -122,7 +122,10 @@ describe('file browser', () => {
     ])
 
     await screen.findByText('notes.txt')
-    await userEvent.click(screen.getByRole('button', { name: 'Delete notes.txt' }))
+    // The row's own commands live behind its kebab now, rather than in a pair
+    // of buttons repeated on every row.
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for notes.txt' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Move to trash' }))
 
     await waitFor(() => {
       const del = calls.find((c) => c.method === 'DELETE')
@@ -160,8 +163,9 @@ describe('selection and the actions it unlocks', () => {
     renderFolder(twoRows)
     await screen.findByText('notes.txt')
 
-    // Nothing selected: no command bar at all.
-    expect(screen.queryByText(/selected/)).toBeNull()
+    // Nothing selected: the band is mounted (it always is) but offers nothing —
+    // its selected layer is out of the accessibility tree and out of reach.
+    expect(screen.queryByRole('toolbar', { name: 'Selection actions' })).toBeNull()
 
     await userEvent.click(screen.getByRole('checkbox', { name: 'Select notes.txt' }))
     const bar = () => screen.getByRole('toolbar', { name: 'Selection actions' })
@@ -169,6 +173,7 @@ describe('selection and the actions it unlocks', () => {
     // One file: everything is available.
     expect(within(bar()).getByRole('button', { name: 'Rename' })).toBeTruthy()
     expect(within(bar()).getByRole('link', { name: 'Download' })).toBeTruthy()
+    expect(within(bar()).getByRole('button', { name: 'Move to' })).toBeTruthy()
     expect(within(bar()).getByRole('button', { name: 'Copy to' })).toBeTruthy()
 
     await userEvent.click(screen.getByRole('checkbox', { name: 'Select Reports' }))
@@ -214,6 +219,10 @@ describe('selection and the actions it unlocks', () => {
     ])
     await screen.findByText('notes.txt')
 
+    // Each row is also a right-click menu's trigger now. Radix wraps it in
+    // place rather than around it, so the row is still the draggable element —
+    // which is what these two tests keep honest. (Firefox's own drag under a
+    // ContextMenu is a manual check; jsdom cannot answer it.)
     const rows = screen.getAllByRole('listitem')
     const fileRow = rows.find((r) => within(r).queryByText('notes.txt'))!
     const folderRow = rows.find((r) => within(r).queryByText('Reports'))!

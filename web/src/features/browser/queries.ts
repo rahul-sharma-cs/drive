@@ -17,6 +17,14 @@ import {
 } from '../../lib/api'
 
 export const childrenKey = (folderId: string) => ['children', folderId] as const
+
+/**
+ * Which folder listings a mutation invalidates. A screen that knows the folder
+ * it is looking at names it; search results span every folder, so a mutation
+ * there re-reads all of them rather than guessing at one.
+ */
+const childrenScope = (parentId: string | undefined) =>
+  parentId === undefined ? (['children'] as const) : childrenKey(parentId)
 export const nodeKey = (id: string) => ['node', id] as const
 export const usageKey = ['usage'] as const
 
@@ -60,13 +68,17 @@ export function useCreateFolder(parentId: string) {
   })
 }
 
-export function useTrashNode(parentId: string) {
+export function useTrashNode(parentId?: string) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => trashNode(id),
     onSuccess: () => {
-      void client.invalidateQueries({ queryKey: childrenKey(parentId) })
+      void client.invalidateQueries({ queryKey: childrenScope(parentId) })
       void client.invalidateQueries({ queryKey: ['trash'] })
+      // A trashed node has to leave open search results too — nothing else
+      // re-reads them, and the row would otherwise sit there offering actions
+      // on something that is now in the trash.
+      void client.invalidateQueries({ queryKey: ['search'] })
     },
   })
 }
@@ -76,7 +88,7 @@ export function useTrashNode(parentId: string) {
  * the folder on screen; a move additionally invalidates the destination, which
  * is a folder this screen is not showing but may be one click away.
  */
-export function useUpdateNode(parentId: string) {
+export function useUpdateNode(parentId?: string) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: ({
@@ -89,7 +101,7 @@ export function useUpdateNode(parentId: string) {
       conflict_policy?: 'rename' | 'replace'
     }) => updateNode(id, patch),
     onSuccess: (node, vars) => {
-      void client.invalidateQueries({ queryKey: childrenKey(parentId) })
+      void client.invalidateQueries({ queryKey: childrenScope(parentId) })
       if (vars.parent_id) void client.invalidateQueries({ queryKey: childrenKey(vars.parent_id) })
       // A rename changes what the breadcrumb for that folder says, and search
       // results hold the old name too.
@@ -101,7 +113,7 @@ export function useUpdateNode(parentId: string) {
 }
 
 /** Files only. The server answers a folder with 422 `unsupported`. */
-export function useCopyNode(parentId: string) {
+export function useCopyNode(parentId?: string) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: ({
@@ -114,7 +126,7 @@ export function useCopyNode(parentId: string) {
       conflictPolicy?: 'rename' | 'replace'
     }) => copyNode(id, destination, conflictPolicy),
     onSuccess: (_node, vars) => {
-      void client.invalidateQueries({ queryKey: childrenKey(parentId) })
+      void client.invalidateQueries({ queryKey: childrenScope(parentId) })
       void client.invalidateQueries({ queryKey: childrenKey(vars.destination) })
       void client.invalidateQueries({ queryKey: usageKey })
     },
