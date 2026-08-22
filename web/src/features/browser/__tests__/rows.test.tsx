@@ -93,6 +93,10 @@ describe('rows', () => {
     // Mixed is a third state and not an unchecked box: one of the two rows is
     // selected, and the header has to say "some of these".
     expect(all.getAttribute('aria-checked')).toBe('mixed')
+    // And it says it with a dash. The mark in the box is the whole of what a
+    // person reads here, and a check would say "all of them".
+    expect(all.querySelector('svg.lucide-minus')).not.toBeNull()
+    expect(all.querySelector('svg.lucide-check')).toBeNull()
 
     await userEvent.click(all)
     // The state is only half of it — what the click has to actually do is take
@@ -102,6 +106,9 @@ describe('rows', () => {
       expect(within(row).getByRole('checkbox').getAttribute('aria-checked')).toBe('true')
     }
     expect(screen.getByRole('checkbox', { name: 'Select all 2 loaded' }).getAttribute('aria-checked')).toBe('true')
+    // Whole selection, check back.
+    expect(all.querySelector('svg.lucide-check')).not.toBeNull()
+    expect(all.querySelector('svg.lucide-minus')).toBeNull()
 
     // And a selected row's own box still unselects it. The row's click handler
     // has to stand aside for a control inside it: a toggle followed by the

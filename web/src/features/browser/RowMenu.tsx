@@ -1,5 +1,5 @@
 import { Copy, Download, FolderInput, MoreVertical, Pencil, Trash2, type LucideIcon } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -113,15 +113,51 @@ export function RowMenu({ actions, label }: { actions: Action[]; label: string }
 }
 
 /**
+ * How long after a menu opens its items refuse a `pointerup`. The menu grows
+ * into place over 150ms (`animate-in zoom-in-95`), and it is only while it is
+ * growing that an item can be under a cursor the menu was summoned from — so
+ * anything past the animation is a real click on a settled menu.
+ */
+const OPENING_MS = 200
+
+/**
  * The same commands on right-click. The trigger wraps the row itself rather
  * than sitting inside it, so the whole row answers — including the empty space
  * between the name and the size.
  */
 export function RowContextMenu({ actions, children }: { actions: Action[]; children: ReactNode }) {
+  const openedAt = useRef(0)
+
   return (
-    <ContextMenu modal={false}>
+    <ContextMenu
+      modal={false}
+      onOpenChange={(open) => {
+        if (open) openedAt.current = performance.now()
+      }}
+    >
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-52 rounded-pop p-1.5 shadow-pop">
+      <ContextMenuContent
+        // The menu is 208px wide, is anchored at the cursor, and can only be
+        // put to the left or the right of it — so on a phone a right-click near
+        // the middle of the screen has room for it on neither side and it hangs
+        // off the edge. Capping it at the width Radix measured as free on the
+        // side it chose is what keeps it on screen; the padding leaves a margin
+        // rather than ending it flush against the edge.
+        collisionPadding={8}
+        className="w-52 max-w-(--radix-context-menu-content-available-width) rounded-pop p-1.5 shadow-pop"
+        // A right-click quick enough that the button comes back up while the
+        // menu is still growing drops its `pointerup` on whichever item has
+        // just spread under the cursor — and an item Radix never saw a
+        // `pointerdown` on selects on `pointerup`. Near the bottom of the
+        // screen the menu opens upward and that item is "Move to trash": a
+        // click that asked for a menu runs a command instead. Swallowing the
+        // event for the length of the animation costs nothing — a real click
+        // on an item arrives as a `click`, and the keyboard never comes
+        // through here at all.
+        onPointerUpCapture={(event) => {
+          if (performance.now() - openedAt.current < OPENING_MS) event.stopPropagation()
+        }}
+      >
         {actions.map((action) => (
           <MenuItem key={action.label} action={action} kind="context" />
         ))}

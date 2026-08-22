@@ -212,6 +212,105 @@ test('right-clicking a row opens its menu, and Rename opens the dialog for it', 
   await expect(rowNamed(FOLDERS[1])).toBeVisible();
 });
 
+test('a right-click too quick to be a menu click runs no command', async () => {
+  await openFixture();
+
+  // The bottom row, with the window cut off just under it: with no room below
+  // the cursor the menu opens upward, over the point it was summoned from. A
+  // menu item lands under the cursor while the menu is still growing into
+  // place, and the button coming back up there is a `pointerup` on a command —
+  // "Move to trash", at the bottom of the menu, is the one at this edge.
+  const viewport = page.viewportSize()!;
+  const target = rows().last();
+  const before = await rows().count();
+  const full = await boxOf(target);
+  await page.setViewportSize({ width: viewport.width, height: Math.round(full.y + full.height + 16) });
+
+  try {
+    const box = await boxOf(target);
+    const x = Math.round(box.x + 140);
+    const y = Math.round(box.y + box.height / 2);
+
+    // Pressed and released without pausing, the way a fast hand does it.
+    await page.mouse.move(x, y);
+    await page.mouse.down({ button: 'right' });
+    await page.mouse.up({ button: 'right' });
+    await expect(contextMenu()).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(rowNamed(UPLOADED)).toBeVisible();
+    expect(await rows().count()).toBe(before);
+    await page.keyboard.press('Escape');
+    await expect(contextMenu()).toHaveCount(0);
+
+    // The same gesture with the menu's opening stretched out, so the release
+    // lands in the middle of it every run rather than in whichever frame this
+    // machine happened to reach. The animation is the whole of the window in
+    // which an item is under the cursor, so this is the deterministic form of
+    // the case above.
+    const slowly = await page.addStyleTag({
+      content: '[data-slot="context-menu-content"] { animation-duration: 2s !important; }',
+    });
+    try {
+      await page.mouse.move(x, y);
+      await page.mouse.down({ button: 'right' });
+      await contextMenu().waitFor();
+      await page.mouse.up({ button: 'right' });
+      await expect(contextMenu()).toBeVisible();
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(rowNamed(UPLOADED)).toBeVisible();
+      expect(await rows().count()).toBe(before);
+      await page.keyboard.press('Escape');
+      await expect(contextMenu()).toHaveCount(0);
+    } finally {
+      await slowly.evaluate((tag) => tag.remove());
+    }
+
+    // The control: a deliberate click on an item still runs it, at this same
+    // edge and within the window the guard covers.
+    await page.mouse.click(x, y, { button: 'right' });
+    await contextMenu().getByRole('menuitem', { name: 'Rename' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByLabel('Name')).toHaveValue(UPLOADED);
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toBeHidden();
+  } finally {
+    await page.setViewportSize(viewport);
+  }
+});
+
+test('the row menu opens on screen at 390px', async () => {
+  const viewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 390, height: 780 });
+
+  try {
+    await openFixture();
+    const box = await boxOf(rows().first());
+    const y = Math.round(box.y + box.height / 2);
+
+    // 208px of menu on 390px of screen: near the middle there is not that much
+    // room on either side of the cursor, and the menu can only go left or
+    // right of it. x=195 is the worst case; the other two are the sides it can
+    // still take whole.
+    for (const x of [150, 195, 250]) {
+      await page.mouse.click(x, y, { button: 'right' });
+      await expect(contextMenu()).toBeVisible();
+
+      // Measured after it has finished growing: `toBeVisible` is true from the
+      // first frame of the animation, and a box read there is the 95% one.
+      await settled(contextMenu());
+      const menu = await boxOf(contextMenu());
+      expect(menu.width, `the menu opened at x=${x} has width`).toBeGreaterThan(0);
+      expect(menu.x, `the menu opened at x=${x} starts on screen`).toBeGreaterThanOrEqual(0);
+      expect(menu.x + menu.width, `the menu opened at x=${x} ends on screen`).toBeLessThanOrEqual(390);
+
+      await page.keyboard.press('Escape');
+      await expect(contextMenu()).toHaveCount(0);
+    }
+  } finally {
+    await page.setViewportSize(viewport);
+  }
+});
+
 /* --------------------------------------------------------------- the New menu */
 
 test('New folder from the rail creates in the folder on screen', async () => {
@@ -365,6 +464,7 @@ const list = () => page.locator('[data-testid="file-list"]');
 const rows = () => page.locator('[data-testid="file-row"]');
 const rowNamed = (name: string) => rows().filter({ hasText: name });
 const band = () => page.getByTestId('command-band');
+const contextMenu = () => page.locator('[data-slot="context-menu-content"]');
 const toolbar = () => page.getByRole('toolbar', { name: 'Selection actions' });
 const trashCommand = () => band().getByRole('button', { name: 'Trash' });
 const dropHint = () => page.getByText('Drop to upload here');
@@ -381,6 +481,13 @@ async function boxOf(locator: Locator): Promise<{ x: number; y: number; width: n
   const box = await locator.boundingBox();
   expect(box, 'the element has a box to measure').not.toBeNull();
   return box!;
+}
+
+/** Waits out an element's entry animation, so what is measured is where it lands. */
+async function settled(locator: Locator): Promise<void> {
+  await locator.evaluate(async (el) => {
+    await Promise.all(el.getAnimations().map((animation) => animation.finished));
+  });
 }
 
 /** `child` is wholly inside `parent`, give or take the sub-pixel a layout rounds. */
