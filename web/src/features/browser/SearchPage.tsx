@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 
 import { search } from '../../lib/api'
 import { Card, EmptyState } from '../../ui/controls'
+import { PreviewDialog } from '../preview/PreviewDialog'
 import { FileList } from './FileList'
 import { rowActions } from './RowMenu'
 import { useNodeCommands } from './commands'
@@ -83,6 +84,10 @@ export function SearchPage() {
           }
         />
       )}
+
+      {/* The results are the viewer's siblings, and `?preview=` rides the same
+          URL the query lives in. */}
+      <PreviewDialog nodes={items} />
 
       {dialogs}
     </main>

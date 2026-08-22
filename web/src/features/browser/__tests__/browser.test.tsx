@@ -67,7 +67,7 @@ afterEach(() => {
 })
 
 describe('file browser', () => {
-  it('lists a folder and links a file at the download endpoint', async () => {
+  it('lists a folder, points a file name at the viewer, and keeps Download on the menu', async () => {
     renderFolder([
       { path: '/api/nodes/root-1', body: root },
       {
@@ -87,10 +87,15 @@ describe('file browser', () => {
       '/folders/f1',
     )
     expect(screen.getByText('2.0 KB')).toBeTruthy()
-    // The name is the affordance that opens a file, so it is the name that
-    // carries the endpoint. It is a navigation to the 302 and never a fetch:
-    // the bytes come from the object store and must not pass through this app.
-    const download = screen.getByRole('link', { name: 'notes.txt' })
+    // The name is the affordance that opens a file, and what it opens is the
+    // viewer on the route already on screen — one parameter, so the preview is
+    // linkable and the back button closes it.
+    expect(screen.getByRole('link', { name: 'notes.txt' }).getAttribute('href')).toBe('/?preview=f2')
+    // Downloading did not go anywhere; it moved to the row's own menu. Still a
+    // navigation to the 302 and never a fetch, because the bytes come from the
+    // object store and must not pass through this app.
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for notes.txt' }))
+    const download = await screen.findByRole('menuitem', { name: 'Download' })
     expect(download.getAttribute('href')).toBe('/api/files/f2/download')
   })
 

@@ -1,5 +1,6 @@
-import { Copy, Download, FolderInput, MoreVertical, Pencil, Trash2, type LucideIcon } from 'lucide-react'
+import { Copy, Download, Eye, FolderInput, MoreVertical, Pencil, Trash2, type LucideIcon } from 'lucide-react'
 import { useRef, type ReactNode } from 'react'
+import { Link, useSearchParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -18,6 +19,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 
 import { downloadHref, type DriveNode } from '../../lib/api'
+import { previewTarget } from '../preview/usePreview'
 
 /**
  * One row's commands, described once and rendered twice — by the kebab at the
@@ -40,6 +42,12 @@ export interface Action {
   onSelect?: () => void
   /** A navigation — Download is a link, never a fetch. */
   href?: string
+  /**
+   * Opens this file in the viewer, on the route already on screen. A link
+   * rather than a command, like the name it duplicates, so a middle click
+   * still opens it in its own tab.
+   */
+  previewId?: string
   disabled?: boolean
   /** Red, and last: the item that throws something away. */
   danger?: boolean
@@ -58,9 +66,10 @@ export interface RowHandlers {
 /**
  * The commands one node offers.
  *
- * No Preview item yet: until the preview endpoint lands it would be a Download
- * wearing a different word, and two labels for one behaviour is worse than one
- * missing feature. It belongs at the top of this list, above Download.
+ * Preview leads for a file, above Download: it is the same thing the name does,
+ * and a menu that only offered to download what the row will happily show would
+ * be hiding its own best answer. Folders have neither — they open by being
+ * navigated into.
  *
  * `extra` is the slot share links will arrive in — items are spliced in after
  * Move to, so the destructive one stays last wherever it is rendered.
@@ -68,6 +77,7 @@ export interface RowHandlers {
 export function rowActions(node: DriveNode, handlers: RowHandlers, extra: Action[] = []): Action[] {
   const isFile = node.kind === 'file'
   return [
+    ...(isFile ? [{ label: 'Preview', icon: Eye, previewId: node.id } satisfies Action] : []),
     ...(isFile
       ? [{ label: 'Download', icon: Download, href: downloadHref(node.id) } satisfies Action]
       : []),
@@ -169,6 +179,9 @@ export function RowContextMenu({ actions, children }: { actions: Action[]; child
 function MenuItem({ action, kind }: { action: Action; kind: 'dropdown' | 'context' }) {
   const Item = kind === 'dropdown' ? DropdownMenuItem : ContextMenuItem
   const Separator = kind === 'dropdown' ? DropdownMenuSeparator : ContextMenuSeparator
+  // The viewer rides the current query string, so an item that opens it has to
+  // be built from what is already there rather than from the id alone.
+  const [params] = useSearchParams()
   const Icon = action.icon
   const body = (
     <>
@@ -184,9 +197,13 @@ function MenuItem({ action, kind }: { action: Action; kind: 'dropdown' | 'contex
         variant={action.danger ? 'destructive' : 'default'}
         disabled={action.disabled}
         onSelect={action.onSelect}
-        asChild={action.href !== undefined}
+        asChild={action.href !== undefined || action.previewId !== undefined}
       >
-        {action.href === undefined ? (
+        {action.previewId !== undefined ? (
+          <Link to={previewTarget(action.previewId, params)} draggable={false}>
+            {body}
+          </Link>
+        ) : action.href === undefined ? (
           body
         ) : (
           // A download is a navigation to the 302 the API answers with, in its

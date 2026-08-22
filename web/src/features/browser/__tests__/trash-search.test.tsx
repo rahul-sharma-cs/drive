@@ -115,9 +115,11 @@ describe('search', () => {
     // Debounced: six keystrokes must not be six ILIKE queries.
     expect(calls.length).toBeLessThan(6)
     expect(calls[calls.length - 1].url).toBe('/api/search?q=report')
-    // The name is what opens a file, so the name is what carries the endpoint.
+    // The name is what opens a file, and here it opens the viewer over the
+    // results — carrying the query with it, because the query is what the list
+    // underneath is made of.
     expect(screen.getByRole('link', { name: 'report.pdf' }).getAttribute('href')).toBe(
-      '/api/files/s1/download',
+      '/search?q=report&preview=s1',
     )
   })
 

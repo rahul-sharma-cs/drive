@@ -3,6 +3,7 @@ import { useParams } from 'react-router'
 import { EmptyState } from '../../ui/controls'
 import { UploadIcon } from '../../ui/icons'
 import { useSession } from '../auth/session'
+import { PreviewDialog } from '../preview/PreviewDialog'
 import { DropZone } from '../upload/ui/DropZone'
 import { Breadcrumbs } from './Breadcrumbs'
 import { FileList } from './FileList'
@@ -68,6 +69,10 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
           }}
         />
       </DropZone>
+
+      {/* Rendered here rather than inside the list: opening a file must not
+          remount the rows behind it. */}
+      <PreviewDialog nodes={nodes} hasMore={children.hasNextPage} />
 
       {dialogs}
     </main>

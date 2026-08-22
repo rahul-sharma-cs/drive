@@ -1,12 +1,13 @@
 import type { MouseEvent as ReactMouseEvent, ReactNode, Ref } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams, type To } from 'react-router'
 
 import { Checkbox } from '@/components/ui/checkbox'
 
-import { downloadHref, type DriveNode } from '../../lib/api'
+import type { DriveNode } from '../../lib/api'
 import { FileIcon } from '../../ui/FileIcon'
 import { formatBytes } from '../../ui/format'
 import { formatWhen } from '../../ui/when'
+import { previewTarget } from '../preview/usePreview'
 import { dragPayload, isNodeDrag, setDragPayload } from './dnd'
 import { RowContextMenu, RowMenu, type Action } from './RowMenu'
 import type { RowKeyProps } from './useListKeys'
@@ -20,9 +21,16 @@ import type { RowKeyProps } from './useListKeys'
  * that is already a control.
  */
 
-/** Where a row's name points. The file case becomes the viewer once previews exist. */
-export function openTarget(node: DriveNode): { to: string } | { href: string } {
-  return node.kind === 'folder' ? { to: `/folders/${node.id}` } : { href: downloadHref(node.id) }
+/**
+ * Where a row's name points: a folder to itself, a file to the viewer over
+ * whatever route is already on screen.
+ *
+ * `params` is the query string that route is carrying, and the file case is
+ * seeded from it rather than rebuilt — on a search screen the query is what the
+ * list underneath is made of, and opening a file must not throw it away.
+ */
+export function openTarget(node: DriveNode, params: URLSearchParams): { to: To } {
+  return node.kind === 'folder' ? { to: `/folders/${node.id}` } : { to: previewTarget(node.id, params) }
 }
 
 /** Dragging rows, as one row sees it. Absent on search and in the trash. */
@@ -74,7 +82,8 @@ export function FileRow({
   ref,
 }: FileRowProps) {
   const isFolder = node.kind === 'folder'
-  const target = openTarget(node)
+  const [params] = useSearchParams()
+  const target = openTarget(node, params)
   const dropTarget = dnd?.over === node.id
 
   const row = (
@@ -152,29 +161,19 @@ export function FileRow({
       <FileIcon kind={node.kind} name={node.name} mime={node.mime} size={22} />
 
       {linkName ? (
-        isFolder ? (
-          <Link
-            draggable={false}
-            className="min-w-0 flex-1 truncate text-sm font-medium text-ink hover:underline"
-            to={(target as { to: string }).to}
-          >
-            {node.name}
-          </Link>
-        ) : (
-          // A plain navigation, not a fetch: the endpoint answers 302 to a
-          // presigned URL and the bytes must never pass through this app. Its
-          // own tab, because the 302 carries `attachment` and renders nothing,
-          // while a 401 would otherwise replace the whole app with a JSON body.
-          <a
-            draggable={false}
-            className="min-w-0 flex-1 truncate text-sm text-ink hover:underline"
-            href={(target as { href: string }).href}
-            target="_blank"
-            rel="noopener"
-          >
-            {node.name}
-          </a>
-        )
+        // One affordance, and it is a real link: it underlines on hover, a
+        // middle click opens it in its own tab, and the viewer it opens is a
+        // location rather than a mode. Clicking anywhere else on the row
+        // selects instead.
+        <Link
+          draggable={false}
+          // What the viewer hands focus back to when it closes.
+          data-preview-id={isFolder ? undefined : node.id}
+          className={`min-w-0 flex-1 truncate text-sm text-ink hover:underline ${isFolder ? 'font-medium' : ''}`}
+          to={target.to}
+        >
+          {node.name}
+        </Link>
       ) : (
         <span className="min-w-0 flex-1 truncate text-sm text-ink">{node.name}</span>
       )}

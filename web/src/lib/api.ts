@@ -195,3 +195,34 @@ export const discardUpload = (uploadId: string) => request<void>('DELETE', `/upl
 
 /** Downloads are a top-level navigation to a 302 — never fetched into memory. */
 export const downloadHref = (id: string) => `/api/files/${id}/download`
+
+/**
+ * A presigned link to one file's bytes, and the moment it stops working.
+ *
+ * `url` points at the object store, not at this app. Hand it straight to an
+ * `<img>`/`<video>`/`<audio>`/`<iframe>`, or fetch it with a bare `fetch(url)` —
+ * never through `request()`, whose `X-Drive-Client` header would turn a plain
+ * cross-origin GET into a preflight the store's CORS rule answers with a 403.
+ */
+export interface BlobLink {
+  /** Presigned, short-lived, and good for exactly one file. */
+  url: string
+  /** RFC 3339. Callers that hold a link open re-ask before this passes. */
+  expires_at: string
+}
+
+/**
+ * `mime` is the server's own normalized constant for the type it agreed to
+ * serve inline — not the stored, client-declared one. Text-like types all
+ * arrive as `text/plain`; a type it will not serve inline never gets a URL.
+ */
+export interface PreviewLink extends BlobLink {
+  mime: string
+}
+
+/** 415 `unsupported` for anything the server will not serve inline (SVG, HTML). */
+export const getPreview = (id: string) => request<PreviewLink>('GET', `/files/${id}/preview`)
+
+/** The same link the download route answers with a 302, as JSON. */
+export const getDownloadLink = (id: string) =>
+  request<BlobLink>('GET', `/files/${id}/download?format=json`)

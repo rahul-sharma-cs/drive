@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -81,6 +81,7 @@ export function FileList({
   more,
 }: FileListProps) {
   const navigate = useNavigate()
+  const [params] = useSearchParams()
   const selection = useSelection(nodes)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
 
@@ -91,13 +92,14 @@ export function FileList({
     count: nodes.length,
     selected: selectable ? selection.selected : EMPTY,
     onOpen: (index) => {
+      // Enter opens whatever the name opens — and where names open nothing, as
+      // in the trash, neither does Enter.
+      if (!linkNames) return
       const node = nodes[index]
       if (!node) return
-      const target = openTarget(node)
       // The same destination the name link carries, so Enter and a click on the
       // name can never mean two different things.
-      if ('to' in target) void navigate(target.to)
-      else window.open(target.href, '_blank', 'noopener')
+      void navigate(openTarget(node, params).to)
     },
     onTrash: (ids) => commands?.onTrash(nodes.filter((n) => ids.includes(n.id))),
     onSelectAll: () => {

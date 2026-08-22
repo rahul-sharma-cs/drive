@@ -117,16 +117,17 @@ describe('keys under an open row menu', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Actions for notes.txt' }))
     await screen.findByRole('menu')
-    // Down to Rename — the arrows that walk the menu used to walk the list's
-    // own roving focus at the same time, which is what gave Enter a second
-    // meaning.
-    await userEvent.keyboard('{ArrowDown}{ArrowDown}')
+    // Down to Rename, past Preview and Download — the arrows that walk the menu
+    // used to walk the list's own roving focus at the same time, which is what
+    // gave Enter a second meaning.
+    await userEvent.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}')
     expect(screen.getByRole('menuitem', { name: 'Rename' })).toBe(document.activeElement)
     await userEvent.keyboard('{Enter}')
 
     const field = await screen.findByLabelText('Name')
     expect((field as HTMLInputElement).value).toBe('notes.txt')
-    // The row under the menu is a file, and opening it means a download tab.
+    // The row under the menu is a file, and the list's own Enter would have
+    // opened it — in this app's window, or in a tab of its own.
     expect(open).not.toHaveBeenCalled()
   })
 

@@ -151,16 +151,20 @@ describe('rows', () => {
   })
 
   it('opens from the name and selects from everywhere else on the row', async () => {
-    renderFolder(twoRows)
+    renderFolder([
+      ...twoRows,
+      // The name opens the viewer, and the viewer asks for a link the moment it
+      // does. What it answers with is another test's subject.
+      { path: '/api/files/f2/preview', status: 415, body: { code: 'unsupported', message: 'no preview' } },
+    ])
     await screen.findByText('notes.txt')
 
-    // jsdom cannot follow a target=_blank navigation and logs about it; the
-    // click still reaches the row, which is what is under test.
-    const swallow = (e: Event) => e.preventDefault()
-    document.addEventListener('click', swallow)
     await userEvent.click(screen.getByRole('link', { name: 'notes.txt' }))
-    document.removeEventListener('click', swallow)
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    // Opening a file is not selecting it.
     expect(selecting()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 
     await userEvent.click(within(rowFor('notes.txt')).getByText('2.0 KB'))
     expect(selecting()).toBeTruthy()
