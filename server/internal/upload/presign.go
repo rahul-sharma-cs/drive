@@ -138,8 +138,37 @@ func (p *Presigner) GetURL(ctx context.Context, key, fileName string) (Presigned
 	return PresignedGet{URL: req.URL, ExpiresAt: time.Now().Add(p.TTL)}, nil
 }
 
+// PreviewURL signs a GET a browser may render in place: inline disposition,
+// and the content type the response actually claims to be.
+//
+// contentType is not negotiable and not the caller's invention -- it must be a
+// constant returned by PreviewContentType. The presign is the last point where
+// a client-supplied MIME could reach a response header, so the allowlist runs
+// before this is ever called and anything it refuses gets no URL at all.
+func (p *Presigner) PreviewURL(ctx context.Context, key, fileName, contentType string) (PresignedGet, error) {
+	req, err := p.Presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket:                     aws.String(p.Bucket),
+		Key:                        aws.String(key),
+		ResponseContentDisposition: aws.String(InlineDisposition(fileName)),
+		ResponseContentType:        aws.String(contentType),
+	}, s3.WithPresignExpires(p.TTL))
+	if err != nil {
+		return PresignedGet{}, fmt.Errorf("presigning a preview of %s: %w", key, err)
+	}
+	return PresignedGet{URL: req.URL, ExpiresAt: time.Now().Add(p.TTL)}, nil
+}
+
 // AttachmentDisposition builds the Content-Disposition value a download is
 // served with: always an attachment, never inline.
+func AttachmentDisposition(fileName string) string { return disposition("attachment", fileName) }
+
+// InlineDisposition builds the Content-Disposition value a preview is served
+// with. Only the allowlisted types in preview.go ever get one.
+func InlineDisposition(fileName string) string { return disposition("inline", fileName) }
+
+// disposition names the file in a Content-Disposition header, the same way for
+// both dispositions -- one escaping path, so a name that is safe on a download
+// cannot be unsafe on a preview.
 //
 // Both parameter forms are emitted, as RFC 6266 recommends. filename= carries
 // an ASCII-only fallback for anything that cannot read the extended form, and
@@ -148,8 +177,8 @@ func (p *Presigner) GetURL(ctx context.Context, key, fileName string) (Presigned
 // backslashes, which are the only two characters that could otherwise end the
 // quoted string early; names never contain CR/LF, because node.Clean strips
 // every C0 control before a name is ever stored.
-func AttachmentDisposition(fileName string) string {
-	return `attachment; filename="` + asciiFallbackName(fileName) +
+func disposition(kind, fileName string) string {
+	return kind + `; filename="` + asciiFallbackName(fileName) +
 		`"; filename*=UTF-8''` + percentEncodeName(fileName)
 }
 
