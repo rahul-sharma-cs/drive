@@ -4,11 +4,17 @@ import { Link } from 'react-router'
 
 import { signup } from '../../lib/api'
 import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
+import { emailHint, invalidEmailClass, isPlausibleEmail } from './email'
 
 export function SignupPage() {
   const [email, setEmail] = useState('')
+  const [emailJudged, setEmailJudged] = useState(false)
   const [password, setPassword] = useState('')
   const [displayName, setDisplayName] = useState('')
+
+  // Judged on the way out of the field, not on every keystroke: nobody wants to
+  // be told their address is wrong while they are still halfway through it.
+  const emailBad = emailJudged && !isPlausibleEmail(email)
 
   const mutation = useMutation({ mutationFn: () => signup(email, password, displayName) })
 
@@ -33,8 +39,16 @@ export function SignupPage() {
     <AuthCard title="Create a Drive account">
       <form
         className="flex flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-card"
+        // The browser's own bubble is off: it appears over the field, says its
+        // own thing, and vanishes on the next click. The hint under the field
+        // stays put until the address is fixed.
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
+          // Pressing the button counts as judging the field — otherwise a
+          // submit with a bad address in it would just quietly do nothing.
+          setEmailJudged(true)
+          if (!isPlausibleEmail(email)) return
           mutation.mutate()
         }}
       >
@@ -49,18 +63,34 @@ export function SignupPage() {
             onChange={(e) => setDisplayName(e.target.value)}
           />
         </label>
-        <label className={fieldClass}>
-          Email
-          <input
-            className={inputClass}
-            type="email"
-            name="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </label>
+        <div className="flex flex-col gap-1.5">
+          <label className={fieldClass}>
+            Email
+            <input
+              className={`${inputClass} ${invalidEmailClass}`}
+              type="email"
+              name="email"
+              autoComplete="email"
+              inputMode="email"
+              spellCheck={false}
+              required
+              aria-invalid={emailBad || undefined}
+              aria-describedby={emailBad ? 'signup-email-hint' : undefined}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onBlur={() => {
+                // An untouched empty field is not a mistake yet; leaving one
+                // half-typed is.
+                if (email.trim() !== '') setEmailJudged(true)
+              }}
+            />
+          </label>
+          {emailBad && (
+            <p id="signup-email-hint" className="text-[13px] text-danger">
+              {emailHint(email)}
+            </p>
+          )}
+        </div>
         <label className={fieldClass}>
           Password
           <input

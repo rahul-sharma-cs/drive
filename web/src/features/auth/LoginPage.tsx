@@ -11,13 +11,17 @@ import {
   inputClass,
   secondaryButtonClass,
 } from '../../ui/controls'
+import { emailHint, invalidEmailClass, isPlausibleEmail } from './email'
 import { useSetSession } from './session'
 
 export function LoginPage() {
   const [email, setEmail] = useState('')
+  const [emailJudged, setEmailJudged] = useState(false)
   const [password, setPassword] = useState('')
   const navigate = useNavigate()
   const setSession = useSetSession()
+
+  const emailBad = emailJudged && !isPlausibleEmail(email)
 
   // Login answers with the whole `me` shape, so the session cache is filled
   // from the response rather than by a second /auth/me round trip asking the
@@ -41,30 +45,54 @@ export function LoginPage() {
     <AuthCard title="Sign in to Drive">
       <form
         className="flex flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-card"
+        // The browser's own bubble is off: it appears over the field, says its
+        // own thing, and vanishes on the next click. The hint under the field
+        // stays put until the address is fixed.
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
+          // Pressing the button counts as judging the field — otherwise a
+          // submit with a bad address in it would just quietly do nothing.
+          setEmailJudged(true)
+          if (!isPlausibleEmail(email)) return
           mutation.mutate()
         }}
       >
-        <label className={fieldClass}>
-          Email
-          <input
-            className={inputClass}
-            type="email"
-            name="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(e) => {
-              setEmail(e.target.value)
-              // Whatever the resend last said — a link is on its way, or the
-              // mailer refused — was about the address that was in this field
-              // at the time. Once it is edited, both are claims about somebody
-              // else's mailbox.
-              resend.reset()
-            }}
-          />
-        </label>
+        <div className="flex flex-col gap-1.5">
+          <label className={fieldClass}>
+            Email
+            <input
+              className={`${inputClass} ${invalidEmailClass}`}
+              type="email"
+              name="email"
+              autoComplete="email"
+              inputMode="email"
+              spellCheck={false}
+              required
+              aria-invalid={emailBad || undefined}
+              aria-describedby={emailBad ? 'login-email-hint' : undefined}
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value)
+                // Whatever the resend last said — a link is on its way, or the
+                // mailer refused — was about the address that was in this field
+                // at the time. Once it is edited, both are claims about somebody
+                // else's mailbox.
+                resend.reset()
+              }}
+              onBlur={() => {
+                // An untouched empty field is not a mistake yet; leaving one
+                // half-typed is.
+                if (email.trim() !== '') setEmailJudged(true)
+              }}
+            />
+          </label>
+          {emailBad && (
+            <p id="login-email-hint" className="text-[13px] text-danger">
+              {emailHint(email)}
+            </p>
+          )}
+        </div>
         <label className={fieldClass}>
           Password
           <input

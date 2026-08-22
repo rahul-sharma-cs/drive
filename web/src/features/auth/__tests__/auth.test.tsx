@@ -406,3 +406,128 @@ describe('/reset', () => {
     expect(calls).toHaveLength(0)
   })
 })
+
+/**
+ * The screens' half of the shape check. `email.test.ts` owns the rule itself;
+ * what matters here is that a field which fails it says so on the way out —
+ * and that the form does not hand the address to the API anyway.
+ */
+describe('an address that cannot be an email', () => {
+  const bad = 'wfwef@fweffwef'
+  const fixed = 'wfwef@fweffwef.example'
+
+  it('marks the field on /signup, holds the request back, and clears once it is fixed', async () => {
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/signup', body: { status: 'ok' } }])
+    renderApp(<SignupPage />)
+
+    const field = screen.getByLabelText(/email/i)
+    await userEvent.type(screen.getByLabelText(/name/i), 'Someone')
+    await userEvent.type(screen.getByLabelText(/password/i), 'hunter2hunter2')
+    await userEvent.type(field, bad)
+    await userEvent.tab()
+
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    const hint = screen.getByText(/look like an email address/i)
+    expect(field.getAttribute('aria-describedby')).toBe(hint.getAttribute('id'))
+
+    await userEvent.click(screen.getByRole('button', { name: /create account/i }))
+    // The button stays pressable — a disabled one is the same silence the
+    // native bubble left behind.
+    expect(screen.getByRole('button', { name: /create account/i })).toHaveProperty('disabled', false)
+    expect(calls).toHaveLength(0)
+
+    await userEvent.type(field, '.example')
+    expect(screen.queryByText(/look like an email address/i)).toBeNull()
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /create account/i }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].body).toEqual({ email: fixed, password: 'hunter2hunter2', display_name: 'Someone' })
+  })
+
+  it('marks the field on /login, holds the request back, and clears once it is fixed', async () => {
+    const user = {
+      id: 'u1',
+      email: fixed,
+      display_name: 'Someone',
+      root_id: 'r1',
+      email_verified_at: '2026-08-17T00:00:00Z',
+    }
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/login', body: user }])
+    renderApp(<LoginPage />)
+
+    const field = screen.getByLabelText(/email/i)
+    await userEvent.type(screen.getByLabelText(/password/i), 'hunter2hunter2')
+    await userEvent.type(field, bad)
+    await userEvent.tab()
+
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByText(/look like an email address/i)).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    expect(calls).toHaveLength(0)
+
+    await userEvent.type(field, '.example')
+    expect(screen.queryByText(/look like an email address/i)).toBeNull()
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].body).toEqual({ email: fixed, password: 'hunter2hunter2' })
+  })
+
+  it('marks the field on /forgot, holds the request back, and clears once it is fixed', async () => {
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/password-reset', body: { status: 'ok' } }])
+    renderApp(<ForgotPage />)
+
+    const field = screen.getByLabelText(/email/i)
+    await userEvent.type(field, bad)
+    await userEvent.tab()
+
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByText(/look like an email address/i)).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
+    expect(calls).toHaveLength(0)
+    // Nothing was sent, so the screen must not have moved on to the state that
+    // says a link is on its way.
+    expect(screen.queryByText(/reset link is on its way/i)).toBeNull()
+
+    await userEvent.type(field, '.example')
+    expect(screen.queryByText(/look like an email address/i)).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].body).toEqual({ email: fixed })
+  })
+
+  it('says something when the field is simply empty, since the native bubble is off', async () => {
+    // `noValidate` turns off "please fill out this field". Without a line of
+    // our own, pressing the button on an empty form would do nothing visible
+    // at all — which is the complaint this whole change is about.
+    const calls = stubFetch([])
+    renderApp(<ForgotPage />)
+
+    const form = document.querySelector('form')
+    expect(form?.hasAttribute('novalidate')).toBe(true)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
+
+    expect(screen.getByText('Enter an email address')).toBeTruthy()
+    expect(screen.getByLabelText(/email/i).getAttribute('aria-invalid')).toBe('true')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('leaves a field alone until it has been typed in', async () => {
+    // Tabbing through a form should not paint every untouched field red.
+    stubFetch([])
+    renderApp(<ForgotPage />)
+
+    const field = screen.getByLabelText(/email/i)
+    await userEvent.click(field)
+    await userEvent.tab()
+
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.queryByText(/look like an email address/i)).toBeNull()
+  })
+})
