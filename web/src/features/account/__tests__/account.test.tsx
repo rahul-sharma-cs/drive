@@ -5,6 +5,8 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Route, Routes } from 'react-router'
 
+import { Sheet } from '@/components/ui/sheet'
+
 import type { AuthSession, Me } from '../../../lib/api'
 import { renderApp, stubFetch, type StubRoute } from '../../../test/render'
 import { TopBar } from '../../../app/TopBar'
@@ -46,6 +48,12 @@ const sessions: AuthSession[] = [
  * asserts is that a change made down here reaches the avatar up there. The
  * layout itself is out: it would bring the upload engine (workers, IndexedDB)
  * with it, and none of that is what these tests are about.
+ *
+ * The bare `<Sheet>` stands in for the one the layout wraps its chrome in. The
+ * top bar's hamburger is that drawer's `SheetTrigger`, and a Radix trigger
+ * rendered outside its root throws rather than degrading — so composing the bar
+ * on its own means supplying the root it expects. No panel: nothing here opens
+ * the drawer, and the rail has a test file of its own.
  */
 function renderAccount(routes: StubRoute[] = []) {
   const calls = stubFetch([
@@ -57,10 +65,10 @@ function renderAccount(routes: StubRoute[] = []) {
       <Route
         path="/account"
         element={
-          <>
-            <TopBar onOpenRail={() => {}} />
+          <Sheet>
+            <TopBar />
             <AccountPage />
-          </>
+          </Sheet>
         }
       />
       <Route path="/login" element={<p>login</p>} />
