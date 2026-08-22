@@ -408,6 +408,12 @@ func TestSignupRejectsBadInput(t *testing.T) {
 	}{
 		{"no email", authSignupBody{"", authTestPassword, "Test User"}},
 		{"not an address", authSignupBody{"nope", authTestPassword, "Test User"}},
+		// Legal per net/mail and undeliverable in practice: the domain is a
+		// bare hostname, so the verification mail would have nowhere to go and
+		// the only symptom would be a link that never arrives.
+		{"domain with no dot", authSignupBody{"a@b", authTestPassword, "Test User"}},
+		{"typo'd domain", authSignupBody{"wfwef@fweffwef", authTestPassword, "Test User"}},
+		{"single-letter final label", authSignupBody{"a@b.c", authTestPassword, "Test User"}},
 		{"address with a display part", authSignupBody{"Someone <a@b.test>", authTestPassword, "Test User"}},
 		{"header injection in the address", authSignupBody{"a@b.test\r\nBcc: evil@x.test", authTestPassword, "Test User"}},
 		{"password too short", authSignupBody{"short@drive.test", "1234567", "Test User"}},
@@ -1764,15 +1770,113 @@ func TestResetAndResendRejectMalformedAddresses(t *testing.T) {
 	h, sender, _ := authTestServer(t)
 
 	for _, path := range []string{"/api/auth/password-reset", "/api/auth/resend-verification"} {
-		for _, bad := range []string{"", "nope", "Someone <a@b.test>", "a@b.test\r\nBcc: evil@x.test"} {
+		// The last two parse as addresses and cannot hold a mailbox. These two
+		// endpoints answer 200 for everything they accept, so a refusal here is
+		// the only signal an address is unusable at all -- without it, somebody
+		// who typed the domain wrong waits for a link that was never going to
+		// be sent.
+		for _, bad := range []string{
+			"", "nope", "Someone <a@b.test>", "a@b.test\r\nBcc: evil@x.test", "a@b", "wfwef@fweffwef",
+		} {
 			rec := authDo(t, h, http.MethodPost, path, map[string]string{"email": bad}, nil)
 			if rec.Code != http.StatusUnprocessableEntity {
 				t.Errorf("%s with %q: status %d, want 422 (body %s)", path, bad, rec.Code, rec.Body.String())
 			}
 		}
+
+		// The refusal above is about the shape of the address and nothing else.
+		// A well-formed address with no account behind it still gets the same
+		// silent 200 every accepted address gets, or these endpoints would have
+		// become an oracle for who has an account here.
+		rec := authDo(t, h, http.MethodPost, path, map[string]string{"email": authTestEmail(t)}, nil)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s with a well-formed unknown address: status %d, want 200 (body %s)",
+				path, rec.Code, rec.Body.String())
+		}
 	}
 	authSettle()
 	if n := len(sender.all()); n != 0 {
 		t.Errorf("%d mails sent for rejected requests, want 0", n)
+	}
+}
+
+// ------------------------------------------------------- address shape ------
+
+// canonicalEmail is the one place the API decides what an address is, and both
+// halves of that decision matter: what it refuses, and what it turns the rest
+// into. Needs no database.
+func TestCanonicalEmailShape(t *testing.T) {
+	ok := []struct{ in, want string }{
+		{"someone@drive.test", "someone@drive.test"},
+		// Trimmed and lower-cased. Both are load-bearing: users.email is
+		// citext, so the case makes no difference to which account this is --
+		// but throttle.key is matched exactly, and without one canonical form
+		// every case permutation would open its own lockout budget.
+		{"A@B.Example ", "a@b.example"},
+		{"  Someone.Else+tag@Sub.Drive.Test  ", "someone.else+tag@sub.drive.test"},
+		{"a@b-c.example", "a@b-c.example"},
+		// An IDN TLD in its ASCII form is letters, digits and a hyphen by
+		// construction, so the letters-only rule has to make room for it.
+		// xn--p1ai is .рф.
+		{"a@example.xn--p1ai", "a@example.xn--p1ai"},
+		{"A@EXAMPLE.XN--P1AI", "a@example.xn--p1ai"},
+	}
+	for _, c := range ok {
+		got, err := canonicalEmail(c.in)
+		if err != nil {
+			t.Errorf("canonicalEmail(%q): %v, want %q", c.in, err, c.want)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("canonicalEmail(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+
+	bad := []string{
+		"",
+		"   ",
+		"nope",
+		// The point of this half: net/mail parses every one of these happily,
+		// and not one of them can hold a mailbox.
+		"a@b",
+		"wfwef@fweffwef",
+		"a@b.c",
+		"a@.example",
+		"a@b..example",
+		"a@b.example.",
+		"a@b.c0",
+		// The punycode prefix on its own is not a TLD.
+		"a@b.xn--",
+		"a@[192.0.2.1]",
+		"Someone <a@b.test>",
+		"a@b.test\r\nBcc: evil@x.test",
+		strings.Repeat("x", maxEmailLen) + "@drive.test",
+	}
+	for _, in := range bad {
+		if got, err := canonicalEmail(in); err == nil {
+			t.Errorf("canonicalEmail(%q) = %q, want an error", in, got)
+		}
+	}
+}
+
+// A malformed address at the sign-in form is just a sign-in that fails. It must
+// not answer differently from an address that simply has no account: an
+// address the server refuses on sight and one it cannot match are the same
+// non-answer, or the shape of the refusal becomes a way to ask which addresses
+// this server considers real.
+func TestLoginAnswersAMalformedAddressLikeAnyOtherFailure(t *testing.T) {
+	h, _, _ := authTestServer(t)
+
+	malformed := authDo(t, h, http.MethodPost, "/api/auth/login",
+		authLoginBody{"a@b", authTestPassword}, nil)
+	unknown := authDo(t, h, http.MethodPost, "/api/auth/login",
+		authLoginBody{authTestEmail(t), authTestPassword}, nil)
+
+	if malformed.Code != http.StatusUnauthorized {
+		t.Errorf("status %d for a malformed address, want 401 (body %s)", malformed.Code, malformed.Body.String())
+	}
+	if malformed.Code != unknown.Code || malformed.Body.String() != unknown.Body.String() {
+		t.Errorf("the answers differ:\nmalformed: %d %s\n  unknown: %d %s",
+			malformed.Code, malformed.Body.String(), unknown.Code, unknown.Body.String())
 	}
 }

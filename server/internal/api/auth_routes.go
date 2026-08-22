@@ -913,6 +913,13 @@ func (s *Server) baseURL() string {
 // User@x.test and user@x.test are the same account -- but throttle.key is plain
 // text matched exactly, so without one canonical form every case permutation of
 // an address would open a fresh login-lockout budget against the same password.
+//
+// ParseAddress alone is not enough. It accepts "a@b" happily -- that is a legal
+// address with a bare hostname for a domain -- so a typo'd domain used to reach
+// the mailer, which then had nowhere to deliver, and the only sign anything was
+// wrong was a verification link that never arrived. plausibleDomain closes that
+// off with the same rule the sign-in and sign-up forms apply while the address
+// is still being typed, so what the field flags is what the API refuses.
 func canonicalEmail(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -928,7 +935,69 @@ func canonicalEmail(raw string) (string, error) {
 	if addr.Name != "" || addr.Address != trimmed {
 		return "", errors.New("email: give the bare address, with no display name")
 	}
-	return strings.ToLower(addr.Address), nil
+	lowered := strings.ToLower(addr.Address)
+	at := strings.LastIndex(lowered, "@")
+	if !plausibleDomain(lowered[at+1:]) {
+		return "", errors.New("email: the part after the @ does not look like a mail domain")
+	}
+	return lowered, nil
+}
+
+// plausibleDomain reports whether host is shaped like a domain that could hold
+// a mailbox: dot-separated labels, none of them empty, the last one two or more
+// ASCII letters -- or an IDN TLD in its ASCII form, which idnTLD covers.
+//
+// Tightening this cannot lock anybody out of an existing account, because every
+// address already stored got there through a real mailbox -- signup only
+// completes after the verification link is clicked -- and a real mailbox has a
+// dotted domain. The SPA applies the same rule while the address is still being
+// typed, so the two never disagree about what is acceptable.
+func plausibleDomain(host string) bool {
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if label == "" {
+			return false
+		}
+	}
+	last := labels[len(labels)-1]
+	if idnTLD(last) {
+		return true
+	}
+	if len(last) < 2 {
+		return false
+	}
+	for _, r := range last {
+		// Both cases, so this does not quietly depend on having been handed the
+		// lower-cased form.
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// idnTLD reports whether label is an internationalised TLD in its ASCII form:
+// the "xn--" prefix and at least one character more. It is the one real TLD
+// family the letters-only rule above would refuse, because punycode carries
+// digits and hyphens by construction -- xn--p1ai is .рф.
+//
+// Case-insensitive on both halves for the same reason plausibleDomain is: this
+// must not quietly depend on having been handed the lower-cased form, and the
+// SPA tests the address exactly as it was typed.
+func idnTLD(label string) bool {
+	const prefix = "xn--"
+	if len(label) <= len(prefix) || !strings.EqualFold(label[:len(prefix)], prefix) {
+		return false
+	}
+	for _, r := range label[len(prefix):] {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func checkPassword(p string) error {
