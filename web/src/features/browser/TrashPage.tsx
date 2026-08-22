@@ -1,15 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Trash2 } from 'lucide-react'
+
+import { Button } from '@/components/ui/button'
 
 import { listTrash, purgeNode, restoreNode } from '../../lib/api'
-import { Card, dangerButtonClass, EmptyState, FormError, secondaryButtonClass, SkeletonRows } from '../../ui/controls'
-import { FileIcon, FolderIcon, TrashIcon } from '../../ui/icons'
-import { formatBytes } from '../../ui/format'
+import { EmptyState, FormError } from '../../ui/controls'
+import { FileList } from './FileList'
 import { usageKey } from './queries'
 
 /**
  * The trash: the roots that were deleted, restorable or removable for good.
  * Only roots are listed — trashing a folder takes its whole subtree with it,
  * and restoring the root brings the subtree back.
+ *
+ * It renders through `FileList` like every other list, but without a selection
+ * or the command band: restoring and purging are still one row at a time, and
+ * a band offering bulk commands that do not exist would be a promise. Names do
+ * not link either — a trashed folder is not somewhere you can go.
  */
 export function TrashPage() {
   const client = useQueryClient()
@@ -39,40 +46,37 @@ export function TrashPage() {
         </p>
       </div>
       <FormError error={restore.error ?? purge.error} />
-      <Card>
-        {trash.isPending && <SkeletonRows />}
-        {trash.isSuccess && items.length === 0 && (
+
+      <FileList
+        nodes={items}
+        pending={trash.isPending}
+        error={trash.error}
+        errorText="The trash didn’t load."
+        onRetry={() => void trash.refetch()}
+        empty={
           <EmptyState
-            icon={<TrashIcon />}
+            icon={<Trash2 className="size-5" />}
             title="The trash is empty."
             hint="Deleted files and folders wait here until you remove them for good."
           />
+        }
+        linkNames={false}
+        rowExtra={(node) => (
+          <>
+            <Button variant="outline" size="sm" onClick={() => restore.mutate(node.id)}>
+              Restore
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="hover:bg-danger-soft hover:text-danger"
+              onClick={() => purge.mutate(node.id)}
+            >
+              Delete forever
+            </Button>
+          </>
         )}
-        {items.length > 0 && (
-          <ul className="divide-y divide-line">
-            {items.map((node) => (
-              <li
-                key={node.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 transition duration-100 hover:bg-surface-muted sm:flex-nowrap sm:px-4"
-              >
-                <span className="shrink-0 text-ink-3">{node.size === null ? <FolderIcon /> : <FileIcon />}</span>
-                <span className="min-w-0 truncate text-sm text-ink">{node.name}</span>
-                <span className="numeric ml-auto w-16 shrink-0 text-right text-ink-3">
-                  {node.size === null ? 'Folder' : formatBytes(node.size)}
-                </span>
-                <div className="flex w-full shrink-0 justify-end gap-1 sm:w-auto">
-                  <button className={secondaryButtonClass} onClick={() => restore.mutate(node.id)}>
-                    Restore
-                  </button>
-                  <button className={dangerButtonClass} onClick={() => purge.mutate(node.id)}>
-                    Delete forever
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      />
     </main>
   )
 }

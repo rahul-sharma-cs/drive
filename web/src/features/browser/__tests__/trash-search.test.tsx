@@ -4,13 +4,24 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { DriveNode } from '../../../lib/api'
+import type { DriveNode, Me } from '../../../lib/api'
 import { renderApp, stubFetch } from '../../../test/render'
 import { useLocation } from 'react-router'
 
 import { HeaderSearch } from '../../../app/HeaderSearch'
+import { meKey } from '../../auth/session'
 import { SearchPage } from '../SearchPage'
 import { TrashPage } from '../TrashPage'
+
+// Search results now carry the same commands a folder's rows do, and a
+// destination picker has to start from this account's root.
+const user: Me = {
+  id: 'u1',
+  email: 'someone@example.test',
+  display_name: 'Someone',
+  root_id: 'root-1',
+  email_verified_at: '2026-08-17T00:00:00Z',
+}
 
 const node = (over: Partial<DriveNode>): DriveNode => ({
   id: 'n1',
@@ -96,7 +107,7 @@ describe('search', () => {
     const calls = stubFetch([
       { path: /\/api\/search\?q=/, body: { items: [node({ id: 's1', name: 'report.pdf' })], next_cursor: null } },
     ])
-    renderApp(searchUI)
+    renderApp(searchUI, { seed: (client) => client.setQueryData(meKey, user) })
 
     await userEvent.type(screen.getByLabelText(/search by name/i), 'report')
 
@@ -104,14 +115,15 @@ describe('search', () => {
     // Debounced: six keystrokes must not be six ILIKE queries.
     expect(calls.length).toBeLessThan(6)
     expect(calls[calls.length - 1].url).toBe('/api/search?q=report')
-    expect(screen.getByRole('link', { name: 'Download report.pdf' }).getAttribute('href')).toBe(
+    // The name is what opens a file, so the name is what carries the endpoint.
+    expect(screen.getByRole('link', { name: 'report.pdf' }).getAttribute('href')).toBe(
       '/api/files/s1/download',
     )
   })
 
   it('puts the query in the URL, so a search is a place and not a mode', async () => {
     stubFetch([{ path: /\/api\/search\?q=/, body: { items: [], next_cursor: null } }])
-    renderApp(searchUI)
+    renderApp(searchUI, { seed: (client) => client.setQueryData(meKey, user) })
 
     await userEvent.type(screen.getByLabelText(/search by name/i), 'invoice')
 
@@ -124,7 +136,7 @@ describe('search', () => {
 
   it('asks for nothing until something is typed', async () => {
     const calls = stubFetch([])
-    renderApp(searchUI)
+    renderApp(searchUI, { seed: (client) => client.setQueryData(meKey, user) })
 
     await waitFor(() => expect(screen.getByLabelText(/search by name/i)).toBeTruthy())
     expect(calls).toHaveLength(0)
