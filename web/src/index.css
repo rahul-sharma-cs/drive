@@ -237,3 +237,101 @@
     -webkit-backdrop-filter: none;
   }
 }
+
+/**
+ * The generated primitives under `src/components/ui/` are written against a
+ * fixed set of semantic names — background, foreground, card, popover, primary,
+ * muted, border, input, ring. They arrive with a neutral grey palette of their
+ * own; this block throws that away and points every one of those names at a
+ * token from the system above, so there is one palette in the product and not
+ * two side by side.
+ *
+ * The indirection is deliberate. `:root` holds the semantic values and the
+ * `@theme inline` block hands Tailwind the *reference*, so `bg-popover` emits
+ * `var(--popover)` rather than a baked-in hex. Redefining the semantic layer
+ * under some other selector is then all a theme takes.
+ *
+ * Two names are absent on purpose.
+ *
+ * `accent` is one. The primitives spend `bg-accent` on hover and focus
+ * highlights and would like the pale surface tint there, but this app has meant
+ * teal by `--color-accent` since its first screen: it is the primary button's
+ * fill, the storage meter, the upload progress bar and the colour of every
+ * link. One utility name cannot carry both meanings, and re-pointing it at a
+ * near-white tint would leave `text-accent` links invisible on white. So the
+ * teal keeps the name, the primitives' highlighted states come out teal, and
+ * `--accent-foreground` is white (5.8:1 on it) so their labels stay legible.
+ * That reads well on a focused menu item and heavily on a ghost button; the one
+ * place it is simply wrong is `Skeleton`, whose default `bg-accent` is a
+ * loading placeholder rather than a highlight and wants the `.skeleton`
+ * shimmer above instead. Giving the primitives the pale tint they expect means
+ * renaming the teal across the app, which is a design change rather than the
+ * wiring this block is doing, so it is left for one.
+ *
+ * `destructive-foreground` is the other: the primitives set `text-white`
+ * literally on a destructive fill and never read a token for it.
+ */
+
+/* Dark mode is not built. Tailwind's `dark:` means `prefers-color-scheme: dark`
+   out of the box, which would fire the handful of `dark:` utilities inside the
+   generated primitives on any machine whose OS is set dark — in an app that
+   declares `color-scheme: light` and has no dark palette to fall back on.
+   Pointing the variant at a `.dark` ancestor instead keeps them inert until
+   there is something for them to switch to. */
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: var(--color-canvas);
+  --foreground: var(--color-ink);
+
+  --card: var(--color-surface);
+  --card-foreground: var(--color-ink);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-ink);
+
+  --primary: var(--color-accent);
+  --primary-foreground: var(--color-surface);
+  --secondary: var(--color-surface-muted);
+  --secondary-foreground: var(--color-ink);
+  --muted: var(--color-surface-muted);
+  --muted-foreground: var(--color-ink-3);
+  --accent-foreground: var(--color-surface);
+  --destructive: var(--color-danger);
+
+  --border: var(--color-line);
+  --input: var(--color-line);
+  --ring: var(--color-accent);
+
+  --radius: var(--radius-control);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* `rounded-sm|md|lg|xl` inside the primitives now step off the control
+     radius. These four are Tailwind defaults being replaced, so the two
+     `rounded-md` icon squares elsewhere in the app shift 6px → 7px. */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}

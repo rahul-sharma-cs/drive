@@ -12,7 +12,15 @@ import { defineConfig } from 'vitest/config'
 // This config deliberately does not load vite.config.ts's react/tailwind
 // plugins: esbuild transforms TSX from tsconfig's `jsx: react-jsx` on its own,
 // and nothing under test needs fast refresh or a stylesheet.
+// It does have to repeat vite.config.ts's `@` alias, though: this file replaces
+// that one rather than extending it, so without the copy every `@/...` import
+// resolves under the dev server and the build and nowhere else.
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': '/src',
+    },
+  },
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
