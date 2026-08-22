@@ -319,7 +319,7 @@ function ColumnHeader({
       <ColumnLabel sort={sort} by="updated_at" className="hidden w-32 shrink-0 items-center gap-1 sm:inline-flex">
         {timeLabel}
       </ColumnLabel>
-      <ColumnLabel sort={sort} by="size" className="inline-flex w-16 shrink-0 items-center justify-end gap-1">
+      <ColumnLabel sort={sort} by="size" className="inline-flex w-20 shrink-0 items-center justify-end gap-1">
         Size
       </ColumnLabel>
       {/* Keeps Size over the size column rather than over the kebab. */}

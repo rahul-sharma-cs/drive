@@ -70,6 +70,8 @@ export interface DriveNode {
   trashed_root?: boolean
   /** Trash listings only — when this node was thrown away. */
   deleted_at?: string
+  /** Folders in a children listing only — how many live things are inside. */
+  item_count?: number
 }
 
 export interface Page<T> {

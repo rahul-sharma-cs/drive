@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Outlet, Route, Routes, useLocation, useParams } from 'react-router'
@@ -12,7 +12,7 @@ import { meKey } from '../../auth/session'
 import { FolderPage } from '../FolderPage'
 
 /**
- * Sorting a folder from its column headers.
+ * Sorting a folder, and what a folder row says instead of a size.
  *
  * The sort lives in the address rather than in component state, which is what
  * makes a sorted folder a place: it survives a reload, it is in the back
@@ -43,10 +43,14 @@ const node = (over: Partial<DriveNode>): DriveNode => ({
 
 const root = node({ id: 'root-1', parent_id: null, name: 'root' })
 
+/** A folder that knows how much it holds, and a file that knows how big it is. */
 const items = {
   items: [
-    node({ id: 'f1', name: 'Reports' }),
-    node({ id: 'f2', kind: 'file', name: 'notes.txt', size: 2048 }),
+    node({ id: 'f1', name: 'Reports', item_count: 3 }),
+    node({ id: 'f3', name: 'Empty', item_count: 0 }),
+    // `item_count` on a file as well, so that a cell which stopped caring what
+    // kind of row it is on has something to get wrong.
+    node({ id: 'f2', kind: 'file', name: 'notes.txt', size: 2048, item_count: 9 }),
   ],
   next_cursor: null,
 }
@@ -81,6 +85,8 @@ function renderFolder(routes: StubRoute[], route = '/') {
 /** Every listing of this folder, however it is sorted. */
 const anyListing: StubRoute = { path: /^\/api\/nodes\/root-1\/children/, body: items }
 const listings = (calls: { url: string }[]) => calls.filter((c) => c.url.startsWith('/api/nodes/root-1/children'))
+
+const rowFor = (name: string) => screen.getAllByTestId('file-row').find((r) => within(r).queryByText(name))!
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -125,5 +131,34 @@ describe('sorting from the column headers', () => {
     const first = listings(calls)[0].url
     expect(first).toContain('sort=updated_at')
     expect(first).toContain('dir=desc')
+  })
+})
+
+describe('what a folder row shows instead of a size', () => {
+  it('counts what a folder holds, and leaves a file to its bytes', async () => {
+    renderFolder([{ path: '/api/nodes/root-1', body: root }, anyListing])
+    await screen.findByText('notes.txt')
+
+    expect(within(rowFor('Reports')).getByText('3 items')).toBeTruthy()
+    // Zero is a count the server sends, not a missing one: an empty folder
+    // says so, and only a cell testing the field for truth would blank it.
+    expect(within(rowFor('Empty')).getByText('0 items')).toBeTruthy()
+    // The file carries a count too, and must ignore it: a size column that
+    // reported "9 items" for a text file would be nonsense no test that only
+    // looked at folders would notice.
+    expect(within(rowFor('notes.txt')).getByText('2.0 KB')).toBeTruthy()
+    expect(within(rowFor('notes.txt')).queryByText(/item/)).toBeNull()
+  })
+
+  it('says nothing where the listing does not count', async () => {
+    // Search results and the trash send no count. An empty cell is right
+    // there; "0 items" would be a claim the answer never made.
+    renderFolder([
+      { path: '/api/nodes/root-1', body: root },
+      { path: /^\/api\/nodes\/root-1\/children/, body: { items: [node({ id: 'f1', name: 'Reports' })], next_cursor: null } },
+    ])
+    await screen.findByText('Reports')
+
+    expect(within(rowFor('Reports')).queryByText(/item/)).toBeNull()
   })
 })

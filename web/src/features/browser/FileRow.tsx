@@ -187,9 +187,7 @@ export function FileRow({
       >
         {when ? formatWhen(when) : ''}
       </span>
-      <span className="numeric w-16 shrink-0 text-right text-ink-3">
-        {node.size === null ? '' : formatBytes(node.size)}
-      </span>
+      <span className="numeric w-20 shrink-0 text-right text-ink-3">{meta(node)}</span>
 
       <div className="flex shrink-0 items-center justify-end gap-1">
         {extra}
@@ -199,4 +197,20 @@ export function FileRow({
   )
 
   return actions ? <RowContextMenu actions={actions}>{row}</RowContextMenu> : row
+}
+
+/**
+ * The trailing cell: how big a file is, or how much a folder holds.
+ *
+ * A folder has no size of its own worth quoting — summing a subtree is a walk
+ * the listing does not do — so the useful quantity is the count, which the
+ * children endpoint sends along. Listings that do not send it (search results,
+ * the trash) leave the cell blank rather than claiming a folder is empty.
+ */
+function meta(node: DriveNode): string {
+  if (node.kind === 'folder') {
+    if (node.item_count == null) return ''
+    return `${node.item_count} ${node.item_count === 1 ? 'item' : 'items'}`
+  }
+  return node.size === null ? '' : formatBytes(node.size)
 }
