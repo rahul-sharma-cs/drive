@@ -60,10 +60,18 @@ export function DropZone({ children }: { children: ReactNode }) {
         const entries = collectDropEntries(e.dataTransfer)
         void ingestInto(walkEntries(entries), folderId)
       }}
-      className="relative flex flex-col gap-3 rounded-card"
+      className="group/zone relative flex flex-col gap-3 rounded-card"
       data-testid="drop-zone"
     >
       {children}
+
+      {/* A full folder takes drops just as an empty one does, but the empty
+          state's invitation leaves with the first file and nothing else on the
+          screen says a drag would land here. Shown only once there are rows,
+          so it never repeats what the empty state is already saying. */}
+      <p className="hidden px-1 text-[12px] text-ink-3 group-has-[[data-testid=file-row]]/zone:block">
+        Drag files or folders in from your computer to upload them here.
+      </p>
 
       {/* The drop target says so while something is over it, and says nothing
           otherwise. `pointer-events-none` keeps the drop landing on the
