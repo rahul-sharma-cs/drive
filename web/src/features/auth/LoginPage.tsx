@@ -2,8 +2,15 @@ import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
-import { login } from '../../lib/api'
-import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
+import { ApiError, login, resendVerification } from '../../lib/api'
+import {
+  AuthCard,
+  buttonClass,
+  fieldClass,
+  FormError,
+  inputClass,
+  secondaryButtonClass,
+} from '../../ui/controls'
 import { useSetSession } from './session'
 
 export function LoginPage() {
@@ -22,6 +29,13 @@ export function LoginPage() {
       void navigate('/', { replace: true })
     },
   })
+
+  const resend = useMutation({ mutationFn: () => resendVerification(email) })
+
+  // The code, never the copy. The server owns the wording of this refusal and
+  // is free to reword it; a page that recognised the state by matching the
+  // message would quietly stop offering the one button that fixes it.
+  const unverified = mutation.error instanceof ApiError && mutation.error.code === 'email_unverified'
 
   return (
     <AuthCard title="Sign in to Drive">
@@ -57,9 +71,27 @@ export function LoginPage() {
           />
         </label>
         <FormError error={mutation.error} />
+        {unverified &&
+          (resend.isSuccess ? (
+            <p className="text-[13px] text-ink-2">
+              If that account still needs verifying, a fresh link is on its way.
+            </p>
+          ) : (
+            <button
+              type="button"
+              className={secondaryButtonClass}
+              disabled={resend.isPending}
+              onClick={() => resend.mutate()}
+            >
+              {resend.isPending ? 'Sending…' : 'Resend verification'}
+            </button>
+          ))}
         <button className={buttonClass} type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? 'Signing in…' : 'Sign in'}
         </button>
+        <Link className="self-start text-[13px] font-medium text-teal hover:underline" to="/forgot">
+          Forgot password?
+        </Link>
       </form>
       <p className="text-[13px] text-ink-3">
         No account?{' '}

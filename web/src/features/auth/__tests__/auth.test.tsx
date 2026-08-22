@@ -5,7 +5,9 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { renderApp, stubFetch } from '../../../test/render'
+import { ForgotPage } from '../ForgotPage'
 import { LoginPage } from '../LoginPage'
+import { ResetPage } from '../ResetPage'
 import { SignupPage } from '../SignupPage'
 import { VerifyPage } from '../VerifyPage'
 import { meKey } from '../session'
@@ -141,5 +143,166 @@ describe('/signup', () => {
       'textContent',
       'Drive is not accepting new accounts right now',
     )
+  })
+})
+
+describe('an unverified account signing in', () => {
+  // Deliberately not the wording the server ships. A screen that recognised
+  // this refusal by matching its copy would keep passing against the real
+  // message and silently stop offering the button the moment it was reworded.
+  const refusal = {
+    code: 'email_unverified',
+    message: 'the mailbox on this account has not been confirmed yet',
+  }
+
+  it('offers a fresh verification link, and sends one for the address that was typed', async () => {
+    const calls = stubFetch([
+      { method: 'POST', path: '/api/auth/login', status: 401, body: refusal },
+      { method: 'POST', path: '/api/auth/resend-verification', body: { status: 'ok' } },
+    ])
+    renderApp(<LoginPage />)
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone@example.test')
+    await userEvent.type(screen.getByLabelText(/password/i), 'hunter2hunter2')
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Resend verification' }))
+
+    await waitFor(() => {
+      const post = calls.find((c) => c.url === '/api/auth/resend-verification')
+      expect(post?.method).toBe('POST')
+      expect(post?.body).toEqual({ email: 'someone@example.test' })
+      expect(post?.headers['X-Drive-Client']).toBe('web')
+    })
+    // Once, and then it says so — a button that stays offering to send again
+    // invites spending the account's whole mail budget from one screen.
+    expect(await screen.findByText(/a fresh link is on its way/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Resend verification' })).toBeNull()
+  })
+
+  it('offers nothing to resend when the credentials were simply wrong', async () => {
+    stubFetch([
+      {
+        method: 'POST',
+        path: '/api/auth/login',
+        status: 401,
+        body: { code: 'unauthorized', message: 'that email and password combination is not right' },
+      },
+    ])
+    renderApp(<LoginPage />)
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone@example.test')
+    await userEvent.type(screen.getByLabelText(/password/i), 'wrong')
+    await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await screen.findByRole('alert')
+    expect(screen.queryByRole('button', { name: 'Resend verification' })).toBeNull()
+  })
+
+  it('points at the reset screen for the other way to be locked out', () => {
+    stubFetch([])
+    renderApp(<LoginPage />)
+    expect(screen.getByRole('link', { name: 'Forgot password?' }).getAttribute('href')).toBe('/forgot')
+  })
+})
+
+describe('/forgot', () => {
+  it('asks for a reset link and promises nothing about the address', async () => {
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/password-reset', body: { status: 'ok' } }])
+    renderApp(<ForgotPage />)
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone@example.test')
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
+
+    expect(await screen.findByText(/has an account, a reset link is on its way/i)).toBeTruthy()
+    expect(calls[0].body).toEqual({ email: 'someone@example.test' })
+    expect(calls[0].headers['X-Drive-Client']).toBe('web')
+  })
+
+  it('says the same thing however much the answer gives away', async () => {
+    // The endpoint answers 200 for an address with no account. If the screen
+    // ever branched on something in that body — an `exists` flag, a status
+    // other than "ok" — the deliberately silent endpoint would become an
+    // account-existence oracle again, on the client side this time.
+    stubFetch([
+      { method: 'POST', path: '/api/auth/password-reset', body: { status: 'ok', exists: false, sent: false } },
+    ])
+    renderApp(<ForgotPage />)
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'nobody@example.test')
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
+
+    expect(await screen.findByText(/has an account, a reset link is on its way/i)).toBeTruthy()
+    expect(screen.queryByText(/no account|not found|isn.t registered|doesn.t exist/i)).toBeNull()
+  })
+
+  it('stays calm when one address has asked too often', async () => {
+    stubFetch([
+      {
+        method: 'POST',
+        path: '/api/auth/password-reset',
+        status: 429,
+        body: { code: 'rate_limited', message: 'too many requests' },
+      },
+    ])
+    renderApp(<ForgotPage />)
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone@example.test')
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
+
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      'That\u2019s a few reset links in a short time. Try again in a little while.',
+    )
+  })
+})
+
+describe('/reset', () => {
+  it('redeems the token from the query string with the new password', async () => {
+    const calls = stubFetch([{ method: 'POST', path: '/api/auth/password-reset/confirm', status: 204 }])
+    renderApp(<ResetPage />, { route: '/reset?token=reset-tok-1' })
+
+    await userEvent.type(screen.getByLabelText('New password'), 'a-new-passphrase')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'a-new-passphrase')
+    await userEvent.click(screen.getByRole('button', { name: 'Set password' }))
+
+    expect(await screen.findByText(/your new password is in place/i)).toBeTruthy()
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe('/api/auth/password-reset/confirm')
+    expect(calls[0].body).toEqual({ token: 'reset-tok-1', new_password: 'a-new-passphrase' })
+    expect(calls[0].headers['X-Drive-Client']).toBe('web')
+  })
+
+  it('shows the server\u2019s own words on a spent link, and a way to get another', async () => {
+    stubFetch([
+      {
+        method: 'POST',
+        path: '/api/auth/password-reset/confirm',
+        status: 422,
+        body: { code: 'invalid', message: 'this reset link is invalid or has expired' },
+      },
+    ])
+    renderApp(<ResetPage />, { route: '/reset?token=stale' })
+
+    await userEvent.type(screen.getByLabelText('New password'), 'a-new-passphrase')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'a-new-passphrase')
+    await userEvent.click(screen.getByRole('button', { name: 'Set password' }))
+
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      'this reset link is invalid or has expired',
+    )
+    // A dead end otherwise: that link will never work again, so the way out has
+    // to be on the screen that reports it.
+    expect((await screen.findByRole('link', { name: 'Send another reset link' })).getAttribute('href')).toBe('/forgot')
+  })
+
+  it('never posts an empty token', async () => {
+    const calls = stubFetch([])
+    renderApp(<ResetPage />, { route: '/reset' })
+
+    expect(await screen.findByText(/missing its token/i)).toBeTruthy()
+    expect(screen.queryByLabelText('New password')).toBeNull()
+    expect(calls).toHaveLength(0)
   })
 })
