@@ -142,13 +142,20 @@ describe('a refetch that fails', () => {
   it('keeps the trash’s rows in place when a restore fails', async () => {
     stubFetch([
       { path: '/api/trash', body: { items: [node({ id: 't1', kind: 'file', name: 'old.txt' })], next_cursor: null } },
-      { method: 'POST', path: '/api/nodes/t1/restore', status: 409, body: { code: 'name_conflict', message: 'taken' } },
+      {
+        method: 'POST',
+        path: '/api/trash/restore',
+        // A bulk call answers 200 and reports per id, so this is what a
+        // failure looks like now: a successful request that did nothing.
+        body: { results: [{ id: 't1', status: 'name_conflict' }], remaining: false },
+      },
     ])
     renderApp(<TrashPage />)
     await screen.findByText('old.txt')
 
     const firstRow = screen.getAllByTestId('file-row')[0]
-    await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for old.txt' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Restore' }))
 
     await waitFor(() => expect(errorToast).toHaveBeenCalled())
     // A message in the flow above the list moves every row in it, which is the

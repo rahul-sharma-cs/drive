@@ -68,6 +68,8 @@ export interface DriveNode {
   created_at: string
   updated_at: string
   trashed_root?: boolean
+  /** Trash listings only — when this node was thrown away. */
+  deleted_at?: string
 }
 
 export interface Page<T> {
@@ -172,10 +174,6 @@ export const updateNode = (
 export const copyNode = (id: string, parentId: string, conflictPolicy?: 'rename' | 'replace') =>
   request<DriveNode>('POST', `/nodes/${id}/copy`, { parent_id: parentId, conflict_policy: conflictPolicy })
 
-export const restoreNode = (id: string) => request<DriveNode>('POST', `/nodes/${id}/restore`)
-
-export const purgeNode = (id: string) => request<void>('DELETE', `/nodes/${id}/purge`)
-
 export const listTrash = () => request<Page<DriveNode>>('GET', '/trash')
 
 /** Quota and max_file_size are null when the deployment sets no cap at all. */
@@ -226,3 +224,39 @@ export const getPreview = (id: string) => request<PreviewLink>('GET', `/files/${
 /** The same link the download route answers with a 302, as JSON. */
 export const getDownloadLink = (id: string) =>
   request<BlobLink>('GET', `/files/${id}/download?format=json`)
+
+/* ------------------------------------------------------- the trash, in bulk */
+
+/**
+ * What one id in a bulk trash call came to.
+ *
+ * `pending` is the interesting one: the routes share a wall-clock budget and
+ * stop when it runs out, so a long list comes back part-done and the caller
+ * sends the rest. `not_found` is not a failure — it means the row is already
+ * gone, which is what was asked for.
+ */
+export type BulkStatus = 'ok' | 'not_found' | 'name_conflict' | 'pending' | 'error'
+
+export interface BulkResult {
+  id: string
+  status: BulkStatus
+}
+
+export interface BulkAnswer {
+  results: BulkResult[]
+  /** There is still work left — call again. */
+  remaining: boolean
+}
+
+/** The server refuses more than this per call. `runBulk` in `queries.ts` chunks to it. */
+export const BULK_LIMIT = 200
+
+export const restoreNodes = (ids: string[]) => request<BulkAnswer>('POST', '/trash/restore', { ids })
+
+export const purgeNodes = (ids: string[]) => request<BulkAnswer>('POST', '/trash/purge', { ids })
+
+/**
+ * Empties the whole trash, a page of roots at a time — not just what is loaded
+ * on screen. `remaining` says another call is needed.
+ */
+export const emptyTrash = () => request<{ purged: number; remaining: boolean }>('DELETE', '/trash')

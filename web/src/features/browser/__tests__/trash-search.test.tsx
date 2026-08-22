@@ -39,19 +39,30 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** The trash's two commands live on the row's kebab and its right-click menu. */
+async function rowCommand(rowName: string, command: string) {
+  await userEvent.click(screen.getByRole('button', { name: `Actions for ${rowName}` }))
+  await userEvent.click(await screen.findByRole('menuitem', { name: command }))
+}
+
 describe('trash', () => {
   it('restores a trashed node, then re-reads the trash and every folder listing', async () => {
     const calls = stubFetch([
       { path: '/api/trash', body: { items: [node({ id: 't1', name: 'old.txt' })], next_cursor: null } },
-      { method: 'POST', path: '/api/nodes/t1/restore', body: node({ id: 't1' }) },
+      { method: 'POST', path: '/api/trash/restore', body: { results: [{ id: 't1', status: 'ok' }], remaining: false } },
     ])
     const { client } = renderApp(<TrashPage />)
 
     await screen.findByText('old.txt')
     const invalidate = vi.spyOn(client, 'invalidateQueries')
-    await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
+    await rowCommand('old.txt', 'Restore')
 
-    await waitFor(() => expect(calls.some((c) => c.url === '/api/nodes/t1/restore')).toBe(true))
+    // One row is a selection of one: the bulk route is the only path, so a
+    // conflict on a single restore is reported the same way as on twenty.
+    await waitFor(() => {
+      const call = calls.find((c) => c.url === '/api/trash/restore')
+      expect(call?.body).toEqual({ ids: ['t1'] })
+    })
     await waitFor(() => expect(calls.filter((c) => c.url === '/api/trash').length).toBeGreaterThan(1))
     // The restored node reappears inside a folder, so those listings are stale
     // too. This screen renders none of them, so the invalidation is the only
@@ -62,20 +73,23 @@ describe('trash', () => {
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['search'] }))
   })
 
-  it('purges for good through the purge endpoint, not the trash one', async () => {
+  it('purges the one row through the purge route, never by emptying the trash', async () => {
     const calls = stubFetch([
       { path: '/api/trash', body: { items: [node({ id: 't1', name: 'old.txt' })], next_cursor: null } },
-      { method: 'DELETE', path: '/api/nodes/t1/purge', status: 204 },
+      { method: 'POST', path: '/api/trash/purge', body: { results: [{ id: 't1', status: 'ok' }], remaining: false } },
     ])
     renderApp(<TrashPage />)
 
     await screen.findByText('old.txt')
-    await userEvent.click(screen.getByRole('button', { name: 'Delete forever' }))
+    await rowCommand('old.txt', 'Delete forever')
 
     await waitFor(() => {
-      const call = calls.find((c) => c.method === 'DELETE')
-      expect(call?.url).toBe('/api/nodes/t1/purge')
+      const call = calls.find((c) => c.url === '/api/trash/purge')
+      expect(call?.body).toEqual({ ids: ['t1'] })
     })
+    // One row's Delete forever and the whole trash's Empty are one word apart
+    // and worlds apart in consequence.
+    expect(calls.some((c) => c.method === 'DELETE' && c.url === '/api/trash')).toBe(false)
   })
 
   it('says the trash is empty rather than showing a blank panel', async () => {

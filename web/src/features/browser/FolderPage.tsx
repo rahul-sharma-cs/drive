@@ -8,7 +8,7 @@ import { DropZone } from '../upload/ui/DropZone'
 import { Breadcrumbs } from './Breadcrumbs'
 import { FileList } from './FileList'
 import { rowActions } from './RowMenu'
-import { useNodeCommands } from './commands'
+import { nodeBandActions, useNodeCommands } from './commands'
 import { useBreadcrumbs, useChildren } from './queries'
 
 export function FolderPage() {
@@ -58,8 +58,8 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
             />
           }
           selectable
-          busy={busy}
-          commands={commands}
+          bandActions={(chosen) => nodeBandActions(chosen, commands, busy)}
+          onDelete={commands.onTrash}
           actions={(node) => rowActions(node, handlers)}
           dnd={{ onMoveInto: (destination, ids) => void moveTo(destination, ids) }}
           more={{

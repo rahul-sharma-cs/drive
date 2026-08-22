@@ -9,7 +9,7 @@ import { Card, EmptyState } from '../../ui/controls'
 import { PreviewDialog } from '../preview/PreviewDialog'
 import { FileList } from './FileList'
 import { rowActions } from './RowMenu'
-import { useNodeCommands } from './commands'
+import { nodeBandActions, useNodeCommands } from './commands'
 
 /**
  * Search results. `q` only — the filter chips and the size/date parameters the
@@ -68,8 +68,8 @@ export function SearchPage() {
             />
           }
           selectable
-          busy={busy}
-          commands={commands}
+          bandActions={(chosen) => nodeBandActions(chosen, commands, busy)}
+          onDelete={commands.onTrash}
           actions={(node) => rowActions(node, handlers)}
           rowExtra={(node) =>
             // A result is out of context by definition, so getting to the

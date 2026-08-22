@@ -1,9 +1,9 @@
-import { ArrowUp, Copy, Download, FolderInput, Pencil, Trash2, X } from 'lucide-react'
+import { X, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 
-import { downloadHref, type DriveNode } from '../../lib/api'
+import type { DriveNode } from '../../lib/api'
 
 /**
  * The row of commands above the list.
@@ -25,12 +25,24 @@ import { downloadHref, type DriveNode } from '../../lib/api'
  * which makes any `sticky` inside it inert.
  */
 
-/** What the selected layer's commands need from the screen holding the dialogs. */
-export interface BandCommands {
-  onRename: (node: DriveNode) => void
-  onCopy: (nodes: DriveNode[]) => void
-  onMove: (nodes: DriveNode[]) => void
-  onTrash: (nodes: DriveNode[]) => void
+/**
+ * One command in the selected layer.
+ *
+ * The band knows how to draw these and nothing about what they mean: a folder
+ * offers Rename and Move to, the trash offers Restore and Delete forever, and
+ * neither list belongs in here. Same shape as a row's `Action`, deliberately —
+ * the two menus of commands on a screen should not describe themselves
+ * differently.
+ */
+export interface BandAction {
+  label: string
+  icon: LucideIcon
+  onSelect?: () => void
+  /** A navigation — Download is a link, never a fetch. Excludes `onSelect`. */
+  href?: string
+  disabled?: boolean
+  /** Red, and last: the one that throws something away. */
+  danger?: boolean
 }
 
 export interface CommandBandProps {
@@ -38,8 +50,6 @@ export interface CommandBandProps {
   count: number
   /** The selected rows, in list order. Empty means the idle layer is showing. */
   chosen: readonly DriveNode[]
-  /** A mutation is in flight — the commands that would start another are off. */
-  busy?: boolean
   onClear: () => void
   /**
    * Where focus goes when the layer holding it is hidden. Clearing or spending
@@ -48,17 +58,13 @@ export interface CommandBandProps {
    * reader is left pointing at nothing, so the list takes focus back.
    */
   onReturnFocus?: () => void
-  commands: BandCommands
+  /** What the selected layer offers for these rows. */
+  actions: (chosen: readonly DriveNode[]) => BandAction[]
+  /** Sits beside the count in the idle layer — the trash's Empty trash. */
+  idle?: ReactNode
 }
 
-export function CommandBand({
-  count,
-  chosen,
-  busy = false,
-  onClear,
-  onReturnFocus,
-  commands,
-}: CommandBandProps) {
+export function CommandBand({ count, chosen, onClear, onReturnFocus, actions, idle }: CommandBandProps) {
   const selecting = chosen.length > 0
 
   // The count the selected layer shows is held over its fade-out, so the last
@@ -66,8 +72,10 @@ export function CommandBand({
   const lastCount = useRef(0)
   if (selecting) lastCount.current = chosen.length
 
-  const single = chosen.length === 1 ? chosen[0] : null
-  const files = chosen.filter((n) => n.kind === 'file')
+  // Held over the fade-out too, and for a better reason: recomputing the list
+  // from an empty selection would blank the buttons out from under the fade.
+  const lastActions = useRef<BandAction[]>([])
+  if (selecting) lastActions.current = actions(chosen)
 
   return (
     // The wrapper carries the gap below the band as padding rather than leaving
@@ -79,16 +87,9 @@ export function CommandBand({
           <span className="numeric px-2 text-ink-3">
             {count} {count === 1 ? 'item' : 'items'}
           </span>
-          {/* Sorting is a server parameter that does not exist yet. The chips
-              are here because their arrival must not be the thing that finally
-              moves this row — they are disabled until the API takes `sort`. */}
-          <span aria-hidden className="mx-1 h-4 w-px bg-line" />
-          {(['Name', 'Modified', 'Size'] as const).map((by) => (
-            <Button key={by} variant="ghost" size="sm" disabled className="text-ink-3">
-              {by}
-              {by === 'Name' && <ArrowUp className="opacity-60" />}
-            </Button>
-          ))}
+          {/* Sorting is not here: it is on the column headers, where the thing
+              being sorted is. Two controls for one setting is one too many. */}
+          {idle}
         </Layer>
 
         <Layer active={selecting} onDeactivate={onReturnFocus}>
@@ -106,38 +107,9 @@ export function CommandBand({
             <span className="numeric shrink-0 px-1 text-teal-strong">{lastCount.current} selected</span>
             <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-teal/25" />
 
-            {/* One file at a time: there is no archive endpoint to answer a
-                multi-selection with, and a button that silently downloaded one
-                of five would be a lie. It takes the whole selection once
-                downloading a set of files as one zip exists. */}
-            {single?.kind === 'file' && (
-              <BandButton asChild label="Download" icon={Download}>
-                <a href={downloadHref(single.id)} target="_blank" rel="noopener">
-                  <Download />
-                  <Label>Download</Label>
-                </a>
-              </BandButton>
-            )}
-            {single && (
-              <BandButton label="Rename" icon={Pencil} disabled={busy} onClick={() => commands.onRename(single)} />
-            )}
-            <BandButton
-              label="Move to"
-              icon={FolderInput}
-              disabled={busy}
-              onClick={() => commands.onMove([...chosen])}
-            />
-            {/* Files only: the server answers a folder copy with 422. */}
-            {files.length > 0 && (
-              <BandButton label="Copy to" icon={Copy} disabled={busy} onClick={() => commands.onCopy(files)} />
-            )}
-            <BandButton
-              label="Trash"
-              icon={Trash2}
-              disabled={busy}
-              danger
-              onClick={() => commands.onTrash([...chosen])}
-            />
+            {lastActions.current.map((action) => (
+              <BandButton key={action.label} action={action} />
+            ))}
           </div>
         </Layer>
       </div>
@@ -184,41 +156,35 @@ function Layer({
  * but the accessible name is the same at every width — a control that loses its
  * name on a narrow screen loses it on the screen that needs it most.
  */
-function BandButton({
-  label,
-  icon: Icon,
-  danger,
-  asChild,
-  children,
-  ...props
-}: {
-  label: string
-  icon: typeof Download
-  danger?: boolean
-  asChild?: boolean
-  children?: ReactNode
-  disabled?: boolean
-  onClick?: () => void
-}) {
+function BandButton({ action }: { action: BandAction }) {
+  const Icon = action.icon
+  const body = (
+    <>
+      <Icon />
+      <span className="hidden sm:inline">{action.label}</span>
+    </>
+  )
+
   return (
     <Button
       variant="ghost"
       size="sm"
-      asChild={asChild}
-      aria-label={label}
-      className={`shrink-0 ${danger ? 'hover:bg-danger-soft hover:text-danger' : ''}`}
-      {...props}
+      asChild={action.href !== undefined}
+      aria-label={action.label}
+      disabled={action.disabled}
+      onClick={action.onSelect}
+      className={`shrink-0 ${action.danger ? 'hover:bg-danger-soft hover:text-danger' : ''}`}
     >
-      {children ?? (
-        <>
-          <Icon />
-          <Label>{label}</Label>
-        </>
+      {action.href === undefined ? (
+        body
+      ) : (
+        // A download is a navigation to the 302 the API answers with, in its
+        // own tab: the bytes come from the object store and must never pass
+        // through this app, and a 401 rendered in this tab would replace it.
+        <a href={action.href} target="_blank" rel="noopener">
+          {body}
+        </a>
       )}
     </Button>
   )
-}
-
-function Label({ children }: { children: ReactNode }) {
-  return <span className="hidden sm:inline">{children}</span>
 }

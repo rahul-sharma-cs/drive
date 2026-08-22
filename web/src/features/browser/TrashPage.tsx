@@ -1,46 +1,89 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Trash2 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { ArchiveRestore, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 
-import { listTrash, purgeNode, restoreNode } from '../../lib/api'
+import { listTrash, type DriveNode } from '../../lib/api'
 import { EmptyState } from '../../ui/controls'
+import type { BandAction } from './CommandBand'
+import { EmptyTrashDialog } from './EmptyTrashDialog'
 import { FileList } from './FileList'
-import { usageKey } from './queries'
+import type { Action } from './RowMenu'
+import { useEmptyTrash, usePurgeNodes, useRestoreNodes, type BulkOutcome } from './queries'
 
 /**
  * The trash: the roots that were deleted, restorable or removable for good.
  * Only roots are listed — trashing a folder takes its whole subtree with it,
  * and restoring the root brings the subtree back.
  *
- * It renders through `FileList` like every other list, but without a selection
- * or the command band: restoring and purging are still one row at a time, and
- * a band offering bulk commands that do not exist would be a promise. Names do
- * not link either — a trashed folder is not somewhere you can go.
+ * It is the same list as everywhere else, with three differences. The date
+ * column shows when a row was thrown away rather than when it last changed,
+ * which is the only date anyone comes here looking for. Names are not links: a
+ * trashed folder is not somewhere you can go. And the band's idle side carries
+ * Empty trash, because the whole point of this screen is leaving it empty.
+ *
+ * The commands act on whole selections through the bulk routes, one row
+ * included — a single Restore is a selection of one, so there is one code path
+ * and one way for a conflict to be reported.
  */
 export function TrashPage() {
-  const client = useQueryClient()
   const trash = useQuery({ queryKey: ['trash'], queryFn: listTrash })
+  const restore = useRestoreNodes()
+  const purge = usePurgeNodes()
+  const empty = useEmptyTrash()
+  const [confirming, setConfirming] = useState(false)
 
-  const refresh = () => {
-    void client.invalidateQueries({ queryKey: ['trash'] })
-    // A restored node reappears in a folder listing, and a purged one vanishes
-    // from search results, so both of those caches are stale too.
-    void client.invalidateQueries({ queryKey: ['children'] })
-    void client.invalidateQueries({ queryKey: ['search'] })
-    // Purging is what actually gives the bytes back.
-    void client.invalidateQueries({ queryKey: usageKey })
-  }
+  const items = trash.data?.items ?? []
+  const busy = restore.isPending || purge.isPending || empty.isPending
+
   // Toasted rather than shown above the list: a message that appears in the
   // flow pushes every row down the moment one of them fails, which is the same
   // shift the command band exists to prevent.
   const failed = (what: string) => (err: unknown) =>
     void toast.error((err as Error)?.message ?? `Could not ${what}`)
-  const restore = useMutation({ mutationFn: restoreNode, onSuccess: refresh, onError: failed('restore that') })
-  const purge = useMutation({ mutationFn: purgeNode, onSuccess: refresh, onError: failed('delete that') })
 
-  const items = trash.data?.items ?? []
+  /**
+   * A bulk call answers per id, and a 200 is not the same as "it worked". The
+   * rows that could not go back keep their place in the list and are named —
+   * a silent no-op on three of twenty is the failure mode worth spending a
+   * toast on.
+   */
+  const report = (verb: string) => (outcome: BulkOutcome) => {
+    if (outcome.conflicts.length > 0)
+      toast.error(`${name(outcome.conflicts)} stayed in the trash — something with that name is already there.`)
+    if (outcome.failed.length > 0) toast.error(`Could not ${verb} ${name(outcome.failed)}.`)
+    if (outcome.stalled) toast.error('Some of the trash is still there. Try again.')
+  }
+
+  const onRestore = (nodes: readonly DriveNode[]) =>
+    restore.mutate(nodes, { onSuccess: report('restore'), onError: failed('restore that') })
+
+  const onPurge = (nodes: readonly DriveNode[]) =>
+    purge.mutate(nodes, { onSuccess: report('delete'), onError: failed('delete that') })
+
+  const bandActions = (chosen: readonly DriveNode[]): BandAction[] => [
+    { label: 'Restore', icon: ArchiveRestore, disabled: busy, onSelect: () => onRestore(chosen) },
+    { label: 'Delete forever', icon: Trash2, disabled: busy, danger: true, onSelect: () => onPurge(chosen) },
+  ]
+
+  /**
+   * Not `rowActions` from the row menu: nothing in the trash can be renamed,
+   * copied or moved while it is here, and the two things it can do are not on
+   * that list at all.
+   */
+  const rowActions = (node: DriveNode): Action[] => [
+    { label: 'Restore', icon: ArchiveRestore, disabled: busy, onSelect: () => onRestore([node]) },
+    {
+      label: 'Delete forever',
+      icon: Trash2,
+      disabled: busy,
+      danger: true,
+      separatorBefore: true,
+      onSelect: () => onPurge([node]),
+    },
+  ]
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-6 sm:px-6 sm:py-8">
@@ -64,23 +107,54 @@ export function TrashPage() {
             hint="Deleted files and folders wait here until you remove them for good."
           />
         }
-        linkNames={false}
-        rowExtra={(node) => (
-          <>
-            <Button variant="outline" size="sm" onClick={() => restore.mutate(node.id)}>
-              Restore
-            </Button>
+        selectable
+        bandActions={bandActions}
+        bandIdle={
+          items.length > 0 && (
             <Button
               variant="ghost"
               size="sm"
-              className="hover:bg-danger-soft hover:text-danger"
-              onClick={() => purge.mutate(node.id)}
+              className="shrink-0 hover:bg-danger-soft hover:text-danger"
+              disabled={busy}
+              onClick={() => setConfirming(true)}
             >
-              Delete forever
+              <Trash2 />
+              Empty trash
             </Button>
-          </>
-        )}
+          )
+        }
+        onDelete={onPurge}
+        actions={rowActions}
+        linkNames={false}
+        time={{ label: 'Trashed', of: (node) => node.deleted_at }}
       />
+
+      {confirming && (
+        <EmptyTrashDialog
+          count={items.length}
+          exact={trash.data?.next_cursor == null}
+          busy={busy}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false)
+            empty.mutate(undefined, {
+              onSuccess: ({ stalled }) => {
+                if (stalled) toast.error('Some of the trash is still there. Try again.')
+              },
+              onError: failed('empty the trash'),
+            })
+          }}
+        />
+      )}
     </main>
   )
+}
+
+/** Names the rows a call could not finish with, without listing twenty of them. */
+function name(nodes: DriveNode[]): string {
+  const shown = nodes
+    .slice(0, 3)
+    .map((node) => `“${node.name}”`)
+    .join(', ')
+  return nodes.length > 3 ? `${shown} and ${nodes.length - 3} more` : shown
 }

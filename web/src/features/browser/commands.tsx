@@ -1,9 +1,10 @@
+import { Copy, Download, FolderInput, Pencil, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 
-import type { DriveNode } from '../../lib/api'
+import { downloadHref, type DriveNode } from '../../lib/api'
 import { useSession } from '../auth/session'
-import type { BandCommands } from './CommandBand'
+import type { BandAction } from './CommandBand'
 import { DestinationDialog } from './DestinationDialog'
 import { RenameDialog } from './RenameDialog'
 import type { RowHandlers } from './RowMenu'
@@ -28,6 +29,46 @@ type Dialog =
   | { kind: 'move'; nodes: DriveNode[] }
   | { kind: 'copy'; nodes: DriveNode[] }
   | null
+
+/** What the band's commands need from the screen holding the dialogs. */
+export interface BandCommands {
+  onRename: (node: DriveNode) => void
+  onCopy: (nodes: DriveNode[]) => void
+  onMove: (nodes: DriveNode[]) => void
+  onTrash: (nodes: DriveNode[]) => void
+}
+
+/**
+ * What the band offers for a selection of live nodes — the folder screens and
+ * search. The trash builds its own two.
+ */
+export function nodeBandActions(
+  chosen: readonly DriveNode[],
+  commands: BandCommands,
+  busy: boolean,
+): BandAction[] {
+  const single = chosen.length === 1 ? chosen[0] : null
+  const files = chosen.filter((n) => n.kind === 'file')
+
+  return [
+    // One file at a time: there is no archive endpoint to answer a
+    // multi-selection with, and a button that silently downloaded one of five
+    // would be a lie. It takes the whole selection once downloading a set of
+    // files as one zip exists.
+    ...(single?.kind === 'file'
+      ? [{ label: 'Download', icon: Download, href: downloadHref(single.id) } satisfies BandAction]
+      : []),
+    ...(single
+      ? [{ label: 'Rename', icon: Pencil, disabled: busy, onSelect: () => commands.onRename(single) } satisfies BandAction]
+      : []),
+    { label: 'Move to', icon: FolderInput, disabled: busy, onSelect: () => commands.onMove([...chosen]) },
+    // Files only: the server answers a folder copy with 422.
+    ...(files.length > 0
+      ? [{ label: 'Copy to', icon: Copy, disabled: busy, onSelect: () => commands.onCopy(files) } satisfies BandAction]
+      : []),
+    { label: 'Trash', icon: Trash2, disabled: busy, danger: true, onSelect: () => commands.onTrash([...chosen]) },
+  ]
+}
 
 export interface NodeCommands {
   /** For `rowActions`: each acts on the one row its menu was opened from. */

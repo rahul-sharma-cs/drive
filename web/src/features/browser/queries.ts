@@ -6,13 +6,18 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
+  BULK_LIMIT,
   copyNode,
   createFolder,
+  emptyTrash,
   getNode,
   getUsage,
   listChildren,
+  purgeNodes,
+  restoreNodes,
   trashNode,
   updateNode,
+  type BulkAnswer,
   type DriveNode,
 } from '../../lib/api'
 
@@ -140,4 +145,117 @@ export function useCopyNode(parentId?: string) {
  */
 export function useUsage() {
   return useQuery({ queryKey: usageKey, queryFn: getUsage, staleTime: 30_000 })
+}
+
+/* -------------------------------------------------------------- the trash */
+
+/** What a bulk restore or purge did to the rows it was handed. */
+export interface BulkOutcome {
+  /** Left in the trash: something already holds that name where they came from. */
+  conflicts: DriveNode[]
+  /** The server could not do it. */
+  failed: DriveNode[]
+  /** It stopped getting through the list. The rest are still in the trash. */
+  stalled: boolean
+}
+
+/**
+ * One bulk call, then the rest, until the list is spent.
+ *
+ * Two things make this a loop rather than a request. The server takes at most
+ * `BULK_LIMIT` ids at a time, and it works under a wall-clock budget — when the
+ * budget runs out mid-list the ids it never reached come back as `pending` and
+ * it is the client's job to ask again. Statuses that mean "no longer in the
+ * trash" (`ok`, and `not_found`, which is the same thing arrived at earlier)
+ * need no reporting; the two that do are collected for the screen to say out
+ * loud.
+ */
+async function runBulk(
+  call: (ids: string[]) => Promise<BulkAnswer>,
+  nodes: readonly DriveNode[],
+): Promise<BulkOutcome> {
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const conflicts: DriveNode[] = []
+  const failed: DriveNode[] = []
+  let queue = nodes.map((node) => node.id)
+  let stalled = false
+
+  while (queue.length > 0) {
+    const batch = queue.slice(0, BULK_LIMIT)
+    const rest = queue.slice(BULK_LIMIT)
+    const answer = await call(batch)
+
+    const again: string[] = []
+    for (const result of answer.results) {
+      const node = byId.get(result.id)
+      if (node === undefined) continue
+      if (result.status === 'pending') again.push(result.id)
+      else if (result.status === 'name_conflict') conflicts.push(node)
+      else if (result.status === 'error') failed.push(node)
+    }
+
+    // The server gets to at least one root per call, so a round that resolved
+    // nothing at all would resolve nothing on the next pass either. Trusting
+    // `remaining` alone here is what would spin the browser against a server
+    // in that state.
+    if (again.length === batch.length) {
+      stalled = true
+      break
+    }
+    queue = [...again, ...rest]
+  }
+
+  return { conflicts, failed, stalled }
+}
+
+/**
+ * What every trash mutation makes stale, in one place: a restored node is back
+ * in a folder listing and back in search results, a purged one has given its
+ * bytes to the quota, and either way the trash itself has changed.
+ */
+function useTrashRefresh() {
+  const client = useQueryClient()
+  return () => {
+    void client.invalidateQueries({ queryKey: ['trash'] })
+    void client.invalidateQueries({ queryKey: ['children'] })
+    void client.invalidateQueries({ queryKey: ['search'] })
+    void client.invalidateQueries({ queryKey: usageKey })
+  }
+}
+
+export function useRestoreNodes() {
+  const refresh = useTrashRefresh()
+  return useMutation({
+    mutationFn: (nodes: readonly DriveNode[]) => runBulk(restoreNodes, nodes),
+    onSuccess: refresh,
+  })
+}
+
+export function usePurgeNodes() {
+  const refresh = useTrashRefresh()
+  return useMutation({
+    mutationFn: (nodes: readonly DriveNode[]) => runBulk(purgeNodes, nodes),
+    onSuccess: refresh,
+  })
+}
+
+/**
+ * Empty the trash — all of it, not just the page that is loaded. The route
+ * takes a batch of roots per call and says whether more are left; a call that
+ * purged nothing has stopped making progress, and looping on `remaining` past
+ * that point would never end.
+ */
+export function useEmptyTrash() {
+  const refresh = useTrashRefresh()
+  return useMutation({
+    mutationFn: async () => {
+      let purged = 0
+      for (;;) {
+        const round = await emptyTrash()
+        purged += round.purged
+        if (!round.remaining || round.purged === 0) return { purged, stalled: round.remaining }
+      }
+    },
+    onSuccess: refresh,
+  })
 }

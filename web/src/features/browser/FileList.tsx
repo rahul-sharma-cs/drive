@@ -7,7 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 
 import type { DriveNode } from '../../lib/api'
 import { Card, SkeletonRows } from '../../ui/controls'
-import { CommandBand, type BandCommands } from './CommandBand'
+import { CommandBand, type BandAction } from './CommandBand'
 import { FileRow, openTarget } from './FileRow'
 import type { Action } from './RowMenu'
 import { useListKeys } from './useListKeys'
@@ -32,6 +32,18 @@ export interface ListDnd {
   onMoveInto: (destinationId: string, ids: string[]) => void
 }
 
+/**
+ * The middle column. A folder shows when a row last changed; the trash shows
+ * when it was thrown away, which is the only date anyone is looking for there.
+ */
+export interface TimeColumn {
+  label: string
+  /** An ISO timestamp, or nothing when this row has none. */
+  of: (node: DriveNode) => string | null | undefined
+}
+
+const MODIFIED: TimeColumn = { label: 'Modified', of: (node) => node.updated_at }
+
 export interface FileListProps {
   /** Every loaded row, in list order; the screen flattens its pages. */
   nodes: readonly DriveNode[]
@@ -44,21 +56,25 @@ export interface FileListProps {
   onRetry?: () => void
   /** What a successful but empty listing says. */
   empty?: ReactNode
-  /**
-   * Row selection, the select-all checkbox and the command band. Off in the
-   * trash, which has no bulk operations yet.
-   */
+  /** Row selection, the select-all checkbox and the command band. */
   selectable?: boolean
-  /** The commands the band's selected layer offers. Required when `selectable`. */
-  commands?: BandCommands
-  /** A mutation is in flight: the commands that would start another are off. */
-  busy?: boolean
+  /** What the band's selected layer offers. Required when `selectable`. */
+  bandActions?: (chosen: readonly DriveNode[]) => BandAction[]
+  /** Sits beside the count in the band's idle layer — the trash's Empty trash. */
+  bandIdle?: ReactNode
+  /**
+   * Delete/Backspace on the selection: trashing in a folder, deleting for good
+   * in the trash. Without it the key does nothing.
+   */
+  onDelete?: (nodes: DriveNode[]) => void
   /** The kebab and right-click items for one row. No menus are rendered without it. */
   actions?: (node: DriveNode) => Action[]
-  /** Extra controls at the end of a row — the trash's Restore / Delete forever. */
+  /** Extra controls at the end of a row, before the kebab. */
   rowExtra?: (node: DriveNode) => ReactNode
   /** Names open the folder / the file. False in the trash, where neither opens. */
   linkNames?: boolean
+  /** What the middle column is called and where it reads from. */
+  time?: TimeColumn
   dnd?: ListDnd
   /** The infinite-query tail. */
   more?: { has: boolean; loading: boolean; load: () => void }
@@ -72,11 +88,13 @@ export function FileList({
   onRetry,
   empty,
   selectable = false,
-  commands,
-  busy = false,
+  bandActions,
+  bandIdle,
+  onDelete,
   actions,
   rowExtra,
   linkNames = true,
+  time = MODIFIED,
   dnd,
   more,
 }: FileListProps) {
@@ -101,7 +119,7 @@ export function FileList({
       // name can never mean two different things.
       void navigate(openTarget(node, params).to)
     },
-    onTrash: (ids) => commands?.onTrash(nodes.filter((n) => ids.includes(n.id))),
+    onTrash: (ids) => onDelete?.(nodes.filter((n) => ids.includes(n.id))),
     onSelectAll: () => {
       if (!selectable) return false
       selection.selectAll()
@@ -158,14 +176,14 @@ export function FileList({
 
   return (
     <div className="flex flex-col">
-      {selectable && commands && (
+      {selectable && bandActions && (
         <CommandBand
           count={nodes.length}
           chosen={chosen}
-          busy={busy}
           onClear={selection.clear}
           onReturnFocus={takeFocus}
-          commands={commands}
+          actions={bandActions}
+          idle={bandIdle}
         />
       )}
 
@@ -192,6 +210,7 @@ export function FileList({
               allSelected={selection.allSelected}
               someSelected={selection.someSelected}
               onToggleAll={() => (selection.allSelected ? selection.clear() : selection.selectAll())}
+              timeLabel={time.label}
             />
             {/* One tab stop for the whole list, with the arrows moving inside
                 it; the handler catches what bubbles up from the rows. */}
@@ -212,6 +231,7 @@ export function FileList({
                   selected={selection.selected.has(node.id)}
                   selectable={selectable}
                   linkName={linkNames}
+                  when={time.of(node)}
                   actions={actions?.(node)}
                   extra={rowExtra?.(node)}
                   dnd={rowDnd}
@@ -257,6 +277,7 @@ function ColumnHeader({
   allSelected,
   someSelected,
   onToggleAll,
+  timeLabel,
 }: {
   selectable: boolean
   gutter: boolean
@@ -264,6 +285,7 @@ function ColumnHeader({
   allSelected: boolean
   someSelected: boolean
   onToggleAll: () => void
+  timeLabel: string
 }) {
   return (
     <div className="flex h-9 items-center gap-3 border-b border-line bg-surface-muted px-3 text-[12px] font-medium text-ink-3 sm:px-4">
@@ -279,7 +301,7 @@ function ColumnHeader({
       )}
       <span className="w-[22px] shrink-0" aria-hidden />
       <span className="min-w-0 flex-1">Name</span>
-      <span className="hidden w-32 shrink-0 sm:block">Modified</span>
+      <span className="hidden w-32 shrink-0 sm:block">{timeLabel}</span>
       <span className="w-16 shrink-0 text-right">Size</span>
       {/* Keeps Size over the size column rather than over the kebab. */}
       {gutter && <span className="w-8 shrink-0" aria-hidden />}

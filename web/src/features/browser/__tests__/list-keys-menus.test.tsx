@@ -9,8 +9,8 @@ import type { DriveNode, Me } from '../../../lib/api'
 import { renderApp, stubFetch, type StubRoute } from '../../../test/render'
 import { CurrentFolderProvider } from '../../../app/CurrentFolder'
 import { meKey } from '../../auth/session'
+import { FileList } from '../FileList'
 import { FolderPage } from '../FolderPage'
-import { TrashPage } from '../TrashPage'
 
 /**
  * The list's keys against the menus that open on top of it.
@@ -192,10 +192,11 @@ describe('Cmd/Ctrl+A', () => {
   })
 
   it('is left to the browser on a list that has no selection', async () => {
-    stubFetch([
-      { path: '/api/trash', body: { items: [node({ id: 't1', kind: 'file', name: 'old.txt' })], next_cursor: null } },
-    ])
-    renderApp(<TrashPage />)
+    // Every screen selects now, the trash included, so the list that does not
+    // is the bare one — which is still a shape `FileList` supports and still
+    // the case the guard exists for.
+    stubFetch([])
+    renderApp(<FileList nodes={[node({ id: 't1', kind: 'file', name: 'old.txt' })]} />)
     await screen.findByText('old.txt')
 
     const event = new KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true, cancelable: true })

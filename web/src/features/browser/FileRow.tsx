@@ -50,6 +50,8 @@ export interface FileRowProps {
   selectable: boolean
   /** Names link to the folder / the file. False in the trash, where neither opens. */
   linkName: boolean
+  /** The ISO timestamp the middle column shows — modified, or trashed. */
+  when: string | null | undefined
   /** The kebab and right-click items. Without them the row renders no menus. */
   actions?: Action[]
   /** Controls at the end of the row — the trash's Restore / Delete forever. */
@@ -72,6 +74,7 @@ export function FileRow({
   selected,
   selectable,
   linkName,
+  when,
   actions,
   extra,
   dnd,
@@ -180,9 +183,9 @@ export function FileRow({
 
       <span
         className="numeric hidden w-32 shrink-0 text-ink-3 sm:block"
-        title={new Date(node.updated_at).toString()}
+        title={when ? new Date(when).toString() : undefined}
       >
-        {formatWhen(node.updated_at)}
+        {when ? formatWhen(when) : ''}
       </span>
       <span className="numeric w-16 shrink-0 text-right text-ink-3">
         {node.size === null ? '' : formatBytes(node.size)}
