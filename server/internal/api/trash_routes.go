@@ -1,8 +1,11 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -18,6 +21,9 @@ func (s *Server) mountTrash(r chi.Router) {
 		r.Use(s.RequireAuth)
 
 		r.Get("/trash", s.listTrash)
+		r.Delete("/trash", s.emptyTrash)
+		r.Post("/trash/restore", s.restoreNodes)
+		r.Post("/trash/purge", s.purgeNodes)
 		r.Delete("/nodes/{id}", s.trashNode)
 		r.Post("/nodes/{id}/restore", s.restoreNode)
 		r.Delete("/nodes/{id}/purge", s.purgeNode)
@@ -26,6 +32,11 @@ func (s *Server) mountTrash(r chi.Router) {
 
 // itemDTO maps a node row onto the canonical wire shape. Folders keep size and
 // mime null; NodeDTO's pointer fields carry that through.
+//
+// This is the trash's converter and the only one that fills deleted_at in:
+// "deleted 3 days ago" is a column of the trash listing, and a live node has no
+// such moment. NodeDTOFrom leaves it nil, so a children page or a created
+// folder serializes exactly as it always did.
 func itemDTO(n node.Node) NodeDTO {
 	return NodeDTO{
 		ID:          n.ID,
@@ -37,6 +48,7 @@ func itemDTO(n node.Node) NodeDTO {
 		CreatedAt:   n.CreatedAt,
 		UpdatedAt:   n.UpdatedAt,
 		TrashedRoot: n.TrashedRoot,
+		DeletedAt:   n.DeletedAt,
 	}
 }
 
@@ -157,4 +169,204 @@ func (s *Server) purgeNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ------------------------------------------------------------------- bulk ----
+
+// Selecting forty things in the trash and restoring them is one gesture to the
+// user and forty operations to the server. The bulk routes below do exactly
+// that -- forty single-id operations, each in its own transaction -- rather
+// than one transaction over the lot, because the outcomes differ per id: a
+// restore whose name is taken auto-renames, one whose id someone else already
+// purged is a miss, and neither is a reason to undo the thirty-eight that
+// worked. Every id therefore gets its own status and the response is a 200
+// even when half of it failed.
+//
+// The other half of the design is the budget. Purging a deep tree is unbounded
+// work, and a platform's edge will cut the connection long before Postgres
+// gives up, so a bulk call stops at DefaultBulkBudget and answers the ids it
+// never reached as "pending" with remaining=true. The client loops until
+// remaining is false. (One single huge root can still overrun it -- that is
+// the existing single-purge behaviour, unchanged here.)
+const (
+	// BulkIDLimit is the most ids one bulk restore or purge accepts, matching
+	// MaxLimit so a client can act on exactly the page it was shown.
+	BulkIDLimit = MaxLimit
+	// DefaultBulkBudget is the wall clock a bulk trash request spends before
+	// reporting the rest as pending.
+	DefaultBulkBudget = 25 * time.Second
+	// emptyTrashPage is how many trashed roots one pass of DELETE /api/trash
+	// reads at a time.
+	emptyTrashPage = 200
+)
+
+// The per-id outcomes. These four plus "pending" are the whole vocabulary.
+const (
+	bulkOK           = "ok"
+	bulkNotFound     = "not_found"
+	bulkNameConflict = "name_conflict"
+	bulkPending      = "pending"
+	bulkError        = "error"
+)
+
+type bulkIDsReq struct {
+	IDs []uuid.UUID `json:"ids"`
+}
+
+// BulkResult is one id's outcome.
+type BulkResult struct {
+	ID     uuid.UUID `json:"id"`
+	Status string    `json:"status"`
+}
+
+// BulkResponse is what both bulk routes answer: one result per distinct id, in
+// the order they were asked for, and whether anything is left to do.
+type BulkResponse struct {
+	Results   []BulkResult `json:"results"`
+	Remaining bool         `json:"remaining"`
+}
+
+// emptyTrashResponse is DELETE /api/trash's answer.
+type emptyTrashResponse struct {
+	Purged    int  `json:"purged"`
+	Remaining bool `json:"remaining"`
+}
+
+// bulkDeadline is when the current request stops starting new work.
+func (s *Server) bulkDeadline() time.Time {
+	budget := s.BulkBudget
+	if budget <= 0 {
+		budget = DefaultBulkBudget
+	}
+	return time.Now().Add(budget)
+}
+
+// POST /api/trash/restore -- restore up to BulkIDLimit trashed roots.
+func (s *Server) restoreNodes(w http.ResponseWriter, r *http.Request) {
+	store := node.NewStore(s.DB)
+	s.bulkTrashOp(w, r, func(ctx context.Context, owner, id uuid.UUID) error {
+		_, err := store.Restore(ctx, owner, id)
+		return err
+	})
+}
+
+// POST /api/trash/purge -- permanently delete up to BulkIDLimit trashed roots.
+func (s *Server) purgeNodes(w http.ResponseWriter, r *http.Request) {
+	s.bulkTrashOp(w, r, node.NewStore(s.DB).Purge)
+}
+
+// bulkTrashOp runs one single-id trash operation over a deduplicated list of
+// ids under the shared budget.
+func (s *Server) bulkTrashOp(w http.ResponseWriter, r *http.Request, op func(context.Context, uuid.UUID, uuid.UUID) error) {
+	u := MustUser(r.Context())
+
+	var req bulkIDsReq
+	if err := ReadJSON(r, &req); err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "malformed request body")
+		return
+	}
+	if len(req.IDs) == 0 || len(req.IDs) > BulkIDLimit {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid,
+			fmt.Sprintf("ids: want 1 to %d node ids, got %d", BulkIDLimit, len(req.IDs)))
+		return
+	}
+
+	deadline := s.bulkDeadline()
+	seen := make(map[uuid.UUID]struct{}, len(req.IDs))
+	results := make([]BulkResult, 0, len(req.IDs))
+	remaining := false
+
+	for _, id := range req.IDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+
+		// Checked before each root rather than after: what the budget bounds is
+		// work started, and starting one more purge is what would overrun it.
+		if !time.Now().Before(deadline) {
+			results = append(results, BulkResult{ID: id, Status: bulkPending})
+			remaining = true
+			continue
+		}
+		results = append(results, BulkResult{ID: id, Status: bulkStatus(r, op(r.Context(), u.ID, id))})
+	}
+
+	WriteJSON(w, http.StatusOK, BulkResponse{Results: results, Remaining: remaining})
+}
+
+// bulkStatus maps one operation's error onto its per-id status.
+func bulkStatus(r *http.Request, err error) string {
+	switch {
+	case err == nil:
+		return bulkOK
+	case errors.Is(err, node.ErrNotFound):
+		return bulkNotFound
+	case errors.Is(err, node.ErrNameConflict):
+		return bulkNameConflict
+	case errors.Is(err, node.ErrRootNode):
+		// A client that sent its own root folder's id; nothing failed here.
+		return bulkError
+	default:
+		LoggerFrom(r.Context()).Error("bulk trash operation failed", "error", err)
+		return bulkError
+	}
+}
+
+// DELETE /api/trash -- purge every trashed root, a page at a time.
+//
+// Idempotent and resumable: it takes no ids, so a client that gets
+// remaining=true calls it again and it carries on with what is left. It reads a
+// fresh page each pass rather than paginating with a cursor, because the pass
+// deletes the rows it just read -- the next read is the next batch by
+// construction.
+func (s *Server) emptyTrash(w http.ResponseWriter, r *http.Request) {
+	u := MustUser(r.Context())
+	store := node.NewStore(s.DB)
+	deadline := s.bulkDeadline()
+
+	purged := 0
+	remaining := false
+
+	for {
+		if !time.Now().Before(deadline) {
+			remaining = true
+			break
+		}
+		roots, err := store.TrashRootIDs(r.Context(), u.ID, emptyTrashPage)
+		if err != nil {
+			s.writeTrashErr(w, r, err)
+			return
+		}
+		if len(roots) == 0 {
+			break
+		}
+
+		done := 0
+		for _, id := range roots {
+			if !time.Now().Before(deadline) {
+				remaining = true
+				break
+			}
+			switch err := store.Purge(r.Context(), u.ID, id); {
+			case err == nil:
+				purged++
+				done++
+			case errors.Is(err, node.ErrNotFound):
+				// Restored or purged from another tab between the read and the
+				// write. It is out of the trash either way, and the next read
+				// will not return it.
+			default:
+				s.writeTrashErr(w, r, err)
+				return
+			}
+		}
+		// A page that purged nothing will not purge anything by being read
+		// again. Stop instead of spinning the budget away.
+		if done == 0 {
+			break
+		}
+	}
+
+	WriteJSON(w, http.StatusOK, emptyTrashResponse{Purged: purged, Remaining: remaining})
 }

@@ -99,6 +99,39 @@ func (s *Store) ListTrash(ctx context.Context, ownerID uuid.UUID, cur *TrashCurs
 	return items, &TrashCursor{DeletedAt: *last.DeletedAt, ID: last.ID}, nil
 }
 
+// TrashRootIDs returns up to limit of the caller's trashed roots, oldest
+// deletion first. It is what emptying the trash pages over: each purge removes
+// the rows it returned, so the next call reads the next batch without a cursor,
+// and a caller that stops half way simply resumes where it left off.
+//
+// The predicate is ListTrash's, exactly: the ids handed back are the ones the
+// trash listing shows, and nothing else.
+func (s *Store) TrashRootIDs(ctx context.Context, ownerID uuid.UUID, limit int) ([]uuid.UUID, error) {
+	const q = `SELECT id FROM nodes
+		 WHERE owner_id = $1 AND trashed_root AND deleted_at IS NOT NULL
+		 ORDER BY deleted_at, id
+		 LIMIT $2`
+
+	rows, err := s.db.Query(ctx, q, ownerID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing the trash: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("listing the trash: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing the trash: %w", err)
+	}
+	return ids, nil
+}
+
 // Restore brings a trashed root, and the rows sharing its timestamp, back.
 //
 // Three things happen here that the trash model requires: rows stamped at a

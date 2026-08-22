@@ -11,12 +11,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 	"github.com/rahul-sharma-cs/drive/server/internal/db"
+	"github.com/rahul-sharma-cs/drive/server/internal/node"
 )
 
 // These drive the real router -- middleware chain, session cookie and all --
@@ -88,12 +90,23 @@ type trashClient struct {
 // written directly: these tests are about the trash routes, not about signup.
 func newTrashClient(t *testing.T) *trashClient {
 	t.Helper()
+	return newTrashClientBudget(t, 0)
+}
+
+// newTrashClientBudget is newTrashClient with the bulk routes' wall-clock
+// budget replaced. A budget of one nanosecond is already spent by the time the
+// first root is looked at, which is how the pending/remaining path is exercised
+// without a 25 s test.
+func newTrashClientBudget(t *testing.T, budget time.Duration) *trashClient {
+	t.Helper()
 	pool := trashTestPool(t)
+	srv := New(&config.Config{}, pool, nil, nil, nil, nil)
+	srv.BulkBudget = budget
 	c := &trashClient{
 		t:    t,
 		ctx:  context.Background(),
 		pool: pool,
-		h:    New(&config.Config{}, pool, nil, nil, nil, nil).Routes(),
+		h:    srv.Routes(),
 	}
 
 	c.owner, c.root = uuid.New(), uuid.New()
@@ -340,5 +353,394 @@ func TestTrashListPagination(t *testing.T) {
 	}
 	if got := decodeErr(t, rec.Body.String()).Code; got != CodeInvalid {
 		t.Errorf("a forged cursor code = %q, want %q", got, CodeInvalid)
+	}
+}
+
+// ------------------------------------------------------------ bulk trash -----
+
+// rebudget swaps the client's handler for one with a different bulk budget,
+// keeping the same user and session: the same browser calling again, at a
+// server that is not out of time.
+func (c *trashClient) rebudget(budget time.Duration) {
+	c.t.Helper()
+	srv := New(&config.Config{}, c.pool, nil, nil, nil, nil)
+	srv.BulkBudget = budget
+	c.h = srv.Routes()
+}
+
+// send issues a request with a JSON body through the whole chain, as the
+// signed-in user.
+func (c *trashClient) send(method, path string, body any) *httptest.ResponseRecorder {
+	c.t.Helper()
+	return authDo(c.t, c.h, method, path, body, c.cookie)
+}
+
+func (c *trashClient) decodeBulk(rec *httptest.ResponseRecorder) BulkResponse {
+	c.t.Helper()
+	var b BulkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &b); err != nil {
+		c.t.Fatalf("response is not a bulk envelope: %v (body %q)", err, rec.Body.String())
+	}
+	return b
+}
+
+func (c *trashClient) decodeEmpty(rec *httptest.ResponseRecorder) emptyTrashResponse {
+	c.t.Helper()
+	var e emptyTrashResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil {
+		c.t.Fatalf("response is not an empty-trash envelope: %v (body %q)", err, rec.Body.String())
+	}
+	return e
+}
+
+// trash moves a node into the trash over the wire, which is how every fixture
+// below gets a trashed root.
+func (c *trashClient) trash(id uuid.UUID) {
+	c.t.Helper()
+	if rec := c.do(http.MethodDelete, "/api/nodes/"+id.String(), true); rec.Code != http.StatusNoContent {
+		c.t.Fatalf("DELETE /api/nodes/%s = %d, want 204 (body %s)", id, rec.Code, rec.Body.String())
+	}
+}
+
+// seedTrashedFiles inserts n already-trashed files in one statement -- the same
+// row state Trash produces -- because 250 of them one wire call at a time is
+// several seconds of nothing being tested. Each gets its own deleted_at so the
+// oldest-first paging order is total.
+func (c *trashClient) seedTrashedFiles(n int) {
+	c.t.Helper()
+	if _, err := c.pool.Exec(c.ctx, `
+		INSERT INTO nodes (id, owner_id, parent_id, kind, name, size, mime, deleted_at, updated_at, trashed_root)
+		SELECT gen_random_uuid(), $1, $2, 'file', 'bulk-' || i || '.txt', 10, 'text/plain',
+		       now() - make_interval(secs => i), now(), true
+		  FROM generate_series(1, $3) AS i`, c.owner, c.root, n); err != nil {
+		c.t.Fatalf("seeding %d trashed files: %v", n, err)
+	}
+}
+
+func (c *trashClient) trashedCount() int {
+	c.t.Helper()
+	var n int
+	if err := c.pool.QueryRow(c.ctx,
+		`SELECT count(*) FROM nodes WHERE owner_id = $1 AND trashed_root AND deleted_at IS NOT NULL`,
+		c.owner).Scan(&n); err != nil {
+		c.t.Fatalf("counting trashed roots: %v", err)
+	}
+	return n
+}
+
+func (c *trashClient) isLive(id uuid.UUID) bool {
+	c.t.Helper()
+	var live bool
+	if err := c.pool.QueryRow(c.ctx,
+		`SELECT deleted_at IS NULL FROM nodes WHERE id = $1`, id).Scan(&live); err != nil {
+		c.t.Fatalf("reading node %s: %v", id, err)
+	}
+	return live
+}
+
+// Every id gets its own answer, and one id's failure leaves the others alone.
+// That is the whole reason the route is a loop over single-id restores instead
+// of one transaction: a not_found in the middle of a selection is normal (a
+// second tab emptied the trash), and it is not a reason to leave the other
+// nineteen files in the bin.
+func TestBulkRestoreReportsPerIDOutcomes(t *testing.T) {
+	c := newTrashClient(t)
+	first := c.file(c.root, "first.txt", 10)
+	last := c.file(c.root, "last.txt", 20)
+	c.trash(first)
+	c.trash(last)
+	missing := uuid.New()
+
+	// The miss sits between two restorable ids on purpose: an all-or-nothing
+	// implementation loses the one before it as well as the one after.
+	rec := c.send(http.MethodPost, "/api/trash/restore",
+		map[string]any{"ids": []uuid.UUID{first, missing, last}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/trash/restore = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	got := c.decodeBulk(rec)
+	want := []BulkResult{
+		{ID: first, Status: "ok"},
+		{ID: missing, Status: "not_found"},
+		{ID: last, Status: "ok"},
+	}
+	if len(got.Results) != len(want) {
+		t.Fatalf("results = %+v, want one per id: %+v", got.Results, want)
+	}
+	for i, w := range want {
+		if got.Results[i] != w {
+			t.Errorf("results[%d] = %+v, want %+v", i, got.Results[i], w)
+		}
+	}
+	if got.Remaining {
+		t.Error("remaining = true, but every id was answered")
+	}
+
+	if !c.isLive(first) {
+		t.Error("the id before the miss was not restored")
+	}
+	if !c.isLive(last) {
+		t.Error("the id after the miss was not restored")
+	}
+	if n := c.trashedCount(); n != 0 {
+		t.Errorf("%d roots left in the trash, want 0", n)
+	}
+}
+
+// A bulk purge is a loop over the single-id purge, so it inherits its
+// contract with in-flight uploads: the session survives with its destination
+// nulled (the FK is ON DELETE SET NULL) and finalize re-parents the finished
+// file to the owner's root. Aborting it here would throw away a fully uploaded
+// file.
+func TestBulkPurgeRehomesInFlightUploads(t *testing.T) {
+	c := newTrashClient(t)
+	folder := c.folder(c.root, "Destination")
+	c.trash(folder)
+
+	sessionID := uuid.New()
+	if _, err := c.pool.Exec(c.ctx, `
+		INSERT INTO upload_sessions
+		    (id, user_id, parent_id, file_name, file_size, fingerprint,
+		     object_key, part_size, parts_total, status, expires_at)
+		VALUES ($1, $2, $3, 'big.bin', 1048576, 'fp', $4, 10485760, 1, 'active',
+		        now() + interval '7 days')`,
+		sessionID, c.owner, folder, "blobs/"+uuid.NewString()); err != nil {
+		t.Fatalf("seeding upload session: %v", err)
+	}
+
+	rec := c.send(http.MethodPost, "/api/trash/purge", map[string]any{"ids": []uuid.UUID{folder}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/trash/purge = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := c.decodeBulk(rec); len(got.Results) != 1 || got.Results[0].Status != "ok" {
+		t.Fatalf("results = %+v, want one ok", got.Results)
+	}
+
+	var status string
+	var parentID *uuid.UUID
+	if err := c.pool.QueryRow(c.ctx,
+		`SELECT status, parent_id FROM upload_sessions WHERE id = $1`, sessionID).
+		Scan(&status, &parentID); err != nil {
+		t.Fatalf("reading upload session: %v", err)
+	}
+	if status != "active" {
+		t.Errorf("upload session status = %q, want %q", status, "active")
+	}
+	if parentID != nil {
+		t.Errorf("upload session parent_id = %v, want NULL", *parentID)
+	}
+}
+
+// Emptying the trash covers every root, not just the first page, and picks up
+// where it left off when it stops early.
+func TestEmptyTrashPurgesEveryRootAndResumes(t *testing.T) {
+	const roots = 250 // more than one emptyTrashPage
+
+	// Stopping early: a spent budget purges nothing, says so, and leaves the
+	// trash exactly as it found it.
+	c := newTrashClientBudget(t, time.Nanosecond)
+	c.seedTrashedFiles(roots)
+
+	rec := c.do(http.MethodDelete, "/api/trash", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/trash = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := c.decodeEmpty(rec); got.Purged != 0 || !got.Remaining {
+		t.Errorf("out-of-budget response = %+v, want {purged:0, remaining:true}", got)
+	}
+	if n := c.trashedCount(); n != roots {
+		t.Errorf("%d roots left in the trash, want all %d still there", n, roots)
+	}
+
+	// Resuming: the same trash and the same session, a server with its budget
+	// back, one call, everything gone -- including the roots past the first
+	// page of 200.
+	c.rebudget(0)
+	rec = c.do(http.MethodDelete, "/api/trash", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/trash = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := c.decodeEmpty(rec); got.Purged != roots || got.Remaining {
+		t.Errorf("response = %+v, want {purged:%d, remaining:false} -- every page, not just the first", got, roots)
+	}
+	if n := c.trashedCount(); n != 0 {
+		t.Errorf("%d roots left in the trash, want 0", n)
+	}
+
+	// Idempotent: emptying an empty trash is a 200 that did nothing.
+	rec = c.do(http.MethodDelete, "/api/trash", true)
+	if got := c.decodeEmpty(rec); got.Purged != 0 || got.Remaining {
+		t.Errorf("emptying an empty trash = %+v, want {purged:0, remaining:false}", got)
+	}
+}
+
+// The budget is what keeps a bulk call inside a platform's edge timeout: ids it
+// never reached come back pending with remaining=true, and the client loops.
+// Nothing is half-done -- a pending id was not touched at all.
+func TestBulkBudgetAnswersPending(t *testing.T) {
+	c := newTrashClientBudget(t, time.Nanosecond)
+	ids := []uuid.UUID{
+		c.file(c.root, "a.txt", 10),
+		c.file(c.root, "b.txt", 10),
+		c.file(c.root, "c.txt", 10),
+	}
+	for _, id := range ids {
+		c.trash(id)
+	}
+
+	rec := c.send(http.MethodPost, "/api/trash/purge", map[string]any{"ids": ids})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/trash/purge = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	got := c.decodeBulk(rec)
+	if !got.Remaining {
+		t.Error("remaining = false, but the budget ran out before the first id")
+	}
+	if len(got.Results) != len(ids) {
+		t.Fatalf("results = %+v, want one per id", got.Results)
+	}
+	for i, res := range got.Results {
+		if res.Status != "pending" {
+			t.Errorf("results[%d] = %+v, want pending", i, res)
+		}
+	}
+	if n := c.trashedCount(); n != len(ids) {
+		t.Errorf("%d roots left in the trash, want all %d -- a pending id must not have been purged", n, len(ids))
+	}
+
+	// The same ids with a real budget: every one of them ok, and gone.
+	c.rebudget(0)
+	rec = c.send(http.MethodPost, "/api/trash/purge", map[string]any{"ids": ids})
+	got = c.decodeBulk(rec)
+	if got.Remaining {
+		t.Error("remaining = true with the whole budget available")
+	}
+	for i, res := range got.Results {
+		if res.Status != "ok" {
+			t.Errorf("results[%d] = %+v, want ok", i, res)
+		}
+	}
+	if n := c.trashedCount(); n != 0 {
+		t.Errorf("%d roots left in the trash, want 0", n)
+	}
+}
+
+// The bulk routes' refusals: no session, too many ids, none at all, a body that
+// is not one of ours.
+func TestBulkRouteRefusals(t *testing.T) {
+	c := newTrashClient(t)
+	id := c.file(c.root, "one.txt", 10)
+	c.trash(id)
+
+	tooMany := make([]uuid.UUID, BulkIDLimit+1)
+	for i := range tooMany {
+		tooMany[i] = uuid.New()
+	}
+
+	cases := []struct {
+		name       string
+		path       string
+		body       any
+		cookie     *http.Cookie
+		wantStatus int
+		wantCode   string
+	}{
+		{"restore without a session", "/api/trash/restore", map[string]any{"ids": []uuid.UUID{id}}, nil, http.StatusUnauthorized, CodeUnauthorized},
+		{"purge without a session", "/api/trash/purge", map[string]any{"ids": []uuid.UUID{id}}, nil, http.StatusUnauthorized, CodeUnauthorized},
+		{"more ids than the limit", "/api/trash/restore", map[string]any{"ids": tooMany}, c.cookie, http.StatusUnprocessableEntity, CodeInvalid},
+		{"no ids at all", "/api/trash/purge", map[string]any{"ids": []uuid.UUID{}}, c.cookie, http.StatusUnprocessableEntity, CodeInvalid},
+		{"an id that is not a uuid", "/api/trash/purge", map[string]any{"ids": []string{"nope"}}, c.cookie, http.StatusUnprocessableEntity, CodeInvalid},
+		{"a field we do not accept", "/api/trash/purge", map[string]any{"ids": []uuid.UUID{id}, "force": true}, c.cookie, http.StatusUnprocessableEntity, CodeInvalid},
+	}
+
+	for _, tc := range cases {
+		rec := authDo(t, c.h, http.MethodPost, tc.path, tc.body, tc.cookie)
+		if rec.Code != tc.wantStatus {
+			t.Errorf("%s: status = %d, want %d (body %s)", tc.name, rec.Code, tc.wantStatus, rec.Body.String())
+			continue
+		}
+		if got := decodeErr(t, rec.Body.String()).Code; got != tc.wantCode {
+			t.Errorf("%s: code = %q, want %q", tc.name, got, tc.wantCode)
+		}
+	}
+
+	// Emptying the trash needs a session too.
+	if rec := c.do(http.MethodDelete, "/api/trash", false); rec.Code != http.StatusUnauthorized {
+		t.Errorf("DELETE /api/trash anonymously = %d, want 401", rec.Code)
+	}
+	if n := c.trashedCount(); n != 1 {
+		t.Errorf("%d roots in the trash, want the one every refused request left alone", n)
+	}
+}
+
+// deleted_at is the trash listing's own column -- "deleted 3 days ago" is the
+// question a trash screen answers. A live listing has no such moment, and its
+// rows must not grow the field: NodeDTOFrom leaves it nil so every other
+// response serializes exactly as it did before.
+func TestTrashDTOCarriesDeletedAtAndChildrenDoNot(t *testing.T) {
+	c := newTrashClient(t)
+	file := c.file(c.root, "receipt.pdf", 10)
+	c.folder(c.root, "Keep")
+	before := time.Now()
+	c.trash(file)
+
+	rec := c.do(http.MethodGet, "/api/trash", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/trash = %d, want 200", rec.Code)
+	}
+	list := c.decodeList(rec)
+	if len(list.Items) != 1 {
+		t.Fatalf("trash listing = %d items, want 1", len(list.Items))
+	}
+	got := list.Items[0]
+	if got.DeletedAt == nil {
+		t.Fatal("the trashed item carries no deleted_at")
+	}
+	if got.DeletedAt.Before(before.Add(-time.Minute)) || got.DeletedAt.After(time.Now().Add(time.Minute)) {
+		t.Errorf("deleted_at = %s, want the moment it was trashed (~%s)", got.DeletedAt, before)
+	}
+	if got.DeletedAt.Equal(got.UpdatedAt) && got.UpdatedAt.IsZero() {
+		t.Error("deleted_at looks like a zero value, not a timestamp")
+	}
+
+	// The live listing's rows do not carry the field at all -- not null, absent.
+	rec = c.do(http.MethodGet, "/api/nodes/"+c.root.String()+"/children", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET children = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var raw struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decoding children: %v", err)
+	}
+	if len(raw.Items) == 0 {
+		t.Fatal("the folder listed no children")
+	}
+	for _, item := range raw.Items {
+		if v, ok := item["deleted_at"]; ok {
+			t.Errorf("a live child carries deleted_at = %v; the field belongs to the trash listing only", v)
+		}
+	}
+
+	// The two converters, handed the same trashed row. Only the trash's fills
+	// the field in.
+	//
+	// The wire cannot make this assertion on its own: a live listing never
+	// returns a trashed row, so a live converter that filled deleted_at in
+	// would produce identical bytes for every response there is. The rule is
+	// about which converter owns the field, so it is tested where the
+	// converters are.
+	when := time.Now().Add(-3 * time.Hour)
+	row := node.Node{
+		ID: uuid.New(), Kind: node.KindFile, Name: "receipt.pdf",
+		CreatedAt: when, UpdatedAt: when, DeletedAt: &when, TrashedRoot: true,
+	}
+	if got := itemDTO(row).DeletedAt; got == nil || !got.Equal(when) {
+		t.Errorf("itemDTO deleted_at = %v, want %s -- the trash listing's own column", got, when)
+	}
+	if got := NodeDTOFrom(row).DeletedAt; got != nil {
+		t.Errorf("NodeDTOFrom deleted_at = %s, want nil -- live responses must stay byte-identical", got)
 	}
 }
