@@ -18,7 +18,7 @@ const pressable =
   'active:scale-[0.98] disabled:pointer-events-none disabled:opacity-45'
 
 /** The one action a screen exists for. */
-export const buttonClass = `${pressable} bg-accent px-4 py-2 text-sm text-white hover:bg-accent-strong`
+export const buttonClass = `${pressable} bg-teal px-4 py-2 text-sm text-white hover:bg-teal-strong`
 
 /** Everything alongside it: toolbars, dialog cancels, row actions. */
 export const secondaryButtonClass =
@@ -35,7 +35,7 @@ export const dangerButtonClass =
 
 export const inputClass =
   'w-full rounded-control border border-line-strong bg-surface px-3 py-2 text-sm text-ink outline-none ' +
-  'transition duration-100 placeholder:text-ink-3 focus:border-accent focus:ring-2 focus:ring-accent/20'
+  'transition duration-100 placeholder:text-ink-3 focus:border-teal focus:ring-2 focus:ring-teal/20'
 
 export const fieldClass = 'flex flex-col gap-1.5 text-[13px] font-medium text-ink-2'
 
@@ -141,7 +141,7 @@ function ThesisPanel() {
       </span>
 
       <div className="max-w-md">
-        <p className="numeric text-accent-soft/70 uppercase">Self-hosted file storage</p>
+        <p className="numeric text-teal-soft/70 uppercase">Self-hosted file storage</p>
         <h2 className="mt-3 text-[2.1rem] leading-[1.1] font-semibold tracking-[-0.02em]">
           Uploads that pick up
           <br />
@@ -159,7 +159,7 @@ function ThesisPanel() {
               <span
                 key={i}
                 className={`h-full flex-1 first:rounded-l-full last:rounded-r-full ${
-                  i < confirmed ? 'bg-accent part-lit' : 'bg-canvas/15'
+                  i < confirmed ? 'bg-teal part-lit' : 'bg-canvas/15'
                 }`}
                 style={{ animationDelay: `${120 + i * 70}ms` }}
               />

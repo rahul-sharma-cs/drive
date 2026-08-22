@@ -138,8 +138,8 @@ export function DropZone({ folderId, children }: { folderId: string; children: R
           otherwise. `pointer-events-none` keeps the drop landing on the
           section underneath, which is what carries the handler. */}
       {over && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-card bg-accent-soft/80 ring-2 ring-accent">
-          <span className="flex items-center gap-2 rounded-control bg-surface px-3 py-2 text-sm font-medium text-accent-strong shadow-card">
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-card bg-teal-soft/80 ring-2 ring-teal">
+          <span className="flex items-center gap-2 rounded-control bg-surface px-3 py-2 text-sm font-medium text-teal-strong shadow-card">
             <UploadIcon />
             Drop to upload here
           </span>

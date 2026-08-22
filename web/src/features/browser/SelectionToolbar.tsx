@@ -35,12 +35,12 @@ export function SelectionToolbar({
     <div
       role="toolbar"
       aria-label="Selection actions"
-      className="flex flex-wrap items-center gap-1 border-b border-line bg-accent-soft/50 px-2 py-2 sm:px-3"
+      className="flex flex-wrap items-center gap-1 border-b border-line bg-teal-soft/50 px-2 py-2 sm:px-3"
     >
       <button className={ghostButtonClass} onClick={onClear} aria-label="Clear the selection">
         <CloseIcon />
       </button>
-      <span className="numeric px-1 text-accent-strong">{chosen.length} selected</span>
+      <span className="numeric px-1 text-teal-strong">{chosen.length} selected</span>
 
       <span aria-hidden className="mx-1 h-4 w-px bg-line-strong" />
 

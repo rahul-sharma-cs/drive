@@ -58,7 +58,7 @@ export function ConflictDialog({
             <label className="mt-3 flex items-center gap-2 rounded-control bg-surface-muted px-3 py-2 text-[13px] text-ink-2">
               <input
                 type="checkbox"
-                className="accent-accent"
+                className="accent-teal"
                 checked={all}
                 onChange={(e) => setAll(e.target.checked)}
               />

@@ -296,7 +296,7 @@ function Breadcrumbs({
               // otherwise the one direction dragging cannot express.
               <Link
                 className={`truncate rounded px-1 transition duration-100 hover:text-ink ${
-                  dropTarget === crumb.id ? 'bg-accent-soft text-accent-strong ring-1 ring-accent' : ''
+                  dropTarget === crumb.id ? 'bg-teal-soft text-teal-strong ring-1 ring-teal' : ''
                 }`}
                 to={crumb.id === rootId ? '/' : `/folders/${crumb.id}`}
                 onDragOver={(e) => {
@@ -386,15 +386,15 @@ function Row({
       }}
       className={`group flex items-center gap-3 px-3 py-2.5 transition duration-100 sm:px-4 ${
         dropTarget
-          ? 'bg-accent-soft ring-1 ring-inset ring-accent'
+          ? 'bg-teal-soft ring-1 ring-inset ring-teal'
           : selected
-            ? 'bg-accent-soft/60'
+            ? 'bg-teal-soft/60'
             : 'hover:bg-surface-muted'
       }`}
     >
       <input
         type="checkbox"
-        className={`h-4 w-4 shrink-0 accent-accent transition-opacity duration-100 ${
+        className={`h-4 w-4 shrink-0 accent-teal transition-opacity duration-100 ${
           selected
             ? 'opacity-100'
             : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100'
@@ -403,7 +403,7 @@ function Row({
         aria-label={`Select ${node.name}`}
         onChange={() => onToggle(node.id, true)}
       />
-      <span className={isFolder ? 'shrink-0 text-accent' : 'shrink-0 text-ink-3'}>
+      <span className={isFolder ? 'shrink-0 text-teal' : 'shrink-0 text-ink-3'}>
         {isFolder ? <FolderIcon /> : <FileIcon />}
       </span>
       {isFolder ? (

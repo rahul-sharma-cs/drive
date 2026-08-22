@@ -63,7 +63,7 @@ export function LoginPage() {
       </form>
       <p className="text-[13px] text-ink-3">
         No account?{' '}
-        <Link className="font-medium text-accent hover:underline" to="/signup">
+        <Link className="font-medium text-teal hover:underline" to="/signup">
           Sign up
         </Link>
       </p>

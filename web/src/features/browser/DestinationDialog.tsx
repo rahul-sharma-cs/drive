@@ -88,7 +88,7 @@ export function DestinationDialog({
                   className="flex w-full items-center gap-2.5 px-5 py-2 text-left text-sm transition duration-100 hover:bg-surface-muted"
                   onClick={() => void open(folder)}
                 >
-                  <span className="shrink-0 text-accent">
+                  <span className="shrink-0 text-teal">
                     <FolderIcon />
                   </span>
                   <span className="min-w-0 truncate">{folder.name}</span>

@@ -99,7 +99,7 @@ function NavItem({ to, end, icon, label }: { to: string; end?: boolean; icon: Re
       end={end}
       className={({ isActive }) =>
         `flex items-center gap-2 rounded-control px-2.5 py-1.5 text-[13px] font-medium whitespace-nowrap transition duration-100 ${
-          isActive ? 'bg-accent-soft text-accent-strong' : 'text-ink-2 hover:bg-surface-muted hover:text-ink'
+          isActive ? 'bg-teal-soft text-teal-strong' : 'text-ink-2 hover:bg-surface-muted hover:text-ink'
         }`
       }
     >

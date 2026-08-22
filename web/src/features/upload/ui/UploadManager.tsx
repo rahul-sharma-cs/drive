@@ -223,7 +223,7 @@ function PartMeter({
   total: number
 }) {
   const pct = Math.round(progress * 100)
-  const fill = METER_FILL[state] ?? 'bg-accent'
+  const fill = METER_FILL[state] ?? 'bg-teal'
   const segmented = total > 1 && total <= 48
 
   return (

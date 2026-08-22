@@ -59,7 +59,7 @@ export function SearchPage() {
                     key={node.id}
                     className="flex items-center gap-3 px-3 py-2.5 transition duration-100 hover:bg-surface-muted sm:px-4"
                   >
-                    <span className={node.kind === 'folder' ? 'shrink-0 text-accent' : 'shrink-0 text-ink-3'}>
+                    <span className={node.kind === 'folder' ? 'shrink-0 text-teal' : 'shrink-0 text-ink-3'}>
                       {node.kind === 'folder' ? <FolderIcon /> : <FileIcon />}
                     </span>
                     {node.kind === 'folder' ? (

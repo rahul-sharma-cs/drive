@@ -37,7 +37,7 @@ export function VerifyPage() {
         <p className="text-sm text-ink-2">
           This link is missing its token. Open the link from the verification email exactly as it arrived.
         </p>
-        <Link className="text-[13px] font-medium text-accent hover:underline" to="/login">
+        <Link className="text-[13px] font-medium text-teal hover:underline" to="/login">
           Back to sign in
         </Link>
       </AuthCard>
@@ -61,7 +61,7 @@ export function VerifyPage() {
           <p className="text-sm text-ink-2">
             Verification links expire. Sign up again with the same address to get a fresh one.
           </p>
-          <Link className="text-[13px] font-medium text-accent hover:underline" to="/signup">
+          <Link className="text-[13px] font-medium text-teal hover:underline" to="/signup">
             Back to sign up
           </Link>
         </>

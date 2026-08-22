@@ -31,9 +31,9 @@
   --color-ink-3: #626b74;
 
   /* In motion, or stored. The only colour an ordinary success ever gets. */
-  --color-accent: #11726b;
-  --color-accent-strong: #0b5852;
-  --color-accent-soft: #e3f0ee;
+  --color-teal: #11726b;
+  --color-teal-strong: #0b5852;
+  --color-teal-soft: #e3f0ee;
 
   /* Waiting on a person. */
   --color-warn: #8a5300;
@@ -88,14 +88,14 @@
      users never see it; keyboard users always do, including on the dock's
      controls over their translucent backing. */
   :focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--color-teal);
     outline-offset: 2px;
     border-radius: 6px;
   }
 
   ::selection {
-    background: var(--color-accent-soft);
-    color: var(--color-accent-strong);
+    background: var(--color-teal-soft);
+    color: var(--color-teal-strong);
   }
 
   /* Numbers are the subject matter here, so they get a face of their own and
@@ -251,24 +251,18 @@
  * `var(--popover)` rather than a baked-in hex. Redefining the semantic layer
  * under some other selector is then all a theme takes.
  *
- * Two names are absent on purpose.
+ * `accent` used to be the hard one. The primitives spend `bg-accent` on hover
+ * and focus highlights and want a pale surface tint there, while this app spent
+ * the same utility name on its teal — the primary button's fill, the storage
+ * meter, the upload progress bar, the colour of every link. One utility name
+ * cannot carry both meanings, so the teal moved to `--color-teal` and `accent`
+ * now means what the primitives mean by it: `--color-surface-muted`, the same
+ * tint a row or a ghost button already takes on hover, so a highlighted menu
+ * item and a hovered row are the same colour. `Skeleton`'s default `bg-accent`
+ * lands on that tint too, which is a loading placeholder rather than a teal
+ * block — though `.skeleton` above, with its shimmer, is still the better one.
  *
- * `accent` is one. The primitives spend `bg-accent` on hover and focus
- * highlights and would like the pale surface tint there, but this app has meant
- * teal by `--color-accent` since its first screen: it is the primary button's
- * fill, the storage meter, the upload progress bar and the colour of every
- * link. One utility name cannot carry both meanings, and re-pointing it at a
- * near-white tint would leave `text-accent` links invisible on white. So the
- * teal keeps the name, the primitives' highlighted states come out teal, and
- * `--accent-foreground` is white (5.8:1 on it) so their labels stay legible.
- * That reads well on a focused menu item and heavily on a ghost button; the one
- * place it is simply wrong is `Skeleton`, whose default `bg-accent` is a
- * loading placeholder rather than a highlight and wants the `.skeleton`
- * shimmer above instead. Giving the primitives the pale tint they expect means
- * renaming the teal across the app, which is a design change rather than the
- * wiring this block is doing, so it is left for one.
- *
- * `destructive-foreground` is the other: the primitives set `text-white`
+ * `destructive-foreground` is absent on purpose: the primitives set `text-white`
  * literally on a destructive fill and never read a token for it.
  */
 
@@ -289,18 +283,19 @@
   --popover: var(--color-surface);
   --popover-foreground: var(--color-ink);
 
-  --primary: var(--color-accent);
+  --primary: var(--color-teal);
   --primary-foreground: var(--color-surface);
   --secondary: var(--color-surface-muted);
   --secondary-foreground: var(--color-ink);
   --muted: var(--color-surface-muted);
   --muted-foreground: var(--color-ink-3);
-  --accent-foreground: var(--color-surface);
+  --accent: var(--color-surface-muted);
+  --accent-foreground: var(--color-ink);
   --destructive: var(--color-danger);
 
   --border: var(--color-line);
   --input: var(--color-line);
-  --ring: var(--color-accent);
+  --ring: var(--color-teal);
 
   --radius: var(--radius-control);
 }
@@ -320,6 +315,7 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
 

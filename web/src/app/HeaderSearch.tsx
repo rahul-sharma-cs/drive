@@ -49,7 +49,7 @@ export function HeaderSearch() {
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="Search your files"
-        className="w-full rounded-control border border-line-strong bg-surface py-1.5 pr-3 pl-8 text-[13px] text-ink outline-none transition duration-100 placeholder:text-ink-3 focus:border-accent focus:ring-2 focus:ring-accent/20"
+        className="w-full rounded-control border border-line-strong bg-surface py-1.5 pr-3 pl-8 text-[13px] text-ink outline-none transition duration-100 placeholder:text-ink-3 focus:border-teal focus:ring-2 focus:ring-teal/20"
       />
     </label>
   )

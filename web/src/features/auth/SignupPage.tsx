@@ -22,7 +22,7 @@ export function SignupPage() {
           If <span className="font-medium text-ink">{email}</span> is new here, a verification link is on its way. Open it to
           finish setting up the account.
         </p>
-        <Link className="text-[13px] font-medium text-accent hover:underline" to="/login">
+        <Link className="text-[13px] font-medium text-teal hover:underline" to="/login">
           Back to sign in
         </Link>
       </AuthCard>
@@ -80,7 +80,7 @@ export function SignupPage() {
       </form>
       <p className="text-[13px] text-ink-3">
         Already have an account?{' '}
-        <Link className="font-medium text-accent hover:underline" to="/login">
+        <Link className="font-medium text-teal hover:underline" to="/login">
           Sign in
         </Link>
       </p>
