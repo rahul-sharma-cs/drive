@@ -14,7 +14,9 @@ One Go binary serves the API and the React app. File bytes never pass through it
 - **Pause, resume, cancel, retry** per upload, from a manager that lives outside the React tree — navigating between folders never interrupts a transfer.
 - **Folder drag-and-drop** (full directory trees) plus a folder picker, both normalized through the same traversal.
 - **Name conflicts** resolved with keep-both / replace / skip — one prompt at a time, with an apply-to-all for the rest of the drop, so 150 colliding files can't stack 150 modals.
-- **A file manager, not a list.** Rows select — click, cmd/ctrl-click, checkbox — and a command bar offers only what the selection can actually carry out: rename needs exactly one item, download needs exactly one file (there is no archive endpoint, and a button that silently downloaded one of five would be a lie), copy is files-only because the server refuses a folder copy.
+- **A file manager, not a list.** Rows select by click, shift-click for a run of them, cmd/ctrl-click to add one, a checkbox on the row, or a header checkbox that takes every row loaded. A row's commands are offered twice — in a kebab at the end of the row and on right-click — from one definition, so the two can't drift apart. The keyboard works as well: arrows move, Enter opens, Delete trashes the selection, Esc clears it, cmd/ctrl-A takes the page.
+- **A command bar that never moves the list.** It sits above the rows at a fixed height in *every* state — nothing selected, loading, empty, failed — and crossfades between the item count and the commands instead of appearing and shoving the rows down, so the row you just clicked is still under the pointer when you reach for the next one. It offers only what the selection can actually carry out: rename needs exactly one item, download needs exactly one file (there is no archive endpoint, and a button that silently downloaded one of five would be a lie), copy is files-only because the server refuses a folder copy. On a narrow window the commands become icons and scroll sideways rather than wrapping onto a second line — wrapping would move the list, which is the thing this exists to prevent.
+- **One `+ New` in the rail** for everything that adds something — new folder, upload files, upload folder — reachable from every screen and always landing in the folder you are looking at. Search sits in the top bar; on a narrow window the rail folds into a drawer.
 - **Move and copy**, either through a destination picker that walks one folder at a time, or by dragging rows onto a folder row or a breadcrumb ancestor. A copy is a metadata copy — it points at the same stored blob, so it costs a row, not the bytes.
 - **A storage meter** in the rail that counts the same bytes the upload path counts when it decides whether to refuse — a meter that disagreed with the refusal would be worse than none.
 - **Accounts** with email verification, Argon2id password hashing, durable rate limits and an Argon2 concurrency semaphore.
@@ -29,7 +31,7 @@ Named plainly, because a portfolio project that overstates itself is worse than 
 - **No sharing.** No share links, no public pages, no permissions beyond "the owner". The schema has tables for it; there are no endpoints and no UI.
 - **No previews or thumbnails.** Files go in and come out as bytes.
 - **No password reset.** If you forget it, the account is gone — this is the next thing being built.
-- **No grid view, no context menus, no folder item counts, no sortable columns, no session management screen.**
+- **No grid view, no folder item counts, no sortable columns, no session management screen.**
 - **No mobile app, no CLI, no public API tokens.**
 
 Password reset, then sharing, then previews are the next things worth building. Nothing above is stubbed or half-wired — it is simply not there.
