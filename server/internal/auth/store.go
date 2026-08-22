@@ -283,7 +283,7 @@ func ChangePassword(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID, h
 // ResetPassword redeems a reset link and replaces the password, in one
 // transaction. It returns whose account it was.
 //
-// All four writes commit together or none does, and every one of them is
+// All five writes commit together or none does, and every one of them is
 // load-bearing:
 //
 //   - the token is burnt by conditional UPDATE, so two clicks on one link cannot
@@ -293,6 +293,10 @@ func ChangePassword(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID, h
 //     account that reset its password could otherwise never sign in;
 //   - every other live reset link for the account is spent, so an older mail
 //     (or one an attacker asked for) cannot be replayed against the new password;
+//   - the login lockout for the address is cleared, because forgetting a
+//     password is exactly how somebody spends that budget: guess ten times, ask
+//     for a link, and then be refused for a quarter of an hour by a counter that
+//     is protecting a password which no longer exists;
 //   - every session goes, the caller's included: a reset is what somebody does
 //     when they think another person is signed in as them.
 //
@@ -309,11 +313,11 @@ func ResetPassword(ctx context.Context, pool *pgxpool.Pool, raw, hash string) (u
 	const burn = `
 		UPDATE email_tokens
 		   SET used_at = now()
-		 WHERE token_hash = $1 AND purpose = 'reset' AND used_at IS NULL AND expires_at > now()
+		 WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()
 		RETURNING id, user_id`
 
 	var tokenID, userID uuid.UUID
-	err = tx.QueryRow(ctx, burn, HashToken(raw)).Scan(&tokenID, &userID)
+	err = tx.QueryRow(ctx, burn, HashToken(raw), PurposeReset).Scan(&tokenID, &userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, ErrInvalidToken
 	}
@@ -332,10 +336,22 @@ func ResetPassword(ctx context.Context, pool *pgxpool.Pool, raw, hash string) (u
 	const spendSiblings = `
 		UPDATE email_tokens
 		   SET used_at = now()
-		 WHERE user_id = $1 AND purpose = 'reset' AND id <> $2
+		 WHERE user_id = $1 AND purpose = $2 AND id <> $3
 		   AND used_at IS NULL AND expires_at > now()`
-	if _, err := tx.Exec(ctx, spendSiblings, userID, tokenID); err != nil {
+	if _, err := tx.Exec(ctx, spendSiblings, userID, PurposeReset, tokenID); err != nil {
 		return uuid.Nil, fmt.Errorf("auth: spending the other reset tokens for %s: %w", userID, err)
+	}
+
+	// The address is read back out of users rather than carried in, because the
+	// caller only ever had a token. lower() matches how the key is written: the
+	// API canonicalises an address before charging the budget, and throttle.key
+	// is plain text compared exactly.
+	const clearLoginLockout = `
+		DELETE FROM throttle
+		 WHERE scope = $1
+		   AND key = (SELECT lower(u.email::text) FROM users u WHERE u.id = $2)`
+	if _, err := tx.Exec(ctx, clearLoginLockout, ScopeLogin, userID); err != nil {
+		return uuid.Nil, fmt.Errorf("auth: clearing the login lockout for %s: %w", userID, err)
 	}
 
 	if _, err := tx.Exec(ctx, `DELETE FROM auth_sessions WHERE user_id = $1`, userID); err != nil {

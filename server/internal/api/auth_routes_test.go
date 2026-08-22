@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -62,15 +63,48 @@ func authTestPool(t *testing.T) *pgxpool.Pool {
 type authRecordingSender struct {
 	mu   sync.Mutex
 	sent []authMail
+	// gate, when non-nil, holds every Send until it is closed. It is how a test
+	// observes that a response arrived while a send was still in flight, which
+	// is the only way to see the difference between a send that is dispatched
+	// off the request goroutine and one that is not.
+	gate chan struct{}
 }
 
 type authMail struct{ To, Subject, Body string }
 
 func (s *authRecordingSender) Send(_ context.Context, to, subject, body string) error {
 	s.mu.Lock()
+	gate := s.gate
+	s.mu.Unlock()
+	if gate != nil {
+		<-gate // never under the lock: all() has to stay readable meanwhile
+	}
+
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sent = append(s.sent, authMail{To: to, Subject: subject, Body: body})
 	return nil
+}
+
+// hold makes every subsequent Send block until release is called.
+func (s *authRecordingSender) hold() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.gate == nil {
+		s.gate = make(chan struct{})
+	}
+}
+
+// release lets the held sends through. It is idempotent, so a test can both
+// call it at the point it means to and register it as a cleanup -- a t.Fatal
+// between the two would otherwise leave a goroutine parked on the gate forever.
+func (s *authRecordingSender) release() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.gate != nil {
+		close(s.gate)
+		s.gate = nil
+	}
 }
 
 func (s *authRecordingSender) all() []authMail {
@@ -1397,6 +1431,137 @@ func TestResendVerificationIsSilentForAVerifiedAddress(t *testing.T) {
 	}
 }
 
+// The response to a reset request must not wait on the send.
+//
+// The 200 for a known address and the 200 for an unknown one are identical by
+// construction, so latency is the only channel left -- and everything that only
+// the "this address has an account" branch does (a lookup, two budget checks, a
+// token INSERT, a blocking SMTP round trip) is exactly the work that would show
+// up in it. Nothing else in this package can see the difference between a send
+// that is dispatched off the request goroutine and one that is not: the
+// recording sender returns instantly either way. Holding it is what makes the
+// difference observable.
+func TestPasswordResetAnswersWhileTheSendIsStillInFlight(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	// Built before the gate goes up: this one needs its mail to arrive.
+	email := authVerifiedUser(t, h, sender)
+
+	sender.hold()
+	t.Cleanup(sender.release)
+
+	body, err := json.Marshal(map[string]string{"email": email})
+	if err != nil {
+		t.Fatalf("marshalling the request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/password-reset", strings.NewReader(string(body)))
+	req.Header.Set(ClientHeader, "web")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	// Served on a goroutine of its own, because the whole question is whether
+	// this call returns while a send is parked.
+	answered := make(chan int, 1)
+	go func() {
+		h.ServeHTTP(rec, req)
+		answered <- rec.Code
+	}()
+
+	select {
+	case code := <-answered:
+		if code != http.StatusOK {
+			t.Fatalf("status %d, want 200 (body %s)", code, rec.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("POST /password-reset had not answered two seconds into a held send: the send is on the response path, and its latency is an account-existence oracle")
+	}
+
+	// And the message really was on its way, so the 200 above is not the
+	// endpoint quietly doing nothing.
+	sender.release()
+	sender.waitForTo(t, email, resetSubject)
+}
+
+// A link is only good for the purpose it was minted for.
+//
+// Both endpoints redeem out of one table, so the purpose predicate is the only
+// thing keeping them apart -- and they are not equals. A verification link goes
+// to an address that has proven nothing yet, and resend-verification will mail
+// one to anybody who names that address; if it could also be spent at
+// /password-reset/confirm, "resend my verification email" would be "take over
+// this account".
+func TestALinkCannotBeSpentForAnotherPurpose(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+
+	t.Run("a verification link cannot set a password", func(t *testing.T) {
+		email := authTestEmail(t)
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/signup",
+			authSignupBody{email, authTestPassword, "Test User"}, nil); rec.Code != http.StatusOK {
+			t.Fatalf("signup: status %d, body %s", rec.Code, rec.Body.String())
+		}
+		verifyToken := authTokenFromMail(t, sender.waitForTo(t, email, verifySubject).Body)
+
+		const newPassword = "a completely different passphrase"
+		rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+			authResetConfirmBody{verifyToken, newPassword}, nil)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("a verification link was accepted as a reset link: status %d, want 422 (body %s)", rec.Code, rec.Body.String())
+		}
+		if got := decodeErr(t, rec.Body.String()).Code; got != CodeInvalid {
+			t.Errorf("code %q, want %q", got, CodeInvalid)
+		}
+
+		// The refusal spent nothing: the link still does its own job.
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/verify-email",
+			map[string]string{"token": verifyToken}, nil); rec.Code != http.StatusOK {
+			t.Fatalf("the refused reset burnt the verification link: status %d (body %s)", rec.Code, rec.Body.String())
+		}
+		// And the password is still the one signup set.
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/login",
+			authLoginBody{email, authTestPassword}, nil); rec.Code != http.StatusOK {
+			t.Errorf("the original password stopped working: status %d (body %s)", rec.Code, rec.Body.String())
+		}
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/login",
+			authLoginBody{email, newPassword}, nil); rec.Code != http.StatusUnauthorized {
+			t.Errorf("the password the refused request named signs in: status %d", rec.Code)
+		}
+	})
+
+	t.Run("a reset link cannot verify the address", func(t *testing.T) {
+		email := authTestEmail(t)
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/signup",
+			authSignupBody{email, authTestPassword, "Test User"}, nil); rec.Code != http.StatusOK {
+			t.Fatalf("signup: status %d, body %s", rec.Code, rec.Body.String())
+		}
+		sender.waitForTo(t, email, verifySubject)
+
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset",
+			map[string]string{"email": email}, nil); rec.Code != http.StatusOK {
+			t.Fatalf("password-reset: status %d, body %s", rec.Code, rec.Body.String())
+		}
+		resetToken := authResetTokenFromMail(t, sender.waitForTo(t, email, resetSubject).Body)
+
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/verify-email",
+			map[string]string{"token": resetToken}, nil); rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("a reset link was accepted as a verification link: status %d, want 422 (body %s)", rec.Code, rec.Body.String())
+		}
+
+		// The address is still unconfirmed.
+		login := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, authTestPassword}, nil)
+		if login.Code != http.StatusUnauthorized {
+			t.Fatalf("login answered %d, want 401 -- the reset link confirmed the address (body %s)", login.Code, login.Body.String())
+		}
+		if got := decodeErr(t, login.Body.String()).Code; got != CodeEmailUnverified {
+			t.Errorf("login code %q, want %q", got, CodeEmailUnverified)
+		}
+
+		// And the reset link was not spent by the refusal.
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+			authResetConfirmBody{resetToken, "a completely different passphrase"}, nil); rec.Code != http.StatusNoContent {
+			t.Fatalf("the refused verification burnt the reset link: status %d (body %s)", rec.Code, rec.Body.String())
+		}
+	})
+}
+
 // A password change is one transaction with three effects, and this is the test
 // that says all three land.
 //
@@ -1443,6 +1608,155 @@ func TestChangePasswordIsOneTransactionWithThreeEffects(t *testing.T) {
 	if rec := authDo(t, h, http.MethodPost, "/api/auth/login",
 		authLoginBody{email, newPassword}, nil); rec.Code != http.StatusOK {
 		t.Errorf("the new password does not sign in: status %d (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// Resetting the password clears the login lockout for the address.
+//
+// Without it the two controls contradict each other, and on the one path a real
+// user takes: guessing a password you have forgotten ten times is exactly how
+// the login budget gets spent, and the reset link is what the refusal tells you
+// to use next. The first sign-in with the new password would then be refused for
+// the rest of the fifteen minutes -- by a counter guarding a password that no
+// longer exists.
+func TestResettingThePasswordClearsTheLoginLockout(t *testing.T) {
+	h, sender, pool := authTestServer(t)
+	email := authVerifiedUser(t, h, sender)
+
+	for i := range auth.LoginFailLimit {
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/login",
+			authLoginBody{email, "not the password"}, nil); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d: status %d, want 401 (body %s)", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	spent, err := auth.Count(t.Context(), pool, auth.ScopeLogin, email, auth.LoginFailWindow)
+	if err != nil {
+		t.Fatalf("counting the login budget: %v", err)
+	}
+	if spent < auth.LoginFailLimit {
+		t.Fatalf("the login budget counted %d after %d failures; the lockout is not in force and the test would prove nothing", spent, auth.LoginFailLimit)
+	}
+
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset",
+		map[string]string{"email": email}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("password-reset: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	token := authResetTokenFromMail(t, sender.waitForTo(t, email, resetSubject).Body)
+
+	const newPassword = "a completely different passphrase"
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+		authResetConfirmBody{token, newPassword}, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("confirm: status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login",
+		authLoginBody{email, newPassword}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("the first sign-in with the new password answered %d, want 200: the lockout from the guesses that led to the reset is still in force (body %s)", rec.Code, rec.Body.String())
+	}
+
+	left, err := auth.Count(t.Context(), pool, auth.ScopeLogin, email, auth.LoginFailWindow)
+	if err != nil {
+		t.Fatalf("counting the login budget: %v", err)
+	}
+	if left != 0 {
+		t.Errorf("the login budget still counts %d after the reset, want 0", left)
+	}
+}
+
+// A verification link gets the two days EmailTokenTTL names, not the hour a
+// reset link gets.
+//
+// The pair is the design -- a verification link only proves an address, a reset
+// link is the account -- so both halves need pinning. The reset test kills a
+// 90-minute-old link; this one keeps one alive, so a tokenTTL that stopped
+// telling the purposes apart could not pass both.
+func TestVerificationTokenGetsTheLongerLifetime(t *testing.T) {
+	h, sender, pool := authTestServer(t)
+	email := authTestEmail(t)
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/signup",
+		authSignupBody{email, authTestPassword, "Test User"}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("signup: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	token := authTokenFromMail(t, sender.waitForTo(t, email, verifySubject).Body)
+
+	// The lifetime the row was written with, not one the test chose.
+	var seconds float64
+	if err := pool.QueryRow(t.Context(),
+		`SELECT EXTRACT(EPOCH FROM (expires_at - created_at))::float8 FROM email_tokens WHERE token_hash = $1`,
+		auth.HashToken(token),
+	).Scan(&seconds); err != nil {
+		t.Fatalf("reading the token's lifetime: %v", err)
+	}
+	if got := time.Duration(seconds * float64(time.Second)); (got - auth.EmailTokenTTL).Abs() > time.Second {
+		t.Errorf("the verification token lives %v, want %v", got, auth.EmailTokenTTL)
+	}
+
+	// And it still redeems well past the hour a reset link would have had. Both
+	// timestamps move together, so what this reads back is the interval the
+	// server chose.
+	const backdate = `
+		UPDATE email_tokens
+		   SET created_at = created_at - interval '90 minutes',
+		       expires_at = expires_at - interval '90 minutes'
+		 WHERE token_hash = $1`
+	if _, err := pool.Exec(t.Context(), backdate, auth.HashToken(token)); err != nil {
+		t.Fatalf("backdating the token: %v", err)
+	}
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/verify-email",
+		map[string]string{"token": token}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("a 90-minute-old verification link answered %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// The session list caps the User-Agent in RUNES, not bytes.
+//
+// It is attacker-controlled text of unbounded length that the account page
+// echoes back, so it has to be cut somewhere -- but a cut counted in bytes lands
+// in the middle of a multi-byte character, and what comes back is then neither
+// the browser's name nor valid UTF-8.
+func TestSessionListCapsTheUserAgentInRunes(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	email := authVerifiedUser(t, h, sender)
+
+	// 300 three-byte runes, so the string is 900 bytes: a cut at byte 200 lands
+	// two bytes into a character (200 is not a multiple of 3) rather than on a
+	// boundary by luck, and what a byte-counted cap would produce is both the
+	// wrong length and invalid UTF-8.
+	ua := strings.Repeat("日", 300)
+	if n := len([]rune(ua)); n != 300 {
+		t.Fatalf("the test's User-Agent is %d runes, want 300", n)
+	}
+	if utf8.ValidString(ua[:maxUserAgent]) {
+		t.Fatalf("the test's User-Agent is rune-aligned at byte %d; it must not be, or a byte-counted cap would look correct here", maxUserAgent)
+	}
+
+	body, err := json.Marshal(authLoginBody{email, authTestPassword})
+	if err != nil {
+		t.Fatalf("marshalling the login body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(string(body)))
+	req.Header.Set(ClientHeader, "web")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", ua)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	list := authListSessionsOf(t, h, authCookie(t, rec))
+	if len(list.Items) != 1 {
+		t.Fatalf("%d sessions listed, want 1", len(list.Items))
+	}
+	got := list.Items[0].UserAgent
+	if got == nil {
+		t.Fatal("the session row carries no user_agent")
+	}
+	if n := len([]rune(*got)); n != maxUserAgent {
+		t.Errorf("user_agent is %d runes, want %d -- a byte-counted cut of a multi-byte string lands here", n, maxUserAgent)
+	}
+	if want := string([]rune(ua)[:maxUserAgent]); *got != want {
+		t.Errorf("user_agent is not the first %d runes of what was sent; it came back as %q", maxUserAgent, *got)
 	}
 }
 

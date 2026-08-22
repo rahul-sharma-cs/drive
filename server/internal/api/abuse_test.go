@@ -91,6 +91,60 @@ func TestAuthRefusesWhenEveryArgon2SlotIsTaken(t *testing.T) {
 	}
 }
 
+// The same ceiling on the two password endpoints a stranger cannot reach --
+// they need a session or a link -- and which therefore were not covered above.
+//
+// /password-reset/confirm is the one worth the test. It hashes BEFORE it
+// consumes the link, precisely so that a refusal here cannot burn it, and the
+// assertion that the very same link still redeems afterwards is what says that
+// order is still the order: a 429 that spent the user's one link would be
+// telling them to retry with a credential that no longer exists.
+func TestPasswordEndpointsRefuseWhenEveryArgon2SlotIsTaken(t *testing.T) {
+	s, h, sender, _ := abuseServer(t)
+	email := authVerifiedUser(t, h, sender)
+	cookie := authLoginAs(t, h, email, authTestPassword)
+
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset",
+		map[string]string{"email": email}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("password-reset: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	token := authResetTokenFromMail(t, sender.waitForTo(t, email, resetSubject).Body)
+
+	// One slot, and it is taken. Everything until the release below has to be
+	// refused without reaching Argon2.
+	s.Argon2 = auth.NewLimiter(1)
+	if !s.Argon2.Acquire() {
+		t.Fatal("could not take the single Argon2 slot")
+	}
+
+	const changed = "a completely different passphrase"
+	nodeWant(t, authDo(t, h, http.MethodPost, "/api/auth/password",
+		authChangePasswordBody{authTestPassword, changed}, cookie),
+		http.StatusTooManyRequests, CodeRateLimited)
+
+	const afterReset = "yet another passphrase entirely"
+	nodeWant(t, authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+		authResetConfirmBody{token, afterReset}, nil),
+		http.StatusTooManyRequests, CodeRateLimited)
+
+	s.Argon2.Release()
+
+	// The link survived its refusal.
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+		authResetConfirmBody{token, afterReset}, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("the reset link did not survive the 429: status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+	// And the refused change changed nothing.
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login",
+		authLoginBody{email, changed}, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("the password the refused change named signs in: status %d", rec.Code)
+	}
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login",
+		authLoginBody{email, afterReset}, nil); rec.Code != http.StatusOK {
+		t.Errorf("the password the reset set does not sign in: status %d (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
 // The per-IP bucket, keyed by the address the edge reports. Its whole point is
 // that it is per-address: a shared bucket would mean one attacker locking every
 // user out of signing in.

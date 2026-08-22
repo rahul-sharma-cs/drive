@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/mail"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,12 @@ const (
 // attacker-controlled text of unbounded length; the list shows enough of it to
 // recognise a browser and not a paragraph.
 const maxUserAgent = 200 // runes
+
+// mailSendTimeout bounds one detached mail goroutine end to end -- the lookup,
+// the budgets, the token and the SMTP round trip. It is generous, because it is
+// not a latency budget: nothing waits on it. It exists so that a peer which
+// never answers cannot pin the goroutine forever.
+const mailSendTimeout = 30 * time.Second
 
 // mountAuth splits /api/auth in two.
 //
@@ -238,7 +245,22 @@ func (s *Server) authSignup(w http.ResponseWriter, r *http.Request) {
 // sendVerificationMail is signup's send. It keeps the plain email_send scope:
 // the budget a person spends on their own address at signup is not the one a
 // stranger can spend on it through resend-verification.
+//
+// It is detached from its request exactly as mailAccountLink is, and carries the
+// same two guards for the same reasons: out here a panic has no request to fail
+// and takes the process with it, and an SMTP peer that never answers has nothing
+// else to end it.
 func (s *Server) sendVerificationMail(ctx context.Context, log *slog.Logger, acct *auth.Account) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Error("the detached mail goroutine panicked",
+				"panic", p, "purpose", auth.PurposeVerify, "stack", string(debug.Stack()))
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mailSendTimeout)
+	defer cancel()
+
 	s.sendAccountLink(ctx, log, acct, auth.PurposeVerify, auth.ScopeEmailSend)
 }
 
@@ -703,7 +725,23 @@ func (s *Server) requestAccountMail(w http.ResponseWriter, r *http.Request, purp
 
 // mailAccountLink is the off-request half: look the address up, and send only
 // if there is somebody to send to.
+//
+// It runs with no request left to fail, which is what the two guards at the top
+// are about. A panic on a detached goroutine takes the process down with it and
+// nothing above can recover it, and an SMTP peer that accepts a connection and
+// then says nothing would otherwise hold this goroutine open for as long as the
+// process lives -- there is no client timeout out here to end it.
 func (s *Server) mailAccountLink(ctx context.Context, log *slog.Logger, email, purpose string) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Error("the detached mail goroutine panicked",
+				"panic", p, "purpose", purpose, "stack", string(debug.Stack()))
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mailSendTimeout)
+	defer cancel()
+
 	acct, err := auth.FindUserByEmail(ctx, s.DB, email)
 	if err != nil {
 		log.Error("looking the account up", "error", err, "purpose", purpose)
