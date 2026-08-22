@@ -12,8 +12,28 @@ import (
 const (
 	// ScopeLogin counts failed sign-ins, keyed by the submitted email.
 	ScopeLogin = "login"
-	// ScopeEmailSend counts outbound mail, keyed by recipient address.
+	// ScopePasswordChange counts wrong current-password guesses on an
+	// authenticated password change, keyed by USER ID.
+	//
+	// It is deliberately not ScopeLogin. That budget is keyed by email, so
+	// charging it here would let ten mistyped current passwords -- or anyone who
+	// knows the address and has stolen a session -- lock the account out of
+	// signing in for fifteen minutes. Different key, different budget, same
+	// numbers.
+	ScopePasswordChange = "password_change"
+	// ScopeEmailSend counts outbound mail, keyed by recipient address. It is
+	// signup's budget; the two purposes below have their own.
 	ScopeEmailSend = "email_send"
+	// ScopeEmailSendReset and ScopeEmailSendVerify are the per-recipient send
+	// budgets for the two paths anybody can trigger against an address they do
+	// not own: password-reset and resend-verification.
+	//
+	// They are separate scopes rather than one, because sharing a budget makes
+	// each path a way to suppress the other: five reset requests against a
+	// stranger's address would otherwise swallow the verification mail they are
+	// waiting for, and vice versa.
+	ScopeEmailSendReset  = "email_send:reset"
+	ScopeEmailSendVerify = "email_send:verify"
 	// ScopeEmailSendGlobal counts ALL outbound mail, service-wide. ScopeEmailSend
 	// is per-recipient and so cannot protect the sending account's own daily
 	// quota: a thousand addresses each under their personal budget still burn
@@ -32,6 +52,13 @@ const GlobalKey = "all"
 const (
 	LoginFailLimit  = 10
 	LoginFailWindow = 15 * time.Minute
+
+	// The same allowance for a wrong current password on an authenticated
+	// change. Spending it costs the caller nothing but the change: they stay
+	// signed in and can still log in elsewhere, which is exactly why it is not
+	// the login budget.
+	PasswordChangeFailLimit  = 10
+	PasswordChangeFailWindow = 15 * time.Minute
 
 	EmailSendLimit  = 5
 	EmailSendWindow = time.Hour

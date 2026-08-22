@@ -32,6 +32,22 @@ const (
 // enough that a link found in an old mailbox is dead.
 const EmailTokenTTL = 48 * time.Hour
 
+// ResetTokenTTL is how long a password-reset link stays usable, and it is
+// deliberately far shorter than EmailTokenTTL. A verification link only proves
+// an address; a reset link *is* the account, so a copy sitting in a mailbox
+// somebody else later reads has to be dead within the hour rather than two days
+// later.
+const ResetTokenTTL = time.Hour
+
+// tokenTTL is how long a link of this purpose lives. Anything that is not a
+// reset gets the verification lifetime.
+func tokenTTL(purpose string) time.Duration {
+	if purpose == PurposeReset {
+		return ResetTokenTTL
+	}
+	return EmailTokenTTL
+}
+
 // RootFolderName is the name of the folder created for every user at signup.
 const RootFolderName = "My Drive"
 
@@ -133,7 +149,7 @@ func CreateEmailToken(ctx context.Context, q Querier, userID uuid.UUID, purpose 
 	const sql = `
 		INSERT INTO email_tokens (id, user_id, purpose, token_hash, expires_at)
 		VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))`
-	if _, err := q.Exec(ctx, sql, uuid.New(), userID, purpose, hash, EmailTokenTTL.Seconds()); err != nil {
+	if _, err := q.Exec(ctx, sql, uuid.New(), userID, purpose, hash, tokenTTL(purpose).Seconds()); err != nil {
 		return "", fmt.Errorf("auth: creating %s token: %w", purpose, err)
 	}
 	return raw, nil
@@ -177,6 +193,118 @@ func ConsumeEmailToken(ctx context.Context, pool *pgxpool.Pool, raw, purpose str
 
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, fmt.Errorf("auth: consuming token: %w", err)
+	}
+	return userID, nil
+}
+
+// FindUserByID returns the account with this id, or (nil, nil) if there is
+// none. It is how an authenticated handler gets at the stored password hash,
+// which the request-scoped user deliberately does not carry.
+func FindUserByID(ctx context.Context, q Querier, id uuid.UUID) (*Account, error) {
+	const sql = `
+		SELECT u.id, u.email, u.display_name, u.password_hash, u.email_verified_at, root.id
+		  FROM users u
+		  LEFT JOIN nodes root ON root.owner_id = u.id AND root.parent_id IS NULL
+		 WHERE u.id = $1`
+
+	var a Account
+	var rootID *uuid.UUID
+	err := q.QueryRow(ctx, sql, id).Scan(&a.ID, &a.Email, &a.DisplayName, &a.PasswordHash, &a.EmailVerifiedAt, &rootID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("auth: looking up %s: %w", id, err)
+	}
+	if rootID != nil {
+		a.RootID = *rootID
+	}
+	return &a, nil
+}
+
+// SetDisplayName renames the account. The caller cleans the name first --
+// display names ride into mail headers.
+func SetDisplayName(ctx context.Context, q Querier, userID uuid.UUID, name string) error {
+	if _, err := q.Exec(ctx, `UPDATE users SET display_name = $2 WHERE id = $1`, userID, name); err != nil {
+		return fmt.Errorf("auth: renaming %s: %w", userID, err)
+	}
+	return nil
+}
+
+// SetPassword stores a new password hash. Revoking the other sessions is the
+// caller's job, not this function's: a password change keeps the caller signed
+// in and a reset does not, and that difference belongs where the decision is.
+func SetPassword(ctx context.Context, q Querier, userID uuid.UUID, hash string) error {
+	if _, err := q.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, userID, hash); err != nil {
+		return fmt.Errorf("auth: setting the password for %s: %w", userID, err)
+	}
+	return nil
+}
+
+// ResetPassword redeems a reset link and replaces the password, in one
+// transaction. It returns whose account it was.
+//
+// All four writes commit together or none does, and every one of them is
+// load-bearing:
+//
+//   - the token is burnt by conditional UPDATE, so two clicks on one link cannot
+//     both land;
+//   - the address is marked verified, because whoever read that mailbox has just
+//     proven the same thing the verification link proves -- and an unverified
+//     account that reset its password could otherwise never sign in;
+//   - every other live reset link for the account is spent, so an older mail
+//     (or one an attacker asked for) cannot be replayed against the new password;
+//   - every session goes, the caller's included: a reset is what somebody does
+//     when they think another person is signed in as them.
+//
+// The hash is computed by the caller before this is called. That order matters:
+// hashing here would let a busy Argon2 limiter burn the token and leave the
+// account with its old password and a dead link.
+func ResetPassword(ctx context.Context, pool *pgxpool.Pool, raw, hash string) (uuid.UUID, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("auth: resetting password: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const burn = `
+		UPDATE email_tokens
+		   SET used_at = now()
+		 WHERE token_hash = $1 AND purpose = 'reset' AND used_at IS NULL AND expires_at > now()
+		RETURNING id, user_id`
+
+	var tokenID, userID uuid.UUID
+	err = tx.QueryRow(ctx, burn, HashToken(raw)).Scan(&tokenID, &userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrInvalidToken
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("auth: resetting password: %w", err)
+	}
+
+	const setPassword = `
+		UPDATE users
+		   SET password_hash = $2, email_verified_at = COALESCE(email_verified_at, now())
+		 WHERE id = $1`
+	if _, err := tx.Exec(ctx, setPassword, userID, hash); err != nil {
+		return uuid.Nil, fmt.Errorf("auth: resetting password for %s: %w", userID, err)
+	}
+
+	const spendSiblings = `
+		UPDATE email_tokens
+		   SET used_at = now()
+		 WHERE user_id = $1 AND purpose = 'reset' AND id <> $2
+		   AND used_at IS NULL AND expires_at > now()`
+	if _, err := tx.Exec(ctx, spendSiblings, userID, tokenID); err != nil {
+		return uuid.Nil, fmt.Errorf("auth: spending the other reset tokens for %s: %w", userID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM auth_sessions WHERE user_id = $1`, userID); err != nil {
+		return uuid.Nil, fmt.Errorf("auth: revoking the sessions of %s: %w", userID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("auth: resetting password: %w", err)
 	}
 	return userID, nil
 }

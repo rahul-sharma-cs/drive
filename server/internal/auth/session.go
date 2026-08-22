@@ -58,6 +58,73 @@ func DeleteSession(ctx context.Context, q Querier, raw string) error {
 	return nil
 }
 
+// SessionInfo is one row of a user's session list. It is the audit view of
+// auth_sessions -- everything the row records about where a login came from,
+// and nothing that could impersonate it: the token hash is never read back out.
+type SessionInfo struct {
+	ID         uuid.UUID
+	CreatedAt  time.Time
+	LastSeenAt *time.Time
+	IP         *string
+	UserAgent  *string
+}
+
+// ListSessions returns the user's live sessions, newest first. Expired rows are
+// left out: they cannot be used, so listing them would only ask somebody to
+// revoke what is already dead.
+func ListSessions(ctx context.Context, q Querier, userID uuid.UUID) ([]SessionInfo, error) {
+	// host() renders inet as a bare address, without the /32 a text cast adds.
+	const sql = `
+		SELECT id, created_at, last_seen_at, host(ip), user_agent
+		  FROM auth_sessions
+		 WHERE user_id = $1 AND expires_at > now()
+		 ORDER BY created_at DESC, id`
+
+	rows, err := q.Query(ctx, sql, userID)
+	if err != nil {
+		return nil, fmt.Errorf("auth: listing sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SessionInfo
+	for rows.Next() {
+		var s SessionInfo
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.LastSeenAt, &s.IP, &s.UserAgent); err != nil {
+			return nil, fmt.Errorf("auth: listing sessions: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("auth: listing sessions: %w", err)
+	}
+	return out, nil
+}
+
+// DeleteSessionByID revokes one session by id, scoped to its owner, and reports
+// whether a row went. The owner predicate is the authorization: without it the
+// endpoint would revoke anybody's session for anybody who could guess an id.
+func DeleteSessionByID(ctx context.Context, q Querier, userID, id uuid.UUID) (bool, error) {
+	tag, err := q.Exec(ctx, `DELETE FROM auth_sessions WHERE id = $1 AND user_id = $2`, id, userID)
+	if err != nil {
+		return false, fmt.Errorf("auth: deleting session: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// DeleteUserSessions revokes every session a user has, optionally keeping one.
+//
+// keep is what a password change passes: a new password must sign out every
+// other browser -- that is the whole point of changing one after a compromise
+// -- while leaving the person who just typed it signed in where they are. A nil
+// keep is "sign out everywhere", the caller included.
+func DeleteUserSessions(ctx context.Context, q Querier, userID uuid.UUID, keep *uuid.UUID) error {
+	const sql = `DELETE FROM auth_sessions WHERE user_id = $1 AND ($2::uuid IS NULL OR id <> $2)`
+	if _, err := q.Exec(ctx, sql, userID, keep); err != nil {
+		return fmt.Errorf("auth: deleting sessions: %w", err)
+	}
+	return nil
+}
+
 // nullable turns an empty string into a SQL NULL, which is what the inet and
 // text columns want for "not recorded".
 func nullable(s string) *string {
