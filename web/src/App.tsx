@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router'
 
 import { AppLayout } from './app/AppLayout'
+import { AccountPage } from './features/account/AccountPage'
 import { LoginPage } from './features/auth/LoginPage'
 import { RequireAuth } from './features/auth/RequireAuth'
 import { SignupPage } from './features/auth/SignupPage'
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/folders/:id" element={<FolderPage />} />
           <Route path="/trash" element={<TrashPage />} />
           <Route path="/search" element={<SearchPage />} />
+          <Route path="/account" element={<AccountPage />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

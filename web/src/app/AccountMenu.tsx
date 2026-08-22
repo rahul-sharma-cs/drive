@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
-import { LogOut } from 'lucide-react'
-import { useNavigate } from 'react-router'
+import { LogOut, Settings } from 'lucide-react'
+import { Link, useNavigate } from 'react-router'
 
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
@@ -20,7 +20,7 @@ import { logout } from '../lib/api'
  * Sign out used to be a button sitting in the rail beside My Drive and Trash,
  * as though leaving were a place you could go. It belongs here, behind the
  * face: identity and the account's own commands in one menu, which is also
- * where an account settings screen will hang off.
+ * where the account settings screen hangs off.
  *
  * The menu is non-modal on purpose — a modal Radix menu leaves
  * `pointer-events: none` on <body> for as long as it takes to unmount, and this
@@ -58,6 +58,13 @@ export function AccountMenu() {
             {user.email}
           </p>
         </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link to="/account">
+            <Settings />
+            Account settings
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => signOut.mutate()} disabled={signOut.isPending}>
           <LogOut />

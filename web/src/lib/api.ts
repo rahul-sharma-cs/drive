@@ -106,6 +106,45 @@ export const logout = () => request<{ status: string }>('POST', '/auth/logout')
 
 export const me = () => request<Me>('GET', '/auth/me')
 
+export const updateMe = (displayName: string) => request<Me>('PATCH', '/auth/me', { display_name: displayName })
+
+/**
+ * Succeeds with 204 and revokes every session but this one, so the answer is
+ * "you are still signed in here, and nowhere else". A wrong current password is
+ * a 401 carrying the server's own wording.
+ */
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  request<void>('POST', '/auth/password', { current_password: currentPassword, new_password: newPassword })
+
+/** One live sign-in. `current` marks the session this browser is using. */
+export interface AuthSession {
+  id: string
+  created_at: string
+  last_seen_at: string | null
+  ip: string | null
+  user_agent: string | null
+  current: boolean
+}
+
+export const listSessions = () => request<Page<AuthSession>>('GET', '/auth/sessions')
+
+export const revokeSession = (id: string) => request<void>('DELETE', `/auth/sessions/${id}`)
+
+export const logoutAll = () => request<void>('POST', '/auth/logout-all')
+
+/**
+ * Both of these answer 200 whether or not the address has an account — the
+ * server refuses to be an account-existence oracle, and the screens that call
+ * them must not become one either.
+ */
+export const requestReset = (email: string) => request<{ status: string }>('POST', '/auth/password-reset', { email })
+
+export const resendVerification = (email: string) =>
+  request<{ status: string }>('POST', '/auth/resend-verification', { email })
+
+export const confirmReset = (token: string, newPassword: string) =>
+  request<void>('POST', '/auth/password-reset/confirm', { token, new_password: newPassword })
+
 /* ------------------------------------------------------------------ nodes */
 
 export const getNode = (id: string) => request<DriveNode>('GET', `/nodes/${id}`)
