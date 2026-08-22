@@ -111,15 +111,13 @@ func DeleteSessionByID(ctx context.Context, q Querier, userID, id uuid.UUID) (bo
 	return tag.RowsAffected() > 0, nil
 }
 
-// DeleteUserSessions revokes every session a user has, optionally keeping one.
-//
-// keep is what a password change passes: a new password must sign out every
-// other browser -- that is the whole point of changing one after a compromise
-// -- while leaving the person who just typed it signed in where they are. A nil
-// keep is "sign out everywhere", the caller included.
-func DeleteUserSessions(ctx context.Context, q Querier, userID uuid.UUID, keep *uuid.UUID) error {
-	const sql = `DELETE FROM auth_sessions WHERE user_id = $1 AND ($2::uuid IS NULL OR id <> $2)`
-	if _, err := q.Exec(ctx, sql, userID, keep); err != nil {
+// DeleteUserSessions revokes every session a user has, the caller's included.
+// It is "sign out everywhere" and nothing else: the one caller that keeps a
+// session -- a password change -- does its own revoke inside the transaction
+// that sets the new hash, because a revoke that can fail after the password is
+// already stored fails open.
+func DeleteUserSessions(ctx context.Context, q Querier, userID uuid.UUID) error {
+	if _, err := q.Exec(ctx, `DELETE FROM auth_sessions WHERE user_id = $1`, userID); err != nil {
 		return fmt.Errorf("auth: deleting sessions: %w", err)
 	}
 	return nil

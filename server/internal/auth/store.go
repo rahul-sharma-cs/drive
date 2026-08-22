@@ -231,12 +231,51 @@ func SetDisplayName(ctx context.Context, q Querier, userID uuid.UUID, name strin
 	return nil
 }
 
-// SetPassword stores a new password hash. Revoking the other sessions is the
-// caller's job, not this function's: a password change keeps the caller signed
-// in and a reset does not, and that difference belongs where the decision is.
-func SetPassword(ctx context.Context, q Querier, userID uuid.UUID, hash string) error {
-	if _, err := q.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, userID, hash); err != nil {
+// ChangePassword replaces the password of a signed-in caller, in one
+// transaction. keep is the session they are on, which is the only one that
+// survives.
+//
+// All three writes commit together or none does, and the reason is that the two
+// that are not the password are what make the change mean anything:
+//
+//   - every other session goes, because a person changing their password after
+//     a scare is asking for exactly that -- while the browser they just typed it
+//     into stays signed in, since signing somebody out of the form they
+//     submitted is a bug and not a security control;
+//   - every live reset link is spent, because a link already sitting in a
+//     mailbox is a standing offer to undo this. Whoever asked for it -- the user
+//     before they remembered the old password, or an attacker while the user was
+//     reading their mail -- could otherwise set the password back afterwards.
+//
+// Doing these after the fact and merely logging a failure would fail open: the
+// password would be new and the old sessions or the old links would still work,
+// with a 204 telling the user they were safe.
+func ChangePassword(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID, hash string, keep uuid.UUID) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("auth: changing the password for %s: %w", userID, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, userID, hash); err != nil {
 		return fmt.Errorf("auth: setting the password for %s: %w", userID, err)
+	}
+
+	const revokeOthers = `DELETE FROM auth_sessions WHERE user_id = $1 AND id <> $2`
+	if _, err := tx.Exec(ctx, revokeOthers, userID, keep); err != nil {
+		return fmt.Errorf("auth: revoking the other sessions of %s: %w", userID, err)
+	}
+
+	const spendResetLinks = `
+		UPDATE email_tokens
+		   SET used_at = now()
+		 WHERE user_id = $1 AND purpose = $2 AND used_at IS NULL`
+	if _, err := tx.Exec(ctx, spendResetLinks, userID, PurposeReset); err != nil {
+		return fmt.Errorf("auth: spending the reset links of %s: %w", userID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("auth: changing the password for %s: %w", userID, err)
 	}
 	return nil
 }

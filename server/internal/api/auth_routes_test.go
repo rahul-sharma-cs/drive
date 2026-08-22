@@ -1397,6 +1397,55 @@ func TestResendVerificationIsSilentForAVerifiedAddress(t *testing.T) {
 	}
 }
 
+// A password change is one transaction with three effects, and this is the test
+// that says all three land.
+//
+// Two of them used to be a best-effort DELETE issued after the UPDATE with its
+// error only logged: a revoke that failed answered 204 and left every session
+// the person was worried about alive. The third is the one nothing did at all --
+// a reset link already sitting in a mailbox is a standing offer to undo the
+// change, whether the user asked for it before they remembered the old password
+// or somebody else asked for it while they were reading their mail.
+func TestChangePasswordIsOneTransactionWithThreeEffects(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	email, mine := authSignedIn(t, h, sender)
+	other := authLoginAs(t, h, email, authTestPassword)
+
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset",
+		map[string]string{"email": email}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("password-reset: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	resetToken := authResetTokenFromMail(t, sender.waitForTo(t, email, resetSubject).Body)
+
+	const newPassword = "a completely different passphrase"
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password",
+		authChangePasswordBody{authTestPassword, newPassword}, mine); rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	if got := authMeStatus(t, h, mine); got != http.StatusOK {
+		t.Errorf("the caller's own session answered %d after changing its password, want 200", got)
+	}
+	if got := authMeStatus(t, h, other); got != http.StatusUnauthorized {
+		t.Errorf("the other session answered %d after the password change, want 401", got)
+	}
+
+	// The link is dead, so nobody holding it can put the old password back.
+	rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+		authResetConfirmBody{resetToken, authTestPassword}, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a reset link minted before the password change still redeems: status %d, want 422 (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login",
+		authLoginBody{email, authTestPassword}, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("the old password signs in again: status %d -- the stale link undid the change", rec.Code)
+	}
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login",
+		authLoginBody{email, newPassword}, nil); rec.Code != http.StatusOK {
+		t.Errorf("the new password does not sign in: status %d (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestResetAndResendRejectMalformedAddresses(t *testing.T) {
 	h, sender, _ := authTestServer(t)
 

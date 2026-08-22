@@ -564,17 +564,15 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 		s.authFailed(w, r, "hashing the password", err)
 		return
 	}
-	if err := auth.SetPassword(ctx, s.DB, u.ID, hash); err != nil {
-		s.authFailed(w, r, "setting the password", err)
+	// One transaction: the new hash, the revoke of every OTHER session (this one
+	// survives -- signing somebody out of the form they just submitted is a bug,
+	// not a security control) and the spending of every live reset link. A
+	// failure here is a 500 with nothing changed, because the alternative is a
+	// 204 that tells the user they are safe while the sessions or the links they
+	// were worried about still work.
+	if err := auth.ChangePassword(ctx, s.DB, u.ID, hash, u.SessionID); err != nil {
+		s.authFailed(w, r, "changing the password", err)
 		return
-	}
-
-	// Every other browser is signed out -- that is what a person changing their
-	// password after a scare is asking for -- and this one is not, because
-	// signing somebody out of the form they just submitted is a bug, not a
-	// security control.
-	if err := auth.DeleteUserSessions(ctx, s.DB, u.ID, &u.SessionID); err != nil {
-		LoggerFrom(ctx).Error("revoking the other sessions after a password change", "error", err, "user_id", u.ID)
 	}
 
 	LoggerFrom(ctx).Info("password changed", "user_id", u.ID)
@@ -642,7 +640,7 @@ func (s *Server) authDeleteSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authLogoutAll(w http.ResponseWriter, r *http.Request) {
 	u := MustUser(r.Context())
 
-	if err := auth.DeleteUserSessions(r.Context(), s.DB, u.ID, nil); err != nil {
+	if err := auth.DeleteUserSessions(r.Context(), s.DB, u.ID); err != nil {
 		s.authFailed(w, r, "revoking the sessions", err)
 		return
 	}
