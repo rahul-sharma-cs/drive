@@ -64,6 +64,8 @@ func WriteNodeErr(w http.ResponseWriter, r *http.Request, err error) {
 		WriteErr(w, r, http.StatusUnprocessableEntity, CodeUnsupported, err.Error())
 	case errors.Is(err, node.ErrInvalidName),
 		errors.Is(err, node.ErrInvalidPolicy),
+		errors.Is(err, node.ErrInvalidSort),
+		errors.Is(err, node.ErrCursorSort),
 		errors.Is(err, node.ErrRootNode):
 		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
 	default:
@@ -100,13 +102,18 @@ func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, NodeDTOFrom(n))
 }
 
-// GET /api/nodes/{id}/children
+// GET /api/nodes/{id}/children?sort=&dir=
 func (s *Server) listChildren(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
 		return
 	}
 	cursor, limit, err := Page(r)
+	if err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
+		return
+	}
+	sort, err := SortParams(r)
 	if err != nil {
 		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
 		return
@@ -122,7 +129,8 @@ func (s *Server) listChildren(w http.ResponseWriter, r *http.Request) {
 		after = &c
 	}
 
-	items, next, err := s.nodes().Children(r.Context(), MustUser(r.Context()).ID, id, after, limit)
+	owner := MustUser(r.Context()).ID
+	items, next, err := s.nodes().Children(r.Context(), owner, id, sort, after, limit)
 	if err != nil {
 		WriteNodeErr(w, r, err)
 		return
@@ -132,11 +140,48 @@ func (s *Server) listChildren(w http.ResponseWriter, r *http.Request) {
 	for _, n := range items {
 		dtos = append(dtos, NodeDTOFrom(n))
 	}
+	if err := s.countFolderItems(r, owner, items, dtos); err != nil {
+		WriteNodeErr(w, r, err)
+		return
+	}
+
 	var nextCursor string
 	if next != nil {
 		nextCursor = EncodeCursor(next)
 	}
 	WriteJSON(w, http.StatusOK, NewList(dtos, nextCursor))
+}
+
+// countFolderItems fills item_count on the folder rows of one children page:
+// one grouped count over at most a page's worth of ids, so a listing costs one
+// extra round trip and never one per folder. Files are left alone -- the field
+// is omitempty, and a file has nothing to count.
+func (s *Server) countFolderItems(r *http.Request, owner uuid.UUID, items []node.Node, dtos []NodeDTO) error {
+	folders := make([]uuid.UUID, 0, len(items))
+	for _, n := range items {
+		if n.Kind == node.KindFolder {
+			folders = append(folders, n.ID)
+		}
+	}
+	if len(folders) == 0 {
+		return nil
+	}
+
+	counts, err := s.nodes().ChildCounts(r.Context(), owner, folders)
+	if err != nil {
+		return err
+	}
+	for i, n := range items {
+		if n.Kind != node.KindFolder {
+			continue
+		}
+		// An empty folder is absent from the grouped count; it still reports
+		// zero, because "0 items" is the true answer and a missing field would
+		// leave the client guessing.
+		count := counts[n.ID]
+		dtos[i].ItemCount = &count
+	}
+	return nil
 }
 
 type createFolderReq struct {

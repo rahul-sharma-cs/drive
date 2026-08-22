@@ -17,14 +17,80 @@ func (s *Store) Get(ctx context.Context, ownerID, id uuid.UUID) (Node, error) {
 	return getLive(ctx, s.db, ownerID, id)
 }
 
+// The children listing's sort vocabulary. These three keys and two directions
+// are the only ones that exist: a request's strings are matched against them
+// and the query below is then built out of sortSpecs' own constants, so no
+// request text is ever interpolated into SQL.
+const (
+	SortName      = "name"
+	SortUpdatedAt = "updated_at"
+	SortSize      = "size"
+
+	DirAsc  = "asc"
+	DirDesc = "desc"
+)
+
+// sortSpec is one sort key's SQL: the expression it orders by and the type its
+// cursor value binds as. key is also the expression migration 0003's indexes
+// are built on, so the two have to stay written the same way.
+type sortSpec struct {
+	key  string
+	cast string
+}
+
+// sortSpecs is the fixed table. coalesce(size, 0) is correct rather than merely
+// convenient: rank already puts every folder ahead of every file, so a folder's
+// NULL size is never compared against a file's number.
+var sortSpecs = map[string]sortSpec{
+	SortName:      {key: `lower(name)`, cast: `text`},
+	SortUpdatedAt: {key: `updated_at`, cast: `timestamptz`},
+	SortSize:      {key: `coalesce(size, 0)`, cast: `bigint`},
+}
+
+// rankExpr is the folders-first ordering term. Folders lead in both
+// directions -- dir sorts within a kind, it does not interleave the kinds --
+// which is why it is always ASC and never carries the direction.
+const rankExpr = `(CASE kind WHEN 'folder' THEN 0 ELSE 1 END)`
+
+// ChildSort is a validated children ordering. The zero value is the default,
+// name ascending.
+type ChildSort struct {
+	Key string
+	Dir string
+}
+
+// NewChildSort validates a raw sort/dir pair, empty meaning name/asc. Anything
+// outside the vocabulary is ErrInvalidSort -- the request never picks the SQL.
+func NewChildSort(key, dir string) (ChildSort, error) {
+	if key == "" {
+		key = SortName
+	}
+	if dir == "" {
+		dir = DirAsc
+	}
+	if _, ok := sortSpecs[key]; !ok {
+		return ChildSort{}, fmt.Errorf("%w: sort: want name, updated_at or size, got %q", ErrInvalidSort, key)
+	}
+	if dir != DirAsc && dir != DirDesc {
+		return ChildSort{}, fmt.Errorf("%w: dir: want asc or desc, got %q", ErrInvalidSort, dir)
+	}
+	return ChildSort{Key: key, Dir: dir}, nil
+}
+
 // Children lists one page of a folder's live children: folders before files,
-// then by case-folded name, then by id. The parent itself is authorized first
-// -- listing is a read, but it still must not confirm that another user's
-// folder exists.
+// then by the requested sort key, then by case-folded name, then by id. The
+// parent itself is authorized first -- listing is a read, but it still must not
+// confirm that another user's folder exists.
 //
 // limit is the page size; the returned cursor is non-nil only when a further
-// page exists.
-func (s *Store) Children(ctx context.Context, ownerID, parentID uuid.UUID, after *ChildCursor, limit int) ([]Node, *ChildCursor, error) {
+// page exists, and it carries the ordering it was minted under. A cursor
+// replayed under a different one is ErrCursorSort rather than a page of rows
+// the client has already seen.
+func (s *Store) Children(ctx context.Context, ownerID, parentID uuid.UUID, sort ChildSort, after *ChildCursor, limit int) ([]Node, *ChildCursor, error) {
+	sort, err := NewChildSort(sort.Key, sort.Dir)
+	if err != nil {
+		return nil, nil, err
+	}
 	if _, err := folderForOwner(ctx, s.db, ownerID, parentID); err != nil {
 		return nil, nil, err
 	}
@@ -33,22 +99,19 @@ func (s *Store) Children(ctx context.Context, ownerID, parentID uuid.UUID, after
 		rank *int
 		name *string
 		id   *uuid.UUID
+		key  any
 	)
 	if after != nil {
+		if after.sortKey() != sort.Key || after.dir() != sort.Dir {
+			return nil, nil, fmt.Errorf("%w: it pages %s %s", ErrCursorSort, after.sortKey(), after.dir())
+		}
+		if key, err = after.keyValue(sort.Key); err != nil {
+			return nil, nil, err
+		}
 		rank, name, id = &after.KindRank, &after.Name, &after.ID
 	}
 
-	const q = `
-		SELECT ` + nodeCols + `, lower(name)
-		  FROM nodes
-		 WHERE parent_id = $1 AND deleted_at IS NULL
-		   AND ($2::int IS NULL
-		        OR (CASE kind WHEN 'folder' THEN 0 ELSE 1 END, lower(name), id)
-		            > ($2::int, $3::text, $4::uuid))
-		 ORDER BY (CASE kind WHEN 'folder' THEN 0 ELSE 1 END), lower(name), id
-		 LIMIT $5`
-
-	rows, err := s.db.Query(ctx, q, parentID, rank, name, id, limit+1)
+	rows, err := s.db.Query(ctx, childrenQuery(sort), parentID, rank, name, id, key, limit+1)
 	if err != nil {
 		return nil, nil, fmt.Errorf("listing children: %w", err)
 	}
@@ -74,8 +137,97 @@ func (s *Store) Children(ctx context.Context, ownerID, parentID uuid.UUID, after
 		return items, nil, nil
 	}
 	last := items[limit-1]
-	next := &ChildCursor{KindRank: rankOf(last.Kind), Name: sorted[limit-1], ID: last.ID}
+	next := &ChildCursor{
+		KindRank: rankOf(last.Kind),
+		Name:     sorted[limit-1],
+		ID:       last.ID,
+		Sort:     sort.Key,
+		Dir:      sort.Dir,
+	}
+	switch sort.Key {
+	case SortUpdatedAt:
+		u := last.UpdatedAt
+		next.UpdatedAt = &u
+	case SortSize:
+		// coalesce(size, 0)'s value in Go: the boundary has to be the number
+		// the database compared, and a folder's NULL size sorts as zero.
+		z := int64(0)
+		if last.Size != nil {
+			z = *last.Size
+		}
+		next.Size = &z
+	}
 	return items[:limit], next, nil
+}
+
+// childrenQuery is the listing's SQL for one ordering. Every moving part comes
+// out of sortSpecs, never out of the request.
+//
+// The keyset reads "past this rank entirely, or level with it and past this
+// (key, name, id)". Splitting rank out of the tuple is what keeps folders first
+// while the key runs the other way: one tuple comparison would have to invert
+// the rank along with everything else.
+//
+// Its parameters are ($1 parent, $2 rank, $3 lower(name), $4 id, $5 key,
+// $6 limit); $2 NULL means the first page.
+func childrenQuery(sort ChildSort) string {
+	spec := sortSpecs[sort.Key]
+	cmp, order := ">", "ASC"
+	if sort.Dir == DirDesc {
+		cmp, order = "<", "DESC"
+	}
+	return fmt.Sprintf(`
+		SELECT %s, lower(name)
+		  FROM nodes
+		 WHERE parent_id = $1 AND deleted_at IS NULL
+		   AND ($2::int IS NULL
+		        OR %s > $2::int
+		        OR (%s = $2::int
+		            AND (%s, lower(name), id) %s ($5::%s, $3::text, $4::uuid)))
+		 ORDER BY %s ASC, %s %s, lower(name) %s, id %s
+		 LIMIT $6`,
+		nodeCols, rankExpr, rankExpr, spec.key, cmp, spec.cast,
+		rankExpr, spec.key, order, order, order)
+}
+
+// ChildCounts returns how many live children each of ids has, keyed by parent
+// id; a folder with none is absent from the map rather than present at zero.
+//
+// The owner predicate is in the SQL and not merely in the signature: this runs
+// over ids the caller handed us, so the count itself has to be owner-scoped
+// even though the caller authorized the folder it listed.
+func (s *Store) ChildCounts(ctx context.Context, ownerID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]int, error) {
+	counts := make(map[uuid.UUID]int, len(ids))
+	if len(ids) == 0 {
+		return counts, nil
+	}
+
+	const q = `
+		SELECT parent_id, count(*)
+		  FROM nodes
+		 WHERE parent_id = ANY($1) AND owner_id = $2 AND deleted_at IS NULL
+		 GROUP BY parent_id`
+
+	rows, err := s.db.Query(ctx, q, ids, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("counting children: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			parent uuid.UUID
+			n      int
+		)
+		if err := rows.Scan(&parent, &n); err != nil {
+			return nil, fmt.Errorf("counting children: %w", err)
+		}
+		counts[parent] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("counting children: %w", err)
+	}
+	return counts, nil
 }
 
 // CreateFolder creates a folder under parentID. The destination is authorized

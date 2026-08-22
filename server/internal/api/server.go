@@ -30,6 +30,7 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/auth"
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 	"github.com/rahul-sharma-cs/drive/server/internal/mail"
+	"github.com/rahul-sharma-cs/drive/server/internal/node"
 	"github.com/rahul-sharma-cs/drive/server/web"
 )
 
@@ -92,6 +93,10 @@ type Server struct {
 	// address the caller does not have to own: password-reset and
 	// resend-verification.
 	MailRate *ipLimiter
+	// BulkBudget is the wall clock one bulk trash request spends before it
+	// stops and reports what it has not reached yet. Zero means
+	// DefaultBulkBudget; a test that wants the budget to run out sets it small.
+	BulkBudget time.Duration
 }
 
 // New builds the server. Dependencies are passed in rather than constructed so
@@ -304,6 +309,13 @@ func NewList[T any](items []T, next string) List[T] {
 }
 
 // NodeDTO is the canonical node shape on the wire. Folders carry size null.
+//
+// The last two fields are context, not state, and each is filled in by exactly
+// one listing: DeletedAt by the trash (where "when did I delete this" is the
+// column the user reads), ItemCount by a children page (where a folder row
+// says how much is inside). Both are omitempty, so every other response --
+// a live node, a created folder, a moved one -- serializes byte for byte as it
+// did before they existed.
 type NodeDTO struct {
 	ID          uuid.UUID  `json:"id"`
 	ParentID    *uuid.UUID `json:"parent_id"`
@@ -314,6 +326,8 @@ type NodeDTO struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	TrashedRoot bool       `json:"trashed_root,omitempty"`
+	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	ItemCount   *int       `json:"item_count,omitempty"`
 }
 
 // ----------------------------------------------------------------- requests --
@@ -351,6 +365,15 @@ func Page(r *http.Request) (cursor string, limit int, err error) {
 		limit = min(n, MaxLimit)
 	}
 	return cursor, limit, nil
+}
+
+// SortParams reads a children listing's ?sort= and ?dir=, defaulting to name
+// ascending. The strings are validated against the node package's fixed
+// vocabulary here, at the edge, so nothing further in never sees an
+// unrecognized one; the error is a 422 like any other bad parameter.
+func SortParams(r *http.Request) (node.ChildSort, error) {
+	q := r.URL.Query()
+	return node.NewChildSort(strings.TrimSpace(q.Get("sort")), strings.TrimSpace(q.Get("dir")))
 }
 
 // EncodeCursor packs v into an opaque pagination cursor.

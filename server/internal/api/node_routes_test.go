@@ -12,8 +12,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -265,6 +267,274 @@ func TestChildrenOrderingAndPaging(t *testing.T) {
 	stranger := nodeNewUser(t, pool)
 	rec = authDo(t, h, http.MethodGet, "/api/nodes/"+parent.String()+"/children", nil, stranger.Cookie)
 	nodeWant(t, rec, http.StatusNotFound, CodeNotFound)
+}
+
+// ------------------------------------------------------------------ sorting --
+
+// nodeMkSortable inserts one child with the exact size and updated_at a sort
+// case needs. A folder keeps size NULL, which is the case coalesce(size, 0) is
+// there for.
+func nodeMkSortable(t *testing.T, pool *pgxpool.Pool, owner nodeUser, parent uuid.UUID, kind, name string, size *int64, age time.Duration) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO nodes (id, owner_id, parent_id, kind, name, size, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, now() - make_interval(secs => $7))`,
+		id, owner.ID, parent, kind, name, size, age.Seconds()); err != nil {
+		t.Fatalf("inserting %s %q: %v", kind, name, err)
+	}
+	return id
+}
+
+func nodeSize(n int64) *int64 { return &n }
+
+// nodePageAll walks the children endpoint to exhaustion with the given query
+// and returns the names in order. A row seen twice fails on the spot: a keyset
+// that repeats rows is the exact failure a broken cursor produces, and a test
+// that only checked the final set would pass through it.
+func nodePageAll(t *testing.T, h http.Handler, owner nodeUser, parent uuid.UUID, query string, limit int) []string {
+	t.Helper()
+	var (
+		names  []string
+		seen   = map[string]bool{}
+		cursor string
+	)
+	for page := 0; ; page++ {
+		if page > 20 {
+			t.Fatalf("still paging after %d pages of %d: %v", page, limit, names)
+		}
+		path := fmt.Sprintf("/api/nodes/%s/children?limit=%d&%s", parent, limit, query)
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		rec := authDo(t, h, http.MethodGet, path, nil, owner.Cookie)
+		nodeWant(t, rec, http.StatusOK, "")
+
+		var list List[NodeDTO]
+		nodeDecode(t, rec, &list)
+		for _, item := range list.Items {
+			if seen[item.Name] {
+				t.Fatalf("%q came back on two different pages of %s", item.Name, query)
+			}
+			seen[item.Name] = true
+			names = append(names, item.Name)
+		}
+		if list.NextCursor == nil {
+			return names
+		}
+		cursor = *list.NextCursor
+	}
+}
+
+func nodeSameOrder(t *testing.T, what string, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s = %v, want %v", what, got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%s = %v, want %v", what, got, want)
+		}
+	}
+}
+
+// Sorting by date, in both directions, across pages. Folders lead in both:
+// dir orders within a kind, it does not interleave the kinds -- which is why
+// the rank term of the keyset and of the ORDER BY is always ascending.
+func TestChildrenSortByUpdatedAt(t *testing.T) {
+	h, pool := nodeTestServer(t)
+	owner := nodeNewUser(t, pool)
+	parent := nodeMkFolder(t, pool, owner, owner.RootID, "Parent")
+
+	nodeMkSortable(t, pool, owner, parent, node.KindFolder, "Older folder", nil, 300*time.Second)
+	nodeMkSortable(t, pool, owner, parent, node.KindFolder, "Newer folder", nil, 10*time.Second)
+	nodeMkSortable(t, pool, owner, parent, node.KindFile, "oldest.txt", nodeSize(5), 200*time.Second)
+	nodeMkSortable(t, pool, owner, parent, node.KindFile, "middle.txt", nodeSize(500), 100*time.Second)
+	nodeMkSortable(t, pool, owner, parent, node.KindFile, "newest.txt", nodeSize(50), 20*time.Second)
+
+	// limit=2 over five rows: every page boundary is crossed by the keyset,
+	// including the folder-to-file one.
+	got := nodePageAll(t, h, owner, parent, "sort=updated_at&dir=desc", 2)
+	nodeSameOrder(t, "updated_at desc", got, []string{
+		"Newer folder", "Older folder", "newest.txt", "middle.txt", "oldest.txt",
+	})
+
+	got = nodePageAll(t, h, owner, parent, "sort=updated_at&dir=asc", 2)
+	nodeSameOrder(t, "updated_at asc", got, []string{
+		"Older folder", "Newer folder", "oldest.txt", "middle.txt", "newest.txt",
+	})
+}
+
+// Sorting by size. Folders have none -- the column is NULL by design -- and the
+// listing still leads with them, largest-first included, because rank is
+// settled before coalesce(size, 0) is ever compared.
+func TestChildrenSortBySizeKeepsFoldersFirst(t *testing.T) {
+	h, pool := nodeTestServer(t)
+	owner := nodeNewUser(t, pool)
+	parent := nodeMkFolder(t, pool, owner, owner.RootID, "Parent")
+
+	nodeMkSortable(t, pool, owner, parent, node.KindFolder, "Alpha folder", nil, time.Second)
+	nodeMkSortable(t, pool, owner, parent, node.KindFolder, "Zulu folder", nil, time.Second)
+	nodeMkSortable(t, pool, owner, parent, node.KindFile, "big.bin", nodeSize(900), time.Second)
+	nodeMkSortable(t, pool, owner, parent, node.KindFile, "mid.bin", nodeSize(50), time.Second)
+	nodeMkSortable(t, pool, owner, parent, node.KindFile, "small.bin", nodeSize(1), time.Second)
+
+	got := nodePageAll(t, h, owner, parent, "sort=size&dir=desc", 2)
+	nodeSameOrder(t, "size desc", got, []string{
+		// The two folders tie at 0 and fall through to the name tiebreaker,
+		// which runs the same way as the key.
+		"Zulu folder", "Alpha folder", "big.bin", "mid.bin", "small.bin",
+	})
+
+	got = nodePageAll(t, h, owner, parent, "sort=size&dir=asc", 2)
+	nodeSameOrder(t, "size asc", got, []string{
+		"Alpha folder", "Zulu folder", "small.bin", "mid.bin", "big.bin",
+	})
+}
+
+// A cursor is a position in one ordering. Replaying a size cursor under
+// sort=name would compare a byte count against a name: the second page would
+// repeat rows the client already has, silently. It is a 422 instead.
+func TestChildrenCursorFromAnotherSortIsRejected(t *testing.T) {
+	h, pool := nodeTestServer(t)
+	owner := nodeNewUser(t, pool)
+	parent := nodeMkFolder(t, pool, owner, owner.RootID, "Parent")
+
+	for i, name := range []string{"a.bin", "b.bin", "c.bin"} {
+		nodeMkSortable(t, pool, owner, parent, node.KindFile, name, nodeSize(int64(10*(i+1))), time.Second)
+	}
+
+	rec := authDo(t, h, http.MethodGet,
+		"/api/nodes/"+parent.String()+"/children?limit=1&sort=size&dir=desc", nil, owner.Cookie)
+	nodeWant(t, rec, http.StatusOK, "")
+	var first List[NodeDTO]
+	nodeDecode(t, rec, &first)
+	if first.NextCursor == nil {
+		t.Fatal("the first page of three rows handed back no cursor")
+	}
+	cursor := url.QueryEscape(*first.NextCursor)
+
+	for _, tc := range []struct{ name, query string }{
+		{"a size cursor under sort=name", "sort=name&dir=desc"},
+		{"a size cursor under the other direction", "sort=size&dir=asc"},
+		{"a size cursor with no sort at all (which means name asc)", ""},
+	} {
+		path := fmt.Sprintf("/api/nodes/%s/children?limit=1&%s&cursor=%s", parent, tc.query, cursor)
+		rec := authDo(t, h, http.MethodGet, path, nil, owner.Cookie)
+		nodeWant(t, rec, http.StatusUnprocessableEntity, CodeInvalid)
+	}
+
+	// The same cursor under the ordering that minted it still pages.
+	path := fmt.Sprintf("/api/nodes/%s/children?limit=1&sort=size&dir=desc&cursor=%s", parent, cursor)
+	rec = authDo(t, h, http.MethodGet, path, nil, owner.Cookie)
+	nodeWant(t, rec, http.StatusOK, "")
+	var second List[NodeDTO]
+	nodeDecode(t, rec, &second)
+	if len(second.Items) != 1 || second.Items[0].Name != "b.bin" {
+		t.Fatalf("second page = %+v, want just b.bin", second.Items)
+	}
+}
+
+// A sort key or direction outside the vocabulary is a 422, never a fallback to
+// the default and never SQL.
+func TestChildrenSortParamRefusals(t *testing.T) {
+	h, pool := nodeTestServer(t)
+	owner := nodeNewUser(t, pool)
+	parent := nodeMkFolder(t, pool, owner, owner.RootID, "Parent")
+
+	for _, query := range []string{
+		"sort=created_at",
+		"sort=" + url.QueryEscape("name; DROP TABLE nodes"),
+		"dir=sideways",
+		"dir=DESC",
+		"sort=size&dir=descending",
+	} {
+		rec := authDo(t, h, http.MethodGet,
+			"/api/nodes/"+parent.String()+"/children?"+query, nil, owner.Cookie)
+		nodeWant(t, rec, http.StatusUnprocessableEntity, CodeInvalid)
+	}
+
+	// No sort at all is name ascending, as it always was.
+	rec := authDo(t, h, http.MethodGet, "/api/nodes/"+parent.String()+"/children", nil, owner.Cookie)
+	nodeWant(t, rec, http.StatusOK, "")
+}
+
+// ------------------------------------------------------------ item counts ----
+
+// A folder row in a children page says how much is inside it. The count is of
+// live children only -- what the user would see on opening it -- and files
+// never carry the field at all.
+func TestChildrenItemCountsLiveChildrenOnly(t *testing.T) {
+	h, pool := nodeTestServer(t)
+	owner := nodeNewUser(t, pool)
+	stranger := nodeNewUser(t, pool)
+	parent := nodeMkFolder(t, pool, owner, owner.RootID, "Parent")
+
+	docs := nodeMkFolder(t, pool, owner, parent, "Docs")
+	nodeMkFile(t, pool, owner, docs, "kept-1.txt")
+	nodeMkFile(t, pool, owner, docs, "kept-2.txt")
+	binned, _ := nodeMkFile(t, pool, owner, docs, "binned.txt")
+	nodeMkFolder(t, pool, owner, parent, "Empty")
+	nodeMkFile(t, pool, owner, parent, "loose.txt")
+
+	if rec := authDo(t, h, http.MethodDelete, "/api/nodes/"+binned.String(), nil, owner.Cookie); rec.Code != http.StatusNoContent {
+		t.Fatalf("trashing a child = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	rec := authDo(t, h, http.MethodGet, "/api/nodes/"+parent.String()+"/children", nil, owner.Cookie)
+	nodeWant(t, rec, http.StatusOK, "")
+
+	var raw struct {
+		Items []map[string]any `json:"items"`
+	}
+	nodeDecode(t, rec, &raw)
+	// Keyed by the decoded row itself, not by a value pulled out of it: whether
+	// the key is there at all is half of what this test asserts.
+	rows := map[string]map[string]any{}
+	for _, item := range raw.Items {
+		name, _ := item["name"].(string)
+		rows[name] = item
+	}
+	if len(rows) != 3 {
+		t.Fatalf("the folder listed %v, want Docs, Empty and loose.txt", rows)
+	}
+
+	if got := rows["Docs"]["item_count"]; got != float64(2) {
+		t.Errorf("Docs item_count = %v, want 2 -- the trashed child is not in the folder", got)
+	}
+	if got := rows["Empty"]["item_count"]; got != float64(0) {
+		t.Errorf("Empty item_count = %v, want 0", got)
+	}
+	if got, ok := rows["loose.txt"]["item_count"]; ok {
+		t.Errorf("a file carries item_count = %v; it has nothing to count", got)
+	}
+
+	// The field belongs to the children listing. A single node read is
+	// unchanged.
+	rec = authDo(t, h, http.MethodGet, "/api/nodes/"+docs.String(), nil, owner.Cookie)
+	nodeWant(t, rec, http.StatusOK, "")
+	var one map[string]any
+	nodeDecode(t, rec, &one)
+	if got, ok := one["item_count"]; ok {
+		t.Errorf("GET /api/nodes/{id} carries item_count = %v, want the field absent", got)
+	}
+
+	// And the count is owner-scoped in the SQL: another user's children can
+	// never be counted into it.
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO nodes (id, owner_id, parent_id, kind, name, size, mime)
+		 VALUES ($1, $2, $3, 'file', 'theirs.txt', 1, 'text/plain')`,
+		uuid.New(), stranger.ID, docs); err != nil {
+		t.Fatalf("planting another user's child: %v", err)
+	}
+	rec = authDo(t, h, http.MethodGet, "/api/nodes/"+parent.String()+"/children", nil, owner.Cookie)
+	nodeWant(t, rec, http.StatusOK, "")
+	nodeDecode(t, rec, &raw)
+	for _, item := range raw.Items {
+		if item["name"] == "Docs" && item["item_count"] != float64(2) {
+			t.Errorf("Docs item_count = %v after a stranger's row landed under it, want 2", item["item_count"])
+		}
+	}
 }
 
 // ---------------------------------------------------- the authorization matrix
