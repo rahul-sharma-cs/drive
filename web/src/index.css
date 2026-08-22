@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/* The enter/exit keyframes the generated primitives animate with — `fade-in-0`,
+   `zoom-in-95`, `slide-in-from-left`. They are utilities, not `!important`, so
+   the reduced-motion block near the bottom of this file still overrides them. */
+@import "tw-animate-css";
+
+/* Both faces are imported from CSS rather than dropped in `public/`, so the
+   bundler fingerprints the woff2 into `assets/` — the one path the server sends
+   `immutable` caching for. Latin only for the mono; the variable sans ships
+   latin and latin-ext, each behind its own `unicode-range`. */
+@import "@fontsource-variable/instrument-sans/index.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+
 /**
  * Drive's visual system.
  *
@@ -43,8 +55,14 @@
   --color-danger: #a4231f;
   --color-danger-soft: #fbe9e7;
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Instrument Sans is the UI face: a grotesque with short extenders and open
+     apertures, which is what keeps a 13px file name legible in a dense list.
+     IBM Plex Mono carries every quantity. The system stacks stay behind both —
+     `swap` means the page renders in them first, and a font that fails to load
+     must not take the layout with it. */
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
   --radius-control: 9px;
   --radius-card: 12px;
