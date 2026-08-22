@@ -12,6 +12,11 @@
  * field, and never fire it under an open menu or dialog, where Cmd+A means
  * "select this text" and Delete would act on rows the person cannot see.
  *
+ * A menu opens in a portal on `document.body`, but React sends SYNTHETIC
+ * events along the component tree, so a keydown inside a row's menu still
+ * arrives here. Every key below is therefore gated on the event having come
+ * from inside the list itself.
+ *
  * The hook owns no DOM. It reports which row index is focused; moving the
  * browser's own focus there (and any `aria-activedescendant`) is the list's
  * job, since only the list holds the row elements.
@@ -62,6 +67,21 @@ function isActivatable(target: EventTarget | null): boolean {
   const el = target as Element | null
   if (!el || typeof el.closest !== 'function') return false
   return el.closest('a[href], button') !== null
+}
+
+/**
+ * True when the key was pressed inside the list rather than in something the
+ * list merely contains in the React tree.
+ *
+ * Radix portals a row's kebab and right-click menus to `document.body`, and
+ * React's synthetic events follow the component tree rather than the DOM, so
+ * without this Delete inside an open menu trashed the selection behind it,
+ * Enter on a menu item opened the focused row as well as the item, and Esc
+ * dismissed the menu and cleared the selection in one press.
+ */
+function insideList(event: ReactKeyboardEvent<HTMLElement>): boolean {
+  const target = event.target as Node | null
+  return target !== null && event.currentTarget.contains(target)
 }
 
 /**
@@ -116,6 +136,9 @@ export function useListKeys({ count, selected, onOpen, onTrash, onSelectAll, onC
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
       if (isEditable(event.target)) return
+      if (!insideList(event)) return
+      // Something inside the list has already acted on this key and said so.
+      if (event.defaultPrevented) return
       const { selected: ids, onOpen: open, onTrash: trash, onClear: clear } = handlers.current
       switch (event.key) {
         case 'ArrowDown':

@@ -1,5 +1,5 @@
 import { ArrowUp, Copy, Download, FolderInput, Pencil, Trash2, X } from 'lucide-react'
-import { useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 
@@ -41,10 +41,24 @@ export interface CommandBandProps {
   /** A mutation is in flight — the commands that would start another are off. */
   busy?: boolean
   onClear: () => void
+  /**
+   * Where focus goes when the layer holding it is hidden. Clearing or spending
+   * a selection leaves the button that was clicked focused inside a subtree
+   * that is about to be `aria-hidden` — Chrome refuses to hide it and a screen
+   * reader is left pointing at nothing, so the list takes focus back.
+   */
+  onReturnFocus?: () => void
   commands: BandCommands
 }
 
-export function CommandBand({ count, chosen, busy = false, onClear, commands }: CommandBandProps) {
+export function CommandBand({
+  count,
+  chosen,
+  busy = false,
+  onClear,
+  onReturnFocus,
+  commands,
+}: CommandBandProps) {
   const selecting = chosen.length > 0
 
   // The count the selected layer shows is held over its fade-out, so the last
@@ -77,7 +91,7 @@ export function CommandBand({ count, chosen, busy = false, onClear, commands }: 
           ))}
         </Layer>
 
-        <Layer active={selecting}>
+        <Layer active={selecting} onDeactivate={onReturnFocus}>
           <div
             role="toolbar"
             aria-label="Selection actions"
@@ -131,9 +145,26 @@ export function CommandBand({ count, chosen, busy = false, onClear, commands }: 
   )
 }
 
-function Layer({ active, children }: { active: boolean; children: ReactNode }) {
+function Layer({
+  active,
+  onDeactivate,
+  children,
+}: {
+  active: boolean
+  onDeactivate?: () => void
+  children: ReactNode
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const wasActive = useRef(active)
+  useEffect(() => {
+    const holdsFocus = ref.current?.contains(document.activeElement) ?? false
+    if (wasActive.current && !active && holdsFocus) onDeactivate?.()
+    wasActive.current = active
+  }, [active, onDeactivate])
+
   return (
     <div
+      ref={ref}
       aria-hidden={!active}
       // `visibility` is inline rather than a utility because it is the half of
       // this that a stylesheet-less environment still honours, and because the

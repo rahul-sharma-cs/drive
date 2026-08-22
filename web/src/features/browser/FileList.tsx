@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -108,6 +109,7 @@ export function FileList({
   // only ever moves focus that is already inside the list, so a dialog or a
   // menu that took focus away keeps it.
   const listRef = useRef<HTMLUListElement>(null)
+  const takeFocus = useCallback(() => listRef.current?.focus(), [])
   const rowRefs = useRef<(HTMLLIElement | null)[]>([])
   const focused = keys.focusedIndex
   useEffect(() => {
@@ -116,6 +118,22 @@ export function FileList({
     if (!list || !list.contains(document.activeElement)) return
     rowRefs.current[focused]?.focus()
   }, [focused])
+
+  // A refetch that fails while rows are on screen must leave them where they
+  // are: the query keeps its last good data, so what is on screen is still
+  // true, and an error block inside the card would push every row down for a
+  // failure that changed nothing. Say so once per failure instead.
+  const hasRows = nodes.length > 0
+  const announced = useRef<unknown>(undefined)
+  useEffect(() => {
+    if (error == null) {
+      announced.current = undefined
+      return
+    }
+    if (!hasRows || announced.current === error) return
+    announced.current = error
+    toast.error(errorText, onRetry && { action: { label: 'Try again', onClick: onRetry } })
+  }, [error, hasRows, errorText, onRetry])
 
   const rowDnd = dnd && {
     begin: (node: DriveNode) => {
@@ -140,13 +158,14 @@ export function FileList({
           chosen={chosen}
           busy={busy}
           onClear={selection.clear}
+          onReturnFocus={takeFocus}
           commands={commands}
         />
       )}
 
       <Card>
         {pending && <SkeletonRows />}
-        {error != null && (
+        {error != null && !hasRows && (
           <div role="alert" className="flex flex-col items-start gap-2 px-4 py-6">
             <p className="text-sm text-ink-2">{errorText}</p>
             {onRetry && (

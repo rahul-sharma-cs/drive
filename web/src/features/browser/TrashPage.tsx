@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 
 import { listTrash, purgeNode, restoreNode } from '../../lib/api'
-import { EmptyState, FormError } from '../../ui/controls'
+import { EmptyState } from '../../ui/controls'
 import { FileList } from './FileList'
 import { usageKey } from './queries'
 
@@ -31,8 +32,13 @@ export function TrashPage() {
     // Purging is what actually gives the bytes back.
     void client.invalidateQueries({ queryKey: usageKey })
   }
-  const restore = useMutation({ mutationFn: restoreNode, onSuccess: refresh })
-  const purge = useMutation({ mutationFn: purgeNode, onSuccess: refresh })
+  // Toasted rather than shown above the list: a message that appears in the
+  // flow pushes every row down the moment one of them fails, which is the same
+  // shift the command band exists to prevent.
+  const failed = (what: string) => (err: unknown) =>
+    void toast.error((err as Error)?.message ?? `Could not ${what}`)
+  const restore = useMutation({ mutationFn: restoreNode, onSuccess: refresh, onError: failed('restore that') })
+  const purge = useMutation({ mutationFn: purgeNode, onSuccess: refresh, onError: failed('delete that') })
 
   const items = trash.data?.items ?? []
 
@@ -45,8 +51,6 @@ export function TrashPage() {
           renamed.
         </p>
       </div>
-      <FormError error={restore.error ?? purge.error} />
-
       <FileList
         nodes={items}
         pending={trash.isPending}
