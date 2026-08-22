@@ -77,7 +77,10 @@ export function DropZone({ children }: { children: ReactNode }) {
           otherwise. `pointer-events-none` keeps the drop landing on the
           section underneath, which is what carries the handler. */}
       {over && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-card bg-teal-soft/80 ring-2 ring-teal">
+        // Above the command band (z-20), which is inside this section and
+        // would otherwise punch a strip of chrome through the middle of the
+        // wash.
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-card bg-teal-soft/80 ring-2 ring-teal">
           <span className="flex items-center gap-2 rounded-control bg-surface px-3 py-2 text-sm font-medium text-teal-strong shadow-card">
             <UploadIcon />
             Drop to upload here

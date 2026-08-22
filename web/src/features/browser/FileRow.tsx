@@ -50,6 +50,11 @@ export interface FileRowProps {
   /** Roving `tabIndex` and the focus marker from `useListKeys`. */
   keyProps: RowKeyProps
   onClick: (event: ReactMouseEvent) => void
+  /**
+   * A right-click landed on this row, before its menu opens. The list uses it
+   * to make the row the selection, the way every file manager does.
+   */
+  onContextMenuOpen?: () => void
   onToggle: () => void
   ref?: Ref<HTMLLIElement>
 }
@@ -64,6 +69,7 @@ export function FileRow({
   dnd,
   keyProps,
   onClick,
+  onContextMenuOpen,
   onToggle,
   ref,
 }: FileRowProps) {
@@ -116,6 +122,10 @@ export function FileRow({
         if ((e.target as HTMLElement).closest('a,button,input,label')) return
         onClick(e)
       }}
+      // The trigger below clones this element, and a cloned child's handler
+      // runs before the trigger's own — so this is the row's chance to become
+      // the selection before the menu that acts on it opens.
+      onContextMenu={onContextMenuOpen}
       className={`group flex h-12 items-center gap-3 px-3 outline-none transition duration-100 sm:px-4 ${
         dropTarget
           ? 'bg-teal-soft ring-1 ring-inset ring-teal'

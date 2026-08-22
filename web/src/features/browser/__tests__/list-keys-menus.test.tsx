@@ -10,6 +10,7 @@ import { renderApp, stubFetch, type StubRoute } from '../../../test/render'
 import { CurrentFolderProvider } from '../../../app/CurrentFolder'
 import { meKey } from '../../auth/session'
 import { FolderPage } from '../FolderPage'
+import { TrashPage } from '../TrashPage'
 
 /**
  * The list's keys against the menus that open on top of it.
@@ -143,5 +144,64 @@ describe('keys under an open row menu', () => {
     // rows behind it.
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
     expect(checked('Reports')).toBe('true')
+  })
+})
+
+describe('right-click', () => {
+  it('selects the row it was aimed at', async () => {
+    renderFolder(twoRows)
+    await screen.findByText('notes.txt')
+
+    await select('Reports')
+    fireEvent.contextMenu(rowFor('notes.txt'))
+    await screen.findByRole('menu')
+
+    // Otherwise the band offers "1 selected · Trash" for Reports while the menu
+    // in front of it offers "Move to trash" for notes.txt.
+    expect(checked('notes.txt')).toBe('true')
+    expect(checked('Reports')).toBe('false')
+  })
+
+  it('leaves a selection the row is already part of intact', async () => {
+    renderFolder(twoRows)
+    await screen.findByText('notes.txt')
+
+    await select('Reports')
+    await select('notes.txt')
+    // Two rows selected and the right-click lands on one of them: narrowing to
+    // that row would throw away the selection the person is acting on.
+    fireEvent.contextMenu(rowFor('notes.txt'))
+    await screen.findByRole('menu')
+
+    expect(checked('Reports')).toBe('true')
+    expect(checked('notes.txt')).toBe('true')
+  })
+})
+
+describe('Cmd/Ctrl+A', () => {
+  it('takes the page where rows can be selected', async () => {
+    renderFolder(twoRows)
+    await screen.findByText('notes.txt')
+
+    const event = new KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true, cancelable: true })
+    document.body.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
+    await waitFor(() => expect(checked('notes.txt')).toBe('true'))
+  })
+
+  it('is left to the browser on a list that has no selection', async () => {
+    stubFetch([
+      { path: '/api/trash', body: { items: [node({ id: 't1', kind: 'file', name: 'old.txt' })], next_cursor: null } },
+    ])
+    renderApp(<TrashPage />)
+    await screen.findByText('old.txt')
+
+    const event = new KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true, cancelable: true })
+    document.body.dispatchEvent(event)
+
+    // Nothing here selects, so swallowing the key only takes the browser's own
+    // Select All away from someone trying to copy the page.
+    expect(event.defaultPrevented).toBe(false)
   })
 })

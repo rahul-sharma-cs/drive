@@ -100,7 +100,11 @@ export function FileList({
       else window.open(target.href, '_blank', 'noopener')
     },
     onTrash: (ids) => commands?.onTrash(nodes.filter((n) => ids.includes(n.id))),
-    onSelectAll: () => selectable && selection.selectAll(),
+    onSelectAll: () => {
+      if (!selectable) return false
+      selection.selectAll()
+      return true
+    },
     onClear: selection.clear,
   })
 
@@ -214,6 +218,14 @@ export function FileList({
                     if (!selectable) return
                     keys.setFocusedIndex(index)
                     selection.click(node.id, e)
+                  }}
+                  onContextMenuOpen={() => {
+                    // Right-click acts on the row it was aimed at. Without this
+                    // the band can say "1 selected · Trash" for one row while
+                    // the menu in front of it offers Trash for another.
+                    if (!selectable || selection.isSelected(node.id)) return
+                    keys.setFocusedIndex(index)
+                    selection.click(node.id)
                   }}
                   onToggle={() => selection.toggle(node.id)}
                 />

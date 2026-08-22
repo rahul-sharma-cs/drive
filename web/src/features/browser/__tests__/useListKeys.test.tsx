@@ -11,7 +11,7 @@ interface HarnessProps {
   dialogOpen?: boolean
   onOpen?: (index: number) => void
   onTrash?: (ids: string[]) => void
-  onSelectAll?: () => void
+  onSelectAll?: () => boolean
   onClear?: () => void
 }
 
@@ -26,7 +26,7 @@ function Harness({
   dialogOpen = false,
   onOpen = () => {},
   onTrash = () => {},
-  onSelectAll = () => {},
+  onSelectAll = () => true,
   onClear = () => {},
 }: HarnessProps) {
   const keys = useListKeys({
@@ -150,7 +150,7 @@ describe('useListKeys', () => {
   })
 
   it('selects all on Cmd/Ctrl+A from anywhere on the page', () => {
-    const onSelectAll = vi.fn()
+    const onSelectAll = vi.fn(() => true)
     render(<Harness onSelectAll={onSelectAll} />)
 
     // Not on the list, and not even on a row — the point of the document
@@ -167,7 +167,7 @@ describe('useListKeys', () => {
   })
 
   it('leaves Cmd+A alone in a text field', () => {
-    const onSelectAll = vi.fn()
+    const onSelectAll = vi.fn(() => true)
     render(<Harness onSelectAll={onSelectAll} />)
 
     // Cmd+A in the search box means "select this text", and stealing it is how
@@ -177,7 +177,7 @@ describe('useListKeys', () => {
   })
 
   it('leaves Cmd+A alone while a dialog is open', () => {
-    const onSelectAll = vi.fn()
+    const onSelectAll = vi.fn(() => true)
     render(<Harness dialogOpen onSelectAll={onSelectAll} />)
 
     // Rows behind an open dialog are not what the person is looking at.
@@ -185,8 +185,19 @@ describe('useListKeys', () => {
     expect(onSelectAll).not.toHaveBeenCalled()
   })
 
+  it('hands Cmd+A back to the browser when the list cannot select', () => {
+    // `fireEvent` reports whether the event survived: false means something
+    // called preventDefault on it. A list with no selection to take has not
+    // handled the key, and swallowing it there only breaks the browser's own
+    // Select All for someone trying to copy the page.
+    render(<Harness onSelectAll={() => false} />)
+
+    const survived = fireEvent.keyDown(document.body, { key: 'a', metaKey: true })
+    expect(survived).toBe(true)
+  })
+
   it('stops listening on the document once the list unmounts', () => {
-    const onSelectAll = vi.fn()
+    const onSelectAll = vi.fn(() => true)
     const { unmount } = render(<Harness onSelectAll={onSelectAll} />)
 
     unmount()

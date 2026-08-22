@@ -33,8 +33,12 @@ export interface ListKeysOptions {
   onOpen: (index: number) => void
   /** Delete/Backspace. Never called with an empty list of ids. */
   onTrash: (ids: string[]) => void
-  /** Cmd/Ctrl+A. */
-  onSelectAll: () => void
+  /**
+   * Cmd/Ctrl+A. Answers whether the list actually took the key: a list that
+   * cannot select has not handled it, and the browser's own Select All is left
+   * alone rather than swallowed.
+   */
+  onSelectAll: () => boolean
   /** Esc. */
   onClear: () => void
 }
@@ -191,8 +195,10 @@ export function useListKeys({ count, selected, onOpen, onTrash, onSelectAll, onC
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return
       if (isEditable(event.target)) return
       if (portalOpen()) return
+      // Ask first, swallow second: on a list with no selection this key is
+      // still the browser's, and taking it there buys nothing.
+      if (!handlers.current.onSelectAll()) return
       event.preventDefault()
-      handlers.current.onSelectAll()
     }
     document.addEventListener('keydown', onDocumentKeyDown)
     return () => document.removeEventListener('keydown', onDocumentKeyDown)
