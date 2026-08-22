@@ -1,11 +1,13 @@
+import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, Download, X } from 'lucide-react'
-import { useRef } from 'react'
+import { useRef, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 import { downloadHref, type DriveNode, type PreviewLink } from '../../lib/api'
 import { FileIcon } from '../../ui/FileIcon'
+import { previewKind } from './previewKind'
 import { usePreview, usePreviewParam, type Preview } from './usePreview'
 
 /**
@@ -30,6 +32,27 @@ export interface PreviewDialogProps {
   /** The listing has pages it has not fetched, so the counter says "of N loaded". */
   hasMore?: boolean
 }
+
+/**
+ * Whether a framed PDF is worth showing at all.
+ *
+ * iOS Safari renders a PDF in an iframe as a blank box, and mobile Chrome
+ * downloads it rather than displaying it — so on a touch device the frame is an
+ * empty rectangle where an answer should be. A coarse primary pointer is the
+ * signal (a laptop with a touchscreen still reports a fine one), and the honest
+ * answer there is the download card.
+ */
+function framedPdfWorks(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+  return !window.matchMedia('(pointer: coarse)').matches
+}
+
+/**
+ * Text is read into memory, so it gets a ceiling. Two megabytes is far past any
+ * README and far short of a log file that would lock the tab up; above it the
+ * honest answer is the download.
+ */
+const TEXT_LIMIT_BYTES = 2 * 1024 * 1024
 
 export function PreviewDialog({ nodes, hasMore = false }: PreviewDialogProps) {
   const { id, show, close } = usePreviewParam()
@@ -189,16 +212,88 @@ function PreviewBody({
   }
   if (link === undefined || preview.broken) return card
 
-  // Pictures today. Every other type the server will serve inline gets its own
-  // element next, and everything else keeps the card.
-  if (!link.mime.startsWith('image/')) return card
+  const kind = previewKind(link.mime, node?.name ?? '')
+  const name = node?.name ?? ''
+
+  switch (kind) {
+    case 'image':
+      return (
+        <img
+          src={link.url}
+          alt={name}
+          onError={preview.onBroken}
+          className="max-h-full max-w-full object-contain"
+        />
+      )
+    case 'video':
+      return (
+        <video
+          src={link.url}
+          controls
+          playsInline
+          onError={preview.onBroken}
+          className="max-h-full max-w-full"
+        />
+      )
+    case 'audio':
+      return <audio src={link.url} controls onError={preview.onBroken} className="w-full max-w-xl" />
+    case 'pdf':
+      if (!framedPdfWorks()) return card
+      // A plain cross-origin frame, deliberately not a sandboxed one: measured
+      // across three engines, Chromium runs its built-in viewer only in an
+      // attribute-free iframe (`sandbox=""`, with or without `allow-scripts` /
+      // `allow-same-origin`, gets the broken-document placeholder) and
+      // Firefox's pdf.js paints its chrome but renders no pages, since its
+      // viewer is itself script. The sandbox would buy a frame nobody can read.
+      // What holds the line is elsewhere: the frame is the store's origin,
+      // which none of this app's cookies reach, and the link is signed with a
+      // forced `application/pdf`, so HTML wearing a `.pdf` name renders as
+      // nothing at all.
+      return (
+        <iframe
+          title={name || 'PDF preview'}
+          src={link.url}
+          referrerPolicy="no-referrer"
+          className="h-full w-full rounded-card border border-line bg-surface"
+        />
+      )
+    case 'text':
+      return <TextBody url={link.url} card={card} />
+    case 'none':
+      return card
+  }
+}
+
+/**
+ * Text, read straight off the store.
+ *
+ * Keyed on the URL, so the minute-before-expiry refresh re-reads through the
+ * new link rather than holding text fetched with a dead one.
+ */
+function TextBody({ url, card }: { url: string; card: ReactNode }) {
+  const text = useQuery({
+    queryKey: ['preview-text', url],
+    queryFn: async ({ signal }) => {
+      // Bare, deliberately: a custom header here would make this cross-origin
+      // GET a preflight, and the store's rule answers preflights with a 403.
+      const res = await fetch(url, { signal })
+      if (!res.ok) throw new Error(`the file could not be read (${res.status})`)
+      const declared = Number(res.headers.get('Content-Length'))
+      // Refused before the body is read, when the store says how big it is.
+      if (Number.isFinite(declared) && declared > TEXT_LIMIT_BYTES) return null
+      const body = await res.text()
+      return new TextEncoder().encode(body).length > TEXT_LIMIT_BYTES ? null : body
+    },
+    gcTime: 0,
+  })
+
+  if (text.isPending) return <p className="text-sm text-ink-3">Loading the preview…</p>
+  // Too big to read, or unreadable: both end at the same honest offer.
+  if (text.error || text.data == null) return card
   return (
-    <img
-      src={link.url}
-      alt={node?.name ?? ''}
-      onError={preview.onBroken}
-      className="max-h-full max-w-full object-contain"
-    />
+    <pre className="numeric h-full w-full overflow-auto rounded-card border border-line bg-surface p-4 text-[12px] leading-relaxed text-ink">
+      {text.data}
+    </pre>
   )
 }
 

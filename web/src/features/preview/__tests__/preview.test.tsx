@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Outlet, Route, Routes, useLocation, useParams } from 'react-router'
@@ -225,5 +225,138 @@ describe('opening a preview', () => {
     // Opening pushed an entry, so closing goes back to the folder as it was —
     // no viewer, and no parameter left in the URL to reopen it on a reload.
     expect(where()).toBe('')
+  })
+})
+
+describe('what the viewer shows', () => {
+  it('offers the download when the server will not preview the type', async () => {
+    renderFolder([
+      ...listing([node({ id: 'f4', kind: 'file', name: 'diagram.svg', size: 900, mime: 'image/svg+xml' })]),
+      { path: '/api/files/f4/preview', status: 415, body: { code: 'unsupported', message: 'no preview' } },
+    ])
+    await screen.findByText('diagram.svg')
+
+    await userEvent.click(screen.getByRole('link', { name: 'diagram.svg' }))
+
+    const card = await screen.findByTestId('no-preview')
+    expect(within(card).getByText('No preview for this type')).toBeTruthy()
+    // The one thing left worth offering, and it is the ordinary download route
+    // — not the presigned inline link the server just refused to sign.
+    expect(within(card).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
+      '/api/files/f4/download',
+    )
+    expect(screen.queryByRole('img', { name: 'diagram.svg' })).toBeNull()
+  })
+
+  it('reads a text file straight off the store, with no header on the request', async () => {
+    const { calls } = renderFolder(
+      [
+        ...listing([node({ id: 'f5', kind: 'file', name: 'notes.txt', size: 12, mime: 'text/plain' })]),
+        { path: '/api/files/f5/preview', body: { url: `${STORE}/notes.txt`, expires_at: soon(), mime: 'text/plain' } },
+      ],
+      { [`${STORE}/notes.txt`]: { body: 'the second line is the good one', headers: { 'Content-Length': '31' } } },
+    )
+    await screen.findByText('notes.txt')
+
+    await userEvent.click(screen.getByRole('link', { name: 'notes.txt' }))
+
+    expect(await screen.findByText('the second line is the good one')).toBeTruthy()
+    const read = calls.filter((call) => call.url === `${STORE}/notes.txt`)
+    expect(read).toHaveLength(1)
+    // A custom header would turn this plain cross-origin GET into a preflight,
+    // and the store's rule answers preflights with a 403.
+    expect(read[0].headers['X-Drive-Client']).toBeUndefined()
+  })
+
+  it('refuses a text file too big to read, and offers the download instead', async () => {
+    renderFolder(
+      [
+        ...listing([node({ id: 'f5', kind: 'file', name: 'huge.log', size: 3_145_728, mime: 'text/plain' })]),
+        { path: '/api/files/f5/preview', body: { url: `${STORE}/huge.log`, expires_at: soon(), mime: 'text/plain' } },
+      ],
+      // Three megabytes, declared before a byte of it is read.
+      { [`${STORE}/huge.log`]: { body: 'a line of it', headers: { 'Content-Length': '3145728' } } },
+    )
+    await screen.findByText('huge.log')
+
+    await userEvent.click(screen.getByRole('link', { name: 'huge.log' }))
+
+    expect(await screen.findByTestId('no-preview')).toBeTruthy()
+    expect(screen.queryByText('a line of it')).toBeNull()
+  })
+
+  it('shows the download card for a PDF on a touch device rather than an empty frame', async () => {
+    // iOS Safari renders a framed PDF as a blank box; a coarse primary pointer
+    // is what stands in for "this browser will not show it".
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) => ({ matches: query.includes('coarse'), media: query }) as MediaQueryList,
+    )
+    renderFolder([
+      ...listing([node({ id: 'f6', kind: 'file', name: 'report.pdf', size: 5000, mime: 'application/pdf' })]),
+      { path: '/api/files/f6/preview', body: { url: `${STORE}/report.pdf`, expires_at: soon(), mime: 'application/pdf' } },
+    ])
+    await screen.findByText('report.pdf')
+
+    await userEvent.click(screen.getByRole('link', { name: 'report.pdf' }))
+
+    expect(await screen.findByTestId('no-preview')).toBeTruthy()
+    expect(document.querySelector('iframe')).toBeNull()
+  })
+})
+
+describe('a link that is about to expire', () => {
+  it('is replaced while the viewer is still open', async () => {
+    vi.useFakeTimers()
+    const expiresAt = new Date(Date.now() + 900_000).toISOString()
+    let signed = 0
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url === '/api/nodes/root-1') return json(root)
+      if (url === '/api/nodes/root-1/children') return json({ items: [shot], next_cursor: 'page-2' })
+      if (url === '/api/files/f2/preview') {
+        signed += 1
+        return json({ url: `${STORE}/shot.png?sig=${signed}`, expires_at: expiresAt, mime: 'image/png' })
+      }
+      throw new Error(`unstubbed request: ${url}`)
+    })
+
+    // Straight in on the parameter: this is the deep link, and it needs no
+    // click to open — which keeps the fake clock out of userEvent's way.
+    renderApp(
+      <Routes>
+        <Route element={<FolderContext />}>
+          <Route path="/" element={<FolderPage />} />
+        </Route>
+      </Routes>,
+      { route: '/?preview=f2', seed: (client) => client.setQueryData(meKey, user) },
+    )
+
+    // Testing Library's own waiting helpers look for Jest to decide whether the
+    // clock is faked, find nothing here, and would sit on a timer that never
+    // advances — so the settling is done by hand.
+    const settle = async (ms = 0) => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms)
+      })
+    }
+
+    await settle()
+    expect(screen.getByRole('img', { name: 'shot.png' }).getAttribute('src')).toBe(
+      `${STORE}/shot.png?sig=1`,
+    )
+    // The folder has another page, so the count says what it is counting.
+    expect(screen.getByText('1 of 1 loaded')).toBeTruthy()
+
+    // A minute before the link dies. Nothing else in this app would ever go and
+    // get another one: refetch-on-focus is off, and an expired link inside an
+    // <img> or an <iframe> is a 403 nobody reports.
+    await settle(840_001)
+
+    expect(signed).toBe(2)
+    expect(screen.getByRole('img', { name: 'shot.png' }).getAttribute('src')).toBe(
+      `${STORE}/shot.png?sig=2`,
+    )
   })
 })
