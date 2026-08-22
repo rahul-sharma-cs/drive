@@ -12,6 +12,7 @@ import {
   emptyTrash,
   getNode,
   getUsage,
+  isDefaultSort,
   listChildren,
   purgeNodes,
   restoreNodes,
@@ -19,9 +20,22 @@ import {
   updateNode,
   type BulkAnswer,
   type DriveNode,
+  type Sort,
+  type SortDir,
+  type SortKey,
 } from '../../lib/api'
 
-export const childrenKey = (folderId: string) => ['children', folderId] as const
+/**
+ * A folder's listing. `folderId` stays at index 1 whatever the sort is, so
+ * `['children', id]` still invalidates every sorted variant of that folder —
+ * which is what the upload dock and every mutation below rely on. Called with
+ * no sort it names the default listing, which is the one the picker and every
+ * unsorted screen share.
+ */
+export const childrenKey = (folderId: string, sort?: SortKey, dir?: SortDir) =>
+  sort === undefined
+    ? (['children', folderId] as const)
+    : (['children', folderId, sort, dir ?? 'asc'] as const)
 
 /**
  * Which folder listings a mutation invalidates. A screen that knows the folder
@@ -33,10 +47,16 @@ const childrenScope = (parentId: string | undefined) =>
 export const nodeKey = (id: string) => ['node', id] as const
 export const usageKey = ['usage'] as const
 
-export function useChildren(folderId: string) {
+/**
+ * The default sort is normalised away here — one place — so that a screen
+ * asking for name-ascending shares its cache entry and its request with every
+ * screen that asks for nothing at all.
+ */
+export function useChildren(folderId: string, sort?: Sort) {
+  const custom = sort !== undefined && !isDefaultSort(sort) ? sort : undefined
   return useInfiniteQuery({
-    queryKey: childrenKey(folderId),
-    queryFn: ({ pageParam }) => listChildren(folderId, pageParam),
+    queryKey: childrenKey(folderId, custom?.key, custom?.dir),
+    queryFn: ({ pageParam }) => listChildren(folderId, pageParam, custom),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   })

@@ -151,8 +151,21 @@ export const confirmReset = (token: string, newPassword: string) =>
 
 export const getNode = (id: string) => request<DriveNode>('GET', `/nodes/${id}`)
 
-export const listChildren = (id: string, cursor?: string) =>
-  request<Page<DriveNode>>('GET', `/nodes/${id}/children${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`)
+/**
+ * One page of a folder. `sort` is sent only when the caller wants something
+ * other than the server's own default of name ascending — see `useChildren`,
+ * which is the one place that decides. A cursor is only valid under the sort it
+ * was issued for; the server answers 422 if the two disagree.
+ */
+export const listChildren = (id: string, cursor?: string, sort?: Sort) => {
+  const query: string[] = []
+  if (sort) query.push(`sort=${sort.key}`, `dir=${sort.dir}`)
+  if (cursor) query.push(`cursor=${encodeURIComponent(cursor)}`)
+  return request<Page<DriveNode>>(
+    'GET',
+    `/nodes/${id}/children${query.length > 0 ? `?${query.join('&')}` : ''}`,
+  )
+}
 
 export const createFolder = (parentId: string, name: string) =>
   request<DriveNode & { existing?: boolean }>('POST', '/folders', { parent_id: parentId, name })
@@ -224,6 +237,20 @@ export const getPreview = (id: string) => request<PreviewLink>('GET', `/files/${
 /** The same link the download route answers with a 302, as JSON. */
 export const getDownloadLink = (id: string) =>
   request<BlobLink>('GET', `/files/${id}/download?format=json`)
+
+/* --------------------------------------------------------- sorting a folder */
+
+export type SortKey = 'name' | 'updated_at' | 'size'
+export type SortDir = 'asc' | 'desc'
+export interface Sort {
+  key: SortKey
+  dir: SortDir
+}
+
+/** What the server does when asked for nothing. Folders come first either way. */
+export const DEFAULT_SORT: Sort = { key: 'name', dir: 'asc' }
+
+export const isDefaultSort = (sort: Sort) => sort.key === DEFAULT_SORT.key && sort.dir === DEFAULT_SORT.dir
 
 /* ------------------------------------------------------- the trash, in bulk */
 

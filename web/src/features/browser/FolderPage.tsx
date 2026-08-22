@@ -10,6 +10,7 @@ import { FileList } from './FileList'
 import { rowActions } from './RowMenu'
 import { nodeBandActions, useNodeCommands } from './commands'
 import { useBreadcrumbs, useChildren } from './queries'
+import { useSort } from './sortParams'
 
 export function FolderPage() {
   const { id } = useParams()
@@ -34,7 +35,10 @@ export function FolderPage() {
  * nothing in the next.
  */
 function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) {
-  const children = useChildren(folderId)
+  // The sort is a property of the address, not of this component: a sorted
+  // folder survives a reload and can be handed to somebody else.
+  const { sort, toggle } = useSort()
+  const children = useChildren(folderId, sort)
   const crumbs = useBreadcrumbs(folderId)
   const { handlers, commands, busy, moveTo, dialogs } = useNodeCommands(folderId)
 
@@ -61,6 +65,7 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
           bandActions={(chosen) => nodeBandActions(chosen, commands, busy)}
           onDelete={commands.onTrash}
           actions={(node) => rowActions(node, handlers)}
+          sort={{ active: sort, onToggle: toggle }}
           dnd={{ onMoveInto: (destination, ids) => void moveTo(destination, ids) }}
           more={{
             has: children.hasNextPage,

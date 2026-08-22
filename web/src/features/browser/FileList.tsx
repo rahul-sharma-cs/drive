@@ -1,3 +1,4 @@
+import { ArrowDown, ArrowUp } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -5,7 +6,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 
-import type { DriveNode } from '../../lib/api'
+import type { DriveNode, Sort, SortKey } from '../../lib/api'
 import { Card, SkeletonRows } from '../../ui/controls'
 import { CommandBand, type BandAction } from './CommandBand'
 import { FileRow, openTarget } from './FileRow'
@@ -30,6 +31,12 @@ import { useSelection } from './useSelection'
 /** Dragging rows into folder rows. Absent on search and in the trash. */
 export interface ListDnd {
   onMoveInto: (destinationId: string, ids: string[]) => void
+}
+
+/** Clicking the column headers to sort. Absent where the listing has no sort. */
+export interface ListSort {
+  active: Sort
+  onToggle: (key: SortKey) => void
 }
 
 /**
@@ -73,6 +80,8 @@ export interface FileListProps {
   rowExtra?: (node: DriveNode) => ReactNode
   /** Names open the folder / the file. False in the trash, where neither opens. */
   linkNames?: boolean
+  /** Live column sorting. Absent on search, which the endpoint cannot sort. */
+  sort?: ListSort
   /** What the middle column is called and where it reads from. */
   time?: TimeColumn
   dnd?: ListDnd
@@ -94,6 +103,7 @@ export function FileList({
   actions,
   rowExtra,
   linkNames = true,
+  sort,
   time = MODIFIED,
   dnd,
   more,
@@ -211,6 +221,7 @@ export function FileList({
               someSelected={selection.someSelected}
               onToggleAll={() => (selection.allSelected ? selection.clear() : selection.selectAll())}
               timeLabel={time.label}
+              sort={sort}
             />
             {/* One tab stop for the whole list, with the arrows moving inside
                 it; the handler catches what bubbles up from the rows. */}
@@ -278,6 +289,7 @@ function ColumnHeader({
   someSelected,
   onToggleAll,
   timeLabel,
+  sort,
 }: {
   selectable: boolean
   gutter: boolean
@@ -286,6 +298,7 @@ function ColumnHeader({
   someSelected: boolean
   onToggleAll: () => void
   timeLabel: string
+  sort?: ListSort
 }) {
   return (
     <div className="flex h-9 items-center gap-3 border-b border-line bg-surface-muted px-3 text-[12px] font-medium text-ink-3 sm:px-4">
@@ -300,11 +313,55 @@ function ColumnHeader({
         />
       )}
       <span className="w-[22px] shrink-0" aria-hidden />
-      <span className="min-w-0 flex-1">Name</span>
-      <span className="hidden w-32 shrink-0 sm:block">{timeLabel}</span>
-      <span className="w-16 shrink-0 text-right">Size</span>
+      <ColumnLabel sort={sort} by="name" className="inline-flex min-w-0 flex-1 items-center gap-1">
+        Name
+      </ColumnLabel>
+      <ColumnLabel sort={sort} by="updated_at" className="hidden w-32 shrink-0 items-center gap-1 sm:inline-flex">
+        {timeLabel}
+      </ColumnLabel>
+      <ColumnLabel sort={sort} by="size" className="inline-flex w-16 shrink-0 items-center justify-end gap-1">
+        Size
+      </ColumnLabel>
       {/* Keeps Size over the size column rather than over the kebab. */}
       {gutter && <span className="w-8 shrink-0" aria-hidden />}
     </div>
+  )
+}
+
+/**
+ * A column heading, and — where the listing can be sorted — the control that
+ * sorts by it. The arrow is the state: the column carrying one is the one in
+ * force, and which way it points is the direction. Folders stay above files in
+ * both directions, because that is what the server does and this list never
+ * reorders what it is given.
+ */
+function ColumnLabel({
+  sort,
+  by,
+  className,
+  children,
+}: {
+  sort?: ListSort
+  by: SortKey
+  className: string
+  children: ReactNode
+}) {
+  if (!sort) return <span className={className}>{children}</span>
+
+  const active = sort.active.key === by
+  const Arrow = active && sort.active.dir === 'desc' ? ArrowDown : ArrowUp
+
+  return (
+    <button
+      type="button"
+      onClick={() => sort.onToggle(by)}
+      // The arrow says which way it is sorted; this says what a click will do
+      // next, which the arrow cannot.
+      title={active && sort.active.dir === 'asc' ? 'Sort descending' : 'Sort ascending'}
+      className={`${className} rounded-control hover:text-ink ${active ? 'text-ink' : ''}`}
+    >
+      <span className="truncate">{children}</span>
+      {active && <Arrow aria-hidden className="size-3 shrink-0 opacity-70" />}
+    </button>
   )
 }
