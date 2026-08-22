@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
-import { Route, Routes } from 'react-router'
+import { Route, Routes, useNavigate } from 'react-router'
 
 import type { DriveNode, Me } from '../../lib/api'
 import { renderApp, stubFetch, type StubRoute } from '../../test/render'
@@ -75,6 +75,32 @@ function renderShell(routes: StubRoute[] = [], { route = '/', page }: { route?: 
     { route, seed: (client) => client.setQueryData(meKey, user) },
   )
   return { calls, ...rendered }
+}
+
+/**
+ * jsdom ships no `matchMedia` at all, so the layout's breakpoint listener has
+ * nothing to attach to unless a test hands it one. Records what the app asked
+ * about, and lets the test announce that the window crossed it.
+ */
+function stubBreakpoint() {
+  const queries: string[] = []
+  const listeners = new Set<(e: MediaQueryListEvent) => void>()
+  vi.stubGlobal('matchMedia', (media: string) => {
+    queries.push(media)
+    return {
+      media,
+      matches: false,
+      addEventListener: (_: string, fn: (e: MediaQueryListEvent) => void) => listeners.add(fn),
+      removeEventListener: (_: string, fn: (e: MediaQueryListEvent) => void) => listeners.delete(fn),
+    }
+  })
+  return {
+    queries,
+    cross: (matches: boolean) =>
+      act(() => {
+        for (const fn of listeners) fn({ matches } as MediaQueryListEvent)
+      }),
+  }
 }
 
 beforeEach(() => {
@@ -220,6 +246,33 @@ describe('the New menu and the upload seam', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(document.body.style.pointerEvents).not.toBe('none'))
   })
+
+  it('gives the page back to the pointer when the dialog is dismissed by its scrim', async () => {
+    renderShell([], { route: '/folders/f9' })
+
+    await userEvent.click(screen.getByRole('button', { name: 'New' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'New folder' }))
+    await screen.findByRole('dialog')
+    // Radix arms the outside-pointer listener on a 0 ms timer, and `findBy`
+    // resolves before that timer runs.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    // A different Radix path from Escape — `onPointerDownOutside` rather than
+    // `onEscapeKeyDown` — and the one a person on a mouse actually takes. Both
+    // events, because a modal Dialog defers a left-button dismissal to the click
+    // that follows; and fired rather than driven by userEvent, because the scrim
+    // inherits the `pointer-events: none` the dialog puts on <body>, which is
+    // the very thing under test.
+    const scrim = document.querySelector('.scrim')
+    expect(scrim).toBeTruthy()
+    fireEvent.pointerDown(scrim as Element)
+    fireEvent.click(scrim as Element)
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.body.style.pointerEvents).not.toBe('none'))
+  })
 })
 
 describe('the rail and the account menu', () => {
@@ -237,6 +290,76 @@ describe('the rail and the account menu', () => {
 
     await userEvent.click(within(drawer).getByRole('link', { name: 'Trash' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getAllByRole('navigation', { hidden: true })).toHaveLength(1)
+  })
+
+  it('hands focus back to the hamburger when the drawer closes', async () => {
+    renderShell([], { route: '/folders/f9' })
+    const hamburger = screen.getByRole('button', { name: 'Open navigation' })
+    // Both come from being the drawer's registered trigger. A plain button that
+    // flips a boolean announces neither — and leaves Radix nothing to hand focus
+    // back to on the way out.
+    expect(hamburger.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(hamburger.getAttribute('aria-expanded')).toBe('false')
+
+    await userEvent.click(hamburger)
+    await screen.findByRole('dialog')
+    expect(hamburger.getAttribute('aria-expanded')).toBe('true')
+
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // <body> is where an unregistered trigger leaves it: a keyboard user who
+    // dismisses the drawer is dropped at the top of the document.
+    await waitFor(() => expect(document.activeElement).toBe(hamburger))
+    expect(hamburger.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('closes the drawer on a navigation the rail never sees, like Back', async () => {
+    let go!: ReturnType<typeof useNavigate>
+    function Screen() {
+      go = useNavigate()
+      return <p>a folder</p>
+    }
+
+    renderShell([], { route: '/folders/f9', page: <Screen /> })
+    await act(async () => {
+      await go('/trash')
+    })
+    await screen.findByText('trash')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open navigation' }))
+    await screen.findByRole('dialog')
+
+    // Back is a route change with no click on a rail link behind it, so a close
+    // wired to the links alone leaves the drawer open over a screen it no longer
+    // describes.
+    await act(async () => {
+      await go(-1)
+    })
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(await screen.findByText('a folder')).toBeTruthy()
+    expect(screen.getAllByRole('navigation', { hidden: true })).toHaveLength(1)
+  })
+
+  it('closes the drawer when the window grows past the width the hamburger hides at', async () => {
+    const viewport = stubBreakpoint()
+    renderShell([], { route: '/folders/f9' })
+    // The same 48rem Tailwind compiles `md:` from — `md:hidden` takes the
+    // hamburger away at exactly this width and `md:flex` brings the fixed rail
+    // back, so a listener on any other width would be the wrong one.
+    expect(viewport.queries).toContain('(min-width: 48rem)')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open navigation' }))
+    await screen.findByRole('dialog')
+    expect(screen.queryByRole('complementary', { hidden: true })).toBeNull()
+
+    viewport.cross(true)
+
+    // Otherwise: a modal panel and its scrim sitting over a desktop layout whose
+    // only way to reopen — or close — it is `md:hidden`.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByRole('complementary', { hidden: true })).toBeTruthy()
     expect(screen.getAllByRole('navigation', { hidden: true })).toHaveLength(1)
   })
 

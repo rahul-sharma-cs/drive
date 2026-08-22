@@ -1,6 +1,6 @@
 import { X } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
-import { Outlet, useParams } from 'react-router'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Outlet, useLocation, useParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -24,28 +24,55 @@ import { TopBar } from './TopBar'
  */
 export function AppLayout() {
   const { id } = useParams()
+  const { pathname } = useLocation()
   const session = useSession()
   const [drawer, setDrawer] = useState(false)
+
+  // Going somewhere ends the drawer, and the route is the only thing that knows
+  // about all the ways to go: the rail's own links, yes, but also Back, a
+  // redirect, and any link a screen puts behind the drawer.
+  useEffect(() => setDrawer(false), [pathname])
+
+  // So does growing past `md`, where the desktop rail takes over. Left open, the
+  // drawer and its scrim sit on top of a layout that has unmounted its <aside>
+  // and hidden the only control that could dismiss them.
+  useEffect(() => {
+    // The width Tailwind compiles `md:` from. jsdom defines no `matchMedia`.
+    const wide = window.matchMedia?.('(min-width: 48rem)')
+    if (!wide) return
+    const onChange = (e: MediaQueryListEvent) => {
+      if (e.matches) setDrawer(false)
+    }
+    wide.addEventListener('change', onChange)
+    return () => wide.removeEventListener('change', onChange)
+  }, [])
 
   return (
     <CurrentFolderProvider folderId={id ?? session.root_id}>
       <TooltipProvider delayDuration={400}>
-        <div className="min-h-screen bg-canvas text-ink">
-          <TopBar onOpenRail={() => setDrawer(true)} />
+        {/* The drawer's root wraps the bar as well as the panel, because the
+            hamburger up there is its trigger. A trigger outside the root is not
+            registered, and an unregistered trigger is one Radix has nothing to
+            hand focus back to when the panel closes — it goes to <body>. */}
+        <Sheet open={drawer} onOpenChange={setDrawer}>
+          <div className="min-h-screen bg-canvas text-ink">
+            <TopBar />
 
-          {/* Exactly one rail exists at a time, and it is a mount rather than a
-              breakpoint that guarantees it: two copies behind `hidden md:flex`
-              would mean two "Trash" links in the accessibility tree and two
-              answers to "where am I". The drawer only opens below `md`, where
-              this one is display:none anyway, so unmounting it costs nothing. */}
-          {!drawer && (
-            <aside className="fixed top-14 bottom-0 left-0 z-30 hidden w-60 flex-col border-r border-line bg-surface md:flex">
-              <SideRail />
-            </aside>
-          )}
+            {/* Exactly one rail exists at a time, and it is a mount rather than a
+                breakpoint that guarantees it: two copies behind `hidden md:flex`
+                would mean two "Trash" links in the accessibility tree and two
+                answers to "where am I". The drawer only opens below `md`, where
+                this one is display:none anyway, so unmounting it costs nothing. */}
+            {!drawer && (
+              <aside className="fixed top-14 bottom-0 left-0 z-30 hidden w-60 flex-col border-r border-line bg-surface md:flex">
+                <SideRail />
+              </aside>
+            )}
 
-          <Sheet open={drawer} onOpenChange={setDrawer}>
-            <SheetContent side="left" className="w-72 gap-0" showCloseButton={false}>
+            {/* `bg-surface`, not the sheet's default canvas grey: this is the
+                same rail as the one on the left, and it has to be the same
+                colour as it. */}
+            <SheetContent side="left" className="w-72 gap-0 bg-surface" showCloseButton={false}>
               <SheetHeader className="flex-row items-center gap-2 border-b border-line px-3 py-2.5">
                 <SheetTitle className="flex items-center gap-2 text-[15px] tracking-tight text-ink">
                   <span className="flex h-6 w-6 items-center justify-center rounded-md bg-ink text-canvas">
@@ -60,22 +87,22 @@ export function AppLayout() {
                   </Button>
                 </SheetClose>
               </SheetHeader>
-              <SideRail onNavigate={() => setDrawer(false)} />
+              <SideRail />
             </SheetContent>
-          </Sheet>
 
-          <div className="pt-14 md:pl-60">
-            <Outlet />
+            <div className="pt-14 md:pl-60">
+              <Outlet />
+            </div>
+
+            {/* Mounted once, here: the engine outlives route changes, and so must
+                the pickers that feed it and the manager that shows what it is
+                doing. */}
+            <UploadPickers />
+            <DockStack>
+              <UploadDock />
+            </DockStack>
           </div>
-
-          {/* Mounted once, here: the engine outlives route changes, and so must
-              the pickers that feed it and the manager that shows what it is
-              doing. */}
-          <UploadPickers />
-          <DockStack>
-            <UploadDock />
-          </DockStack>
-        </div>
+        </Sheet>
       </TooltipProvider>
     </CurrentFolderProvider>
   )

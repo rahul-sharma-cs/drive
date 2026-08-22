@@ -2,6 +2,7 @@ import { Menu } from 'lucide-react'
 import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
+import { SheetTrigger } from '@/components/ui/sheet'
 
 import { DriveMark } from '../ui/icons'
 import { AccountMenu } from './AccountMenu'
@@ -14,20 +15,22 @@ import { HeaderSearch } from './HeaderSearch'
  * rather than wherever the two flanking blocks leave room — the flanks are
  * pinned to the rail's width from `md` up, which is what makes the centring
  * exact and lines the mark up with the rail underneath it.
+ *
+ * The hamburger is the rail drawer's trigger rather than a button that sets a
+ * flag: being the trigger is what gets focus back here when the drawer closes,
+ * and what tells a screen reader the control opens a dialog and whether it is
+ * open. The layout still owns the open state — it has to, since a navigation
+ * closes the drawer too — and the trigger sits inside its `<Sheet>`.
  */
-export function TopBar({ onOpenRail }: { onOpenRail: () => void }) {
+export function TopBar() {
   return (
     <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-2 border-b border-line bg-surface px-2 sm:px-4">
       <div className="flex shrink-0 items-center gap-1 md:w-60 md:pr-3">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="md:hidden"
-          aria-label="Open navigation"
-          onClick={onOpenRail}
-        >
-          <Menu />
-        </Button>
+        <SheetTrigger asChild>
+          <Button variant="ghost" size="icon-sm" className="md:hidden" aria-label="Open navigation">
+            <Menu />
+          </Button>
+        </SheetTrigger>
         <Link
           to="/"
           className="flex items-center gap-2 rounded-control px-1.5 py-1.5 text-[15px] font-semibold tracking-tight whitespace-nowrap"
