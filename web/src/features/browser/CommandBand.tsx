@@ -94,7 +94,8 @@ export function CommandBand({ count, chosen, busy = false, onClear, commands }: 
 
             {/* One file at a time: there is no archive endpoint to answer a
                 multi-selection with, and a button that silently downloaded one
-                of five would be a lie. Phase D gives it the whole selection. */}
+                of five would be a lie. It takes the whole selection once
+                downloading a set of files as one zip exists. */}
             {single?.kind === 'file' && (
               <BandButton asChild label="Download" icon={Download}>
                 <a href={downloadHref(single.id)} target="_blank" rel="noopener">

@@ -69,9 +69,9 @@ export interface Selection {
 export function useSelection(nodes: readonly DriveNode[]): Selection {
   const [selected, setSelected] = useState<ReadonlySet<string>>(EMPTY)
 
-  // The anchor is an id, not an index: rows move (a page loads above, Phase B
-  // re-sorts the folder) and an index would then range from whatever row has
-  // since taken that slot.
+  // The anchor is an id, not an index: rows move (a page loads above, or a
+  // re-sort reorders the folder once sorting is server-side) and an index
+  // would then range from whatever row has since taken that slot.
   const anchorRef = useRef<string | null>(null)
 
   const ids = useMemo(() => nodes.map((n) => n.id), [nodes])

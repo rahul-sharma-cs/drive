@@ -20,7 +20,7 @@ import type { RowKeyProps } from './useListKeys'
  * that is already a control.
  */
 
-/** Where a row's name points. Phase C swaps the file case for `?preview=<id>`. */
+/** Where a row's name points. The file case becomes the viewer once previews exist. */
 export function openTarget(node: DriveNode): { to: string } | { href: string } {
   return node.kind === 'folder' ? { to: `/folders/${node.id}` } : { href: downloadHref(node.id) }
 }

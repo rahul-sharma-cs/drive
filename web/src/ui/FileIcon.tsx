@@ -42,11 +42,11 @@ interface CategorySpec {
 }
 
 /**
- * One row per file category — the single table Phase F's design pass
- * retokenises from. Deliberately excludes `folder` and `generic`, which have
- * no extensions to classify by and live in `FOLDER_SPEC`/`GENERIC_SPEC`
- * below; keeping them out of this array is what makes the "no duplicate
- * extension" test meaningful instead of vacuous.
+ * One row per file category — the single table the design pass retokenises
+ * from. Deliberately excludes `folder` and `generic`, which have no extensions
+ * to classify by and live in `FOLDER_SPEC`/`GENERIC_SPEC` below; keeping them
+ * out of this array is what makes the "no duplicate extension" test meaningful
+ * instead of vacuous.
  */
 export const FILE_ICON_TABLE: CategorySpec[] = [
   {
