@@ -2,14 +2,14 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { CurrentFolderProvider } from '../../../../app/CurrentFolder'
 import { DropZone } from '../DropZone'
 
 // The real actions drive the singleton engine, which would spawn Web Workers
 // and open IndexedDB. What this file is about is ingress: which files reach the
-// engine, bound to which folder.
+// engine, bound to which folder. The picker half lives in `pickers.test.tsx`.
 const enqueue = vi.fn()
 vi.mock('../engineStore', () => ({ uploadActions: { enqueue: (...args: unknown[]) => enqueue(...args) } }))
 
@@ -18,9 +18,11 @@ function renderZone(folderId = 'folder-42') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const view = render(
     <QueryClientProvider client={client}>
-      <DropZone folderId={folderId}>
-        <p>rows</p>
-      </DropZone>
+      <CurrentFolderProvider folderId={folderId}>
+        <DropZone>
+          <p>rows</p>
+        </DropZone>
+      </CurrentFolderProvider>
     </QueryClientProvider>,
   )
   return { client, ...view }
@@ -48,19 +50,6 @@ afterEach(() => {
 })
 
 describe('drop zone', () => {
-  it('enqueues picked files against the folder on screen', async () => {
-    renderZone()
-
-    const one = new File(['a'], 'one.txt')
-    const two = new File(['b'], 'two.txt')
-    await userEvent.upload(screen.getByLabelText('Upload files'), [one, two])
-
-    expect(enqueue.mock.calls).toEqual([
-      [one, 'folder-42'],
-      [two, 'folder-42'],
-    ])
-  })
-
   it('collects drop entries synchronously, before the item list dies', async () => {
     renderZone()
 
@@ -125,23 +114,5 @@ describe('drop zone', () => {
 
     fireEvent.dragOver(zone, { dataTransfer: { types: ['Files'] } })
     expect(screen.getByText('Drop to upload here')).toBeTruthy()
-  })
-
-  it('recreates the tree from the folder picker and enqueues under it', async () => {
-    renderZone()
-
-    const nested = new File(['x'], 'report.pdf')
-    Object.defineProperty(nested, 'webkitRelativePath', { value: 'tree/report.pdf' })
-    await userEvent.upload(screen.getByLabelText('Upload folder'), [nested])
-
-    await waitFor(() => expect(enqueue).toHaveBeenCalledWith(nested, 'folder-1'))
-    const [url, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(url).toBe('/api/folders')
-    // reuse: re-dropping a tree must merge into the folders already there.
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
-      parent_id: 'folder-42',
-      name: 'tree',
-      conflict_policy: 'reuse',
-    })
   })
 })

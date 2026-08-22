@@ -34,8 +34,10 @@ export function UploadManager({
   return (
     <aside
       aria-label="Uploads"
-      className="dock-enter material fixed inset-x-3 bottom-3 z-40 flex max-h-[70vh] flex-col overflow-hidden
-                 rounded-pop border border-line shadow-dock sm:inset-x-auto sm:right-5 sm:bottom-5 sm:w-[26rem]"
+      // Positioned by the dock stack in the layout, not by itself: it is one
+      // panel in that corner rather than the only thing entitled to it.
+      className="dock-enter material pointer-events-auto flex max-h-[70vh] w-full flex-col overflow-hidden
+                 rounded-pop border border-line shadow-dock"
     >
       <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
         <div className="min-w-0">

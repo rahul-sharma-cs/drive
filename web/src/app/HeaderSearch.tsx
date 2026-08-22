@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react'
+import { Search } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
-
-import { SearchIcon } from '../ui/icons'
 
 /**
  * Search where a person expects it: in the chrome, on every screen, rather
@@ -19,6 +18,12 @@ export function HeaderSearch() {
   const onSearchScreen = location.pathname === '/search'
   const [text, setText] = useState(onSearchScreen ? (params.get('q') ?? '') : '')
 
+  // Read through a ref, never a dependency. The query string is what this
+  // effect *writes*, so depending on it would make every navigation schedule
+  // another one.
+  const currentParams = useRef(params)
+  currentParams.current = params
+
   // Leaving the results screen clears the box: a stale query sitting in the
   // chrome while a folder is on screen suggests the folder is a result.
   useEffect(() => {
@@ -29,11 +34,14 @@ export function HeaderSearch() {
     const trimmed = text.trim()
     if (trimmed === '' && !onSearchScreen) return
     const handle = setTimeout(() => {
-      if (trimmed === '') {
-        if (onSearchScreen) void navigate('/search', { replace: true })
-        return
-      }
-      void navigate(`/search?q=${encodeURIComponent(trimmed)}`, { replace: onSearchScreen })
+      // Everything else riding on the URL — which file is open, how the list is
+      // sorted — is state a person set deliberately, and a search must not be
+      // what throws it away. Rebuilding the query string from `q` alone did.
+      const next = new URLSearchParams(currentParams.current)
+      if (trimmed === '') next.delete('q')
+      else next.set('q', trimmed)
+      const search = next.toString()
+      void navigate({ pathname: '/search', search: search === '' ? '' : `?${search}` }, { replace: onSearchScreen })
     }, 250)
     return () => clearTimeout(handle)
   }, [text, onSearchScreen, navigate])
@@ -41,15 +49,15 @@ export function HeaderSearch() {
   return (
     <label className="relative flex w-full items-center">
       <span className="sr-only">Search by name</span>
-      <span aria-hidden className="pointer-events-none absolute left-2.5 text-ink-3">
-        <SearchIcon />
+      <span aria-hidden className="pointer-events-none absolute left-3.5 text-ink-3">
+        <Search className="size-4" />
       </span>
       <input
         type="search"
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="Search your files"
-        className="w-full rounded-control border border-line-strong bg-surface py-1.5 pr-3 pl-8 text-[13px] text-ink outline-none transition duration-100 placeholder:text-ink-3 focus:border-teal focus:ring-2 focus:ring-teal/20"
+        className="h-10 w-full rounded-full border border-transparent bg-canvas pr-4 pl-10 text-[14px] text-ink outline-none transition duration-100 placeholder:text-ink-3 hover:border-line-strong focus:border-teal focus:bg-surface focus:ring-2 focus:ring-teal/20"
       />
     </label>
   )

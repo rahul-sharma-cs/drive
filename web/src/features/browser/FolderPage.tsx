@@ -10,7 +10,6 @@ import { formatWhen } from '../../ui/when'
 import { useSession } from '../auth/session'
 import { DropZone } from '../upload/ui/DropZone'
 import { DestinationDialog } from './DestinationDialog'
-import { NewFolderDialog } from './NewFolderDialog'
 import { RenameDialog } from './RenameDialog'
 import { SelectionToolbar } from './SelectionToolbar'
 import { useBreadcrumbs, useChildren, useCopyNode, useTrashNode, useUpdateNode } from './queries'
@@ -87,12 +86,9 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
           setDropTarget={setDropTarget}
           onDropInto={(id) => void moveTo(id, dragPayload(null) ?? selected)}
         />
-        <div className="ml-auto">
-          <NewFolderDialog parentId={folderId} />
-        </div>
       </div>
 
-      <DropZone folderId={folderId}>
+      <DropZone>
         <Card>
           {chosen.length > 0 && (
             <SelectionToolbar
@@ -122,7 +118,7 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
             <EmptyState
               icon={<UploadIcon />}
               title="This folder is empty."
-              hint="Drop files or folders here, or use the buttons above."
+              hint="Drop files or folders here, or add them from the New menu."
             />
           )}
           {nodes.length > 0 && (

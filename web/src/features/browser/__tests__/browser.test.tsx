@@ -3,10 +3,11 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Route, Routes } from 'react-router'
+import { Outlet, Route, Routes, useParams } from 'react-router'
 
 import type { DriveNode, Me } from '../../../lib/api'
 import { renderApp, stubFetch, type StubRoute } from '../../../test/render'
+import { CurrentFolderProvider } from '../../../app/CurrentFolder'
 import { meKey } from '../../auth/session'
 import { FolderPage } from '../FolderPage'
 
@@ -32,12 +33,29 @@ const folder = (over: Partial<DriveNode>): DriveNode => ({
 
 const root: DriveNode = folder({ id: 'root-1', parent_id: null, name: 'root' })
 
+/**
+ * Stands in for the app layout, which is what provides the current folder in
+ * the product — the drop zone reads it from there rather than from a prop. The
+ * seam itself (that the layout's value really is the route's `:id`) is pinned
+ * in `app/__tests__/shell.test.tsx`; this is only what the screen needs to run.
+ */
+function FolderContext() {
+  const { id } = useParams()
+  return (
+    <CurrentFolderProvider folderId={id ?? user.root_id}>
+      <Outlet />
+    </CurrentFolderProvider>
+  )
+}
+
 function renderFolder(routes: StubRoute[], { route = '/' } = {}) {
   const calls = stubFetch(routes)
   const rendered = renderApp(
     <Routes>
-      <Route path="/" element={<FolderPage />} />
-      <Route path="/folders/:id" element={<FolderPage />} />
+      <Route element={<FolderContext />}>
+        <Route path="/" element={<FolderPage />} />
+        <Route path="/folders/:id" element={<FolderPage />} />
+      </Route>
     </Routes>,
     { route, seed: (client) => client.setQueryData(meKey, user) },
   )
@@ -118,47 +136,9 @@ describe('file browser', () => {
     )
   })
 
-  it('creates a folder from the dialog and re-reads the folder afterwards', async () => {
-    const { calls } = renderFolder([
-      { path: '/api/nodes/root-1', body: root },
-      { path: '/api/nodes/root-1/children', body: { items: [], next_cursor: null } },
-      { method: 'POST', path: '/api/folders', body: folder({ id: 'new-1', name: 'Invoices' }) },
-    ])
-
-    await screen.findByText('This folder is empty.')
-    await userEvent.click(screen.getByRole('button', { name: 'New folder' }))
-    await userEvent.type(await screen.findByLabelText('Name'), 'Invoices')
-    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
-
-    await waitFor(() => {
-      const post = calls.find((c) => c.method === 'POST')
-      expect(post?.url).toBe('/api/folders')
-      expect(post?.body).toEqual({ parent_id: 'root-1', name: 'Invoices' })
-    })
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    await waitFor(() =>
-      expect(calls.filter((c) => c.url === '/api/nodes/root-1/children').length).toBeGreaterThan(1),
-    )
-  })
-
-  it('leaves the page interactive after the dialog closes (Radix pointer-events)', async () => {
-    renderFolder([
-      { path: '/api/nodes/root-1', body: root },
-      { path: '/api/nodes/root-1/children', body: { items: [], next_cursor: null } },
-    ])
-
-    await screen.findByText('This folder is empty.')
-    await userEvent.click(screen.getByRole('button', { name: 'New folder' }))
-    await screen.findByRole('dialog')
-    // Radix sets pointer-events:none on <body> while a modal is open, and a
-    // stuck value there disables every drop target and button on the page.
-    expect(document.body.style.pointerEvents).toBe('none')
-
-    await userEvent.keyboard('{Escape}')
-
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    await waitFor(() => expect(document.body.style.pointerEvents).not.toBe('none'))
-  })
+  // New folder — and with it the Radix `pointer-events` guard, which now has a
+  // menu handing off to the dialog in front of it — moved to the rail with the
+  // rest of the commands. Both cases live in `app/__tests__/shell.test.tsx`.
 })
 
 describe('selection and the actions it unlocks', () => {
