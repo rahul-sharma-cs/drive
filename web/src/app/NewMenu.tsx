@@ -45,7 +45,7 @@ export function NewMenu() {
         <DropdownMenuTrigger asChild>
           <Button
             size="lg"
-            className="h-12 w-full justify-start gap-3 rounded-full px-4 text-[14px] shadow-card hover:bg-teal-strong"
+            className="h-12 gap-3 self-start rounded-full px-6 text-[14px] shadow-card hover:bg-teal-strong"
           >
             <Plus className="size-5" />
             New
