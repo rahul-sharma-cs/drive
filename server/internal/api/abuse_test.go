@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rahul-sharma-cs/drive/server/internal/auth"
@@ -113,6 +114,80 @@ func TestAuthBurstIsRefusedPerAddress(t *testing.T) {
 	}
 	if got := spend("198.51.100.22"); got == http.StatusTooManyRequests {
 		t.Error("a second address was refused because the first one spent its burst")
+	}
+}
+
+// The signed-in half of /api/auth is not in the per-IP bucket, and GET /me is
+// the reason it matters.
+//
+// The SPA refetches it, and an office, a household or a phone network is one
+// address to the edge -- so a bucket sized for "a person signing in" locks a
+// building out of its own account pages. Behind RequireAuth there is a far
+// better identity than the address anyway, and every durable budget uses it.
+//
+// The allowance is 10 a minute with a burst of 20, so the twenty-first request
+// is the one that proves it: under the old routing it is a 429.
+func TestMeIsNotInThePerIPBucket(t *testing.T) {
+	// This server's config is explicit rather than the environment's:
+	// .env.test raises DRIVE_AUTH_RATE_PER_MIN to 100000 so the whole suite can
+	// share one address, which would make this assertion pass unconditionally.
+	h, sender, _ := authTestServer(t)
+	_, cookie := authSignedIn(t, h, sender)
+
+	// Signup, verify and login have already spent three of the twenty tokens on
+	// this address, so a /me that shared the bucket would run out well before
+	// the count below finishes.
+	const calls = 21
+	for i := 1; i <= calls; i++ {
+		rec := authDo(t, h, http.MethodGet, "/api/auth/me", nil, cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /me #%d of %d answered %d, want 200 (body %s)", i, calls, rec.Code, rec.Body.String())
+		}
+	}
+
+	// The unauthenticated half is still bucketed, from the same address.
+	for range int(burstFor(DefaultAuthRatePerMin)) {
+		authDo(t, h, http.MethodPost, "/api/auth/verify-email", map[string]string{"token": "nope"}, nil)
+	}
+	spent := authDo(t, h, http.MethodPost, "/api/auth/verify-email", map[string]string{"token": "nope"}, nil)
+	if spent.Code != http.StatusTooManyRequests {
+		t.Errorf("verify-email answered %d past the burst, want 429 -- the bucket is gone entirely", spent.Code)
+	}
+	// And /me still answers, because it never shared that bucket.
+	if got := authDo(t, h, http.MethodGet, "/api/auth/me", nil, cookie).Code; got != http.StatusOK {
+		t.Errorf("GET /me answered %d once the unauthenticated bucket was empty, want 200", got)
+	}
+}
+
+// The per-IP mail bucket. These two endpoints are the only ones where the
+// caller names somebody else's inbox, and both answer 200 for any address, so
+// without a ceiling one address could spend anybody's per-recipient budget as
+// fast as it could issue requests.
+func TestMailRequestsAreBucketedPerAddress(t *testing.T) {
+	_, h, _, _ := abuseServer(t)
+
+	ask := func(from string) int {
+		return abuseDo(t, h, http.MethodPost, "/api/auth/password-reset",
+			map[string]string{"email": "nobody-" + uuid.NewString() + "@drive.test"}, from).Code
+	}
+
+	for i := 1; i <= DefaultMailRatePerHour; i++ {
+		if got := ask("203.0.113.7"); got != http.StatusOK {
+			t.Fatalf("reset request %d of %d answered %d, want 200", i, DefaultMailRatePerHour, got)
+		}
+	}
+	if got := ask("203.0.113.7"); got != http.StatusTooManyRequests {
+		t.Fatalf("reset request %d answered %d, want 429", DefaultMailRatePerHour+1, got)
+	}
+	if got := ask("198.51.100.22"); got != http.StatusOK {
+		t.Errorf("a second address answered %d because the first spent its allowance", got)
+	}
+
+	// Resend-verification shares the same bucket: they are one budget for
+	// "mail somebody on my say-so", not two ways to spend it.
+	if got := abuseDo(t, h, http.MethodPost, "/api/auth/resend-verification",
+		map[string]string{"email": "nobody@drive.test"}, "203.0.113.7").Code; got != http.StatusTooManyRequests {
+		t.Errorf("resend-verification answered %d from an address that had spent its mail allowance, want 429", got)
 	}
 }
 

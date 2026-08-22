@@ -1,8 +1,7 @@
 package api
 
-// The auth surface: signup, email verification, login, logout and /me. Password
-// reset and session management are deliberately not here -- they are a later,
-// cuttable slice of work.
+// The auth surface: signup, email verification, login, logout, the account
+// itself (profile, password, sessions), password reset and resend-verification.
 
 import (
 	"context"
@@ -41,20 +40,56 @@ const (
 	verifyPathQuery = "/verify?token="
 )
 
+// The reset mail's subject and link path, fixed the same way: the SPA route
+// /reset reads the token out of the query and posts it to
+// POST /api/auth/password-reset/confirm.
+const (
+	resetSubject   = "Reset your Drive password"
+	resetPathQuery = "/reset?token="
+)
+
+// maxUserAgent bounds what the session list echoes back. A User-Agent is
+// attacker-controlled text of unbounded length; the list shows enough of it to
+// recognise a browser and not a paragraph.
+const maxUserAgent = 200 // runes
+
+// mountAuth splits /api/auth in two.
+//
+// The per-IP bucket belongs in front of the unauthenticated half: that is where
+// a stranger reaches Argon2 and the mail sender, and where the caller's address
+// is the only identity there is. Behind RequireAuth there is a much better
+// identity -- the session -- and the durable budgets are keyed by it, so the
+// bucket buys nothing there and costs something real: a phone, an office and a
+// laptop behind one NAT share an address, and /me is polled by every tab.
+//
+// POST /password is the exception. It reaches Argon2 twice with a caller-chosen
+// password, so it keeps the bucket even though it is authenticated.
 func (s *Server) mountAuth(r chi.Router) {
 	r.Route("/auth", func(r chi.Router) {
-		// The per-IP bucket covers the whole auth surface, /me included: it is
-		// the only place an unauthenticated caller can reach Argon2 or the mail
-		// sender, and a limiter with a hole in it is a limiter with a hole in it.
-		r.Use(s.RateLimitAuth)
+		r.Group(func(r chi.Router) {
+			r.Use(s.RateLimitAuth)
 
-		r.Post("/signup", s.authSignup)
-		r.Post("/verify-email", s.authVerifyEmail)
-		r.Post("/login", s.authLogin)
-		r.Post("/logout", s.authLogout)
-		// If bearer tokens ever ship, /auth/me is the one /auth route they
-		// may call, and would answer with the token's own metadata too.
-		r.With(s.RequireAuth).Get("/me", s.authMe)
+			r.Post("/signup", s.authSignup)
+			r.Post("/verify-email", s.authVerifyEmail)
+			r.Post("/login", s.authLogin)
+			r.Post("/logout", s.authLogout)
+			r.Post("/password-reset", s.authPasswordReset)
+			r.Post("/password-reset/confirm", s.authPasswordResetConfirm)
+			r.Post("/resend-verification", s.authResendVerification)
+		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(s.RequireAuth)
+
+			// If bearer tokens ever ship, /auth/me is the one /auth route they
+			// may call, and would answer with the token's own metadata too.
+			r.Get("/me", s.authMe)
+			r.Patch("/me", s.authUpdateMe)
+			r.Get("/sessions", s.authListSessions)
+			r.Delete("/sessions/{id}", s.authDeleteSession)
+			r.Post("/logout-all", s.authLogoutAll)
+			r.With(s.RateLimitAuth).Post("/password", s.authChangePassword)
+		})
 	})
 }
 
@@ -92,6 +127,38 @@ type authLoginRequest struct {
 
 type authTokenRequest struct {
 	Token string `json:"token"`
+}
+
+// authEmailRequest is the body of the two endpoints that mail an address the
+// caller does not have to own: password-reset and resend-verification.
+type authEmailRequest struct {
+	Email string `json:"email"`
+}
+
+type authUpdateMeRequest struct {
+	DisplayName string `json:"display_name"`
+}
+
+type authChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+type authResetConfirmRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+// authSessionDTO is one row of GET /auth/sessions.
+type authSessionDTO struct {
+	ID         uuid.UUID  `json:"id"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastSeenAt *time.Time `json:"last_seen_at"`
+	IP         *string    `json:"ip"`
+	UserAgent  *string    `json:"user_agent"`
+	// Current marks the session this request arrived on, which the UI must not
+	// offer to revoke as if it were somebody else's.
+	Current bool `json:"current"`
 }
 
 // ---------------------------------------------------------------- handlers --
@@ -168,18 +235,28 @@ func (s *Server) authSignup(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, authOK)
 }
 
-// sendVerificationMail mints a verification token and mails the link, subject
-// to the per-address email_send budget. Nothing here can fail the request: the
-// account exists either way, and a caller must not learn from the response
-// whether a message went out.
+// sendVerificationMail is signup's send. It keeps the plain email_send scope:
+// the budget a person spends on their own address at signup is not the one a
+// stranger can spend on it through resend-verification.
 func (s *Server) sendVerificationMail(ctx context.Context, log *slog.Logger, acct *auth.Account) {
-	allowed, err := auth.Allowed(ctx, s.DB, auth.ScopeEmailSend, acct.Email, auth.EmailSendLimit, auth.EmailSendWindow)
+	s.sendAccountLink(ctx, log, acct, auth.PurposeVerify, auth.ScopeEmailSend)
+}
+
+// sendAccountLink mints a link token and mails it, subject to the per-address
+// budget in scope and the service-wide daily cap. Nothing here can fail a
+// request: every caller runs it off the request goroutine, because a caller
+// must not learn from the response -- or from its latency -- whether a message
+// went out.
+func (s *Server) sendAccountLink(ctx context.Context, log *slog.Logger, acct *auth.Account, purpose, scope string) {
+	log = log.With("user_id", acct.ID, "purpose", purpose)
+
+	allowed, err := auth.Allowed(ctx, s.DB, scope, acct.Email, auth.EmailSendLimit, auth.EmailSendWindow)
 	if err != nil {
 		log.Error("checking the mail budget", "error", err)
 		return
 	}
 	if !allowed {
-		log.Warn("verification mail suppressed: address is over its send budget", "user_id", acct.ID)
+		log.Warn("mail suppressed: address is over its send budget", "scope", scope)
 		return
 	}
 
@@ -199,33 +276,45 @@ func (s *Server) sendVerificationMail(ctx context.Context, log *slog.Logger, acc
 			return
 		}
 		if spent > dailyCap {
-			log.Warn("verification mail suppressed: the service-wide daily send budget is spent",
-				"user_id", acct.ID, "spent", spent, "cap", dailyCap)
+			log.Warn("mail suppressed: the service-wide daily send budget is spent",
+				"spent", spent, "cap", dailyCap)
 			return
 		}
 	}
 
-	token, err := auth.CreateEmailToken(ctx, s.DB, acct.ID, auth.PurposeVerify)
+	token, err := auth.CreateEmailToken(ctx, s.DB, acct.ID, purpose)
 	if err != nil {
-		log.Error("creating the verification token", "error", err, "user_id", acct.ID)
+		log.Error("creating the link token", "error", err)
 		return
 	}
-	if _, err := auth.Bump(ctx, s.DB, auth.ScopeEmailSend, acct.Email, auth.EmailSendWindow); err != nil {
+	if _, err := auth.Bump(ctx, s.DB, scope, acct.Email, auth.EmailSendWindow); err != nil {
 		log.Error("charging the mail budget", "error", err)
 		return
 	}
 
 	if s.Mail == nil {
-		log.Error("no mail sender configured; the verification link cannot be delivered", "user_id", acct.ID)
+		log.Error("no mail sender configured; the link cannot be delivered")
 		return
 	}
-	body := fmt.Sprintf(
-		"Welcome to Drive.\n\nConfirm this address to finish setting up your account:\n\n%s\n\nIf you did not create a Drive account, ignore this email.\n",
-		s.baseURL()+verifyPathQuery+token,
-	)
-	if err := s.Mail.Send(ctx, acct.Email, verifySubject, body); err != nil {
-		log.Error("sending the verification mail", "error", err, "user_id", acct.ID)
+	subject, body := accountMail(purpose, s.baseURL(), token)
+	if err := s.Mail.Send(ctx, acct.Email, subject, body); err != nil {
+		log.Error("sending the mail", "error", err)
 	}
+}
+
+// accountMail is the message for one link purpose. Both subjects and both link
+// paths are fixed contracts with the SPA and the integration suite.
+func accountMail(purpose, baseURL, token string) (subject, body string) {
+	if purpose == auth.PurposeReset {
+		return resetSubject, fmt.Sprintf(
+			"Somebody asked to reset the password on your Drive account.\n\nChoose a new one here -- the link works once, and only for the next hour:\n\n%s\n\nIf that was not you, ignore this email. Your password has not changed.\n",
+			baseURL+resetPathQuery+token,
+		)
+	}
+	return verifySubject, fmt.Sprintf(
+		"Welcome to Drive.\n\nConfirm this address to finish setting up your account:\n\n%s\n\nIf you did not create a Drive account, ignore this email.\n",
+		baseURL+verifyPathQuery+token,
+	)
 }
 
 // authVerifyEmail redeems the link from the verification mail. Every reason a
@@ -324,7 +413,11 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	// The credentials were right, so this is not a failed attempt and costs
 	// nothing against the lockout budget.
 	if !acct.Verified() {
-		WriteErr(w, r, http.StatusUnauthorized, CodeUnauthorized,
+		// Its own code, not the generic one: this is the single refusal the
+		// client is allowed to act on -- it offers to resend the link -- and a
+		// client that had to match the English would break the moment the
+		// wording changed.
+		WriteErr(w, r, http.StatusUnauthorized, CodeEmailUnverified,
 			"verify your email first: check your inbox for the link we sent when you signed up")
 		return
 	}
@@ -366,13 +459,347 @@ func (s *Server) authMe(w http.ResponseWriter, r *http.Request) {
 	u := MustUser(r.Context())
 	// If bearer tokens ever ship, a token-authenticated caller gets its own
 	// {id, name, scopes, expires_at} alongside this.
-	WriteJSON(w, http.StatusOK, authMeResponse{
+	WriteJSON(w, http.StatusOK, meDTO(u))
+}
+
+// authUpdateMe renames the account. It is the whole of the profile form: email
+// is the login and is not editable here.
+func (s *Server) authUpdateMe(w http.ResponseWriter, r *http.Request) {
+	u := MustUser(r.Context())
+
+	var req authUpdateMeRequest
+	if err := ReadJSON(r, &req); err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "expected {display_name}")
+		return
+	}
+	name, err := cleanDisplayName(req.DisplayName)
+	if err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
+		return
+	}
+
+	if err := auth.SetDisplayName(r.Context(), s.DB, u.ID, name); err != nil {
+		s.authFailed(w, r, "renaming the account", err)
+		return
+	}
+
+	// The updated account, so the caller's cached copy -- and the initials in
+	// its avatar -- refresh without a second round trip.
+	updated := *u
+	updated.DisplayName = name
+	WriteJSON(w, http.StatusOK, meDTO(&updated))
+}
+
+// authChangePassword replaces the password of a signed-in caller who can prove
+// the current one.
+//
+// The failure budget is keyed by user id under its own scope. Charging the
+// login budget instead -- which is keyed by email -- would mean ten mistyped
+// current passwords locked the account out of signing in, and would hand anyone
+// who stole a session an easy way to do it deliberately.
+func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
+	u := MustUser(r.Context())
+	ctx := r.Context()
+
+	var req authChangePasswordRequest
+	if err := ReadJSON(r, &req); err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "expected {current_password, new_password}")
+		return
+	}
+	if err := checkPassword(req.NewPassword); err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
+		return
+	}
+
+	key := u.ID.String()
+	allowed, err := auth.Allowed(ctx, s.DB, auth.ScopePasswordChange, key,
+		auth.PasswordChangeFailLimit, auth.PasswordChangeFailWindow)
+	if err != nil {
+		s.authFailed(w, r, "checking the password-change budget", err)
+		return
+	}
+	if !allowed {
+		WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
+			"too many attempts. Try again in a few minutes.")
+		return
+	}
+
+	// The stored hash is deliberately not on the request-scoped user, so it is
+	// read here rather than carried through every request in the process.
+	acct, err := auth.FindUserByID(ctx, s.DB, u.ID)
+	if err != nil {
+		s.authFailed(w, r, "looking the account up", err)
+		return
+	}
+	if acct == nil {
+		// The session outlived its user. Nothing to change, and nothing the
+		// caller can do about it.
+		WriteErr(w, r, http.StatusUnauthorized, CodeUnauthorized, "sign in to continue")
+		return
+	}
+
+	ok, err := s.Argon2.Verify(acct.PasswordHash, req.CurrentPassword)
+	if errors.Is(err, auth.ErrBusy) {
+		s.authBusy(w, r)
+		return
+	}
+	if err != nil {
+		s.authFailed(w, r, "verifying the password", err)
+		return
+	}
+	if !ok {
+		if _, err := auth.Bump(ctx, s.DB, auth.ScopePasswordChange, key, auth.PasswordChangeFailWindow); err != nil {
+			LoggerFrom(ctx).Error("charging the password-change budget", "error", err)
+		}
+		WriteErr(w, r, http.StatusUnauthorized, CodeUnauthorized, "that password is not right")
+		return
+	}
+
+	hash, err := s.Argon2.Hash(req.NewPassword)
+	if errors.Is(err, auth.ErrBusy) {
+		s.authBusy(w, r)
+		return
+	}
+	if err != nil {
+		s.authFailed(w, r, "hashing the password", err)
+		return
+	}
+	if err := auth.SetPassword(ctx, s.DB, u.ID, hash); err != nil {
+		s.authFailed(w, r, "setting the password", err)
+		return
+	}
+
+	// Every other browser is signed out -- that is what a person changing their
+	// password after a scare is asking for -- and this one is not, because
+	// signing somebody out of the form they just submitted is a bug, not a
+	// security control.
+	if err := auth.DeleteUserSessions(ctx, s.DB, u.ID, &u.SessionID); err != nil {
+		LoggerFrom(ctx).Error("revoking the other sessions after a password change", "error", err, "user_id", u.ID)
+	}
+
+	LoggerFrom(ctx).Info("password changed", "user_id", u.ID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// authListSessions lists where the account is signed in. It is one page: a
+// person has a handful of sessions, so next_cursor is always null and the
+// envelope stays the same as every other list.
+func (s *Server) authListSessions(w http.ResponseWriter, r *http.Request) {
+	u := MustUser(r.Context())
+
+	sessions, err := auth.ListSessions(r.Context(), s.DB, u.ID)
+	if err != nil {
+		s.authFailed(w, r, "listing the sessions", err)
+		return
+	}
+
+	items := make([]authSessionDTO, 0, len(sessions))
+	for _, sess := range sessions {
+		items = append(items, authSessionDTO{
+			ID:         sess.ID,
+			CreatedAt:  sess.CreatedAt,
+			LastSeenAt: sess.LastSeenAt,
+			IP:         sess.IP,
+			UserAgent:  truncateRunes(sess.UserAgent, maxUserAgent),
+			Current:    sess.ID == u.SessionID,
+		})
+	}
+	WriteJSON(w, http.StatusOK, NewList(items, ""))
+}
+
+// authDeleteSession revokes one of the caller's own sessions. An id that is not
+// theirs is 404, exactly as an id that does not exist: the two must not be
+// distinguishable.
+func (s *Server) authDeleteSession(w http.ResponseWriter, r *http.Request) {
+	u := MustUser(r.Context())
+
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		WriteErr(w, r, http.StatusNotFound, CodeNotFound, "no such session")
+		return
+	}
+
+	deleted, err := auth.DeleteSessionByID(r.Context(), s.DB, u.ID, id)
+	if err != nil {
+		s.authFailed(w, r, "revoking the session", err)
+		return
+	}
+	if !deleted {
+		WriteErr(w, r, http.StatusNotFound, CodeNotFound, "no such session")
+		return
+	}
+
+	// Revoking the session you are on is a signout. The row is already gone, so
+	// the cookie is dead either way; clearing it keeps the browser from sending
+	// a credential that can never work again.
+	if id == u.SessionID {
+		s.clearSessionCookie(w)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// authLogoutAll revokes every session the account has, this one included.
+func (s *Server) authLogoutAll(w http.ResponseWriter, r *http.Request) {
+	u := MustUser(r.Context())
+
+	if err := auth.DeleteUserSessions(r.Context(), s.DB, u.ID, nil); err != nil {
+		s.authFailed(w, r, "revoking the sessions", err)
+		return
+	}
+	s.clearSessionCookie(w)
+	LoggerFrom(r.Context()).Info("signed out everywhere", "user_id", u.ID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// authPasswordReset mails a reset link, and answers 200 for every syntactically
+// valid address whether or not it has an account.
+func (s *Server) authPasswordReset(w http.ResponseWriter, r *http.Request) {
+	s.requestAccountMail(w, r, auth.PurposeReset)
+}
+
+// authResendVerification mails the verification link again. Same shape as the
+// reset request, and the same silence about who exists.
+func (s *Server) authResendVerification(w http.ResponseWriter, r *http.Request) {
+	s.requestAccountMail(w, r, auth.PurposeVerify)
+}
+
+// requestAccountMail is the request half of both mail-me-a-link endpoints.
+//
+// Everything that depends on whether the address has an account happens on a
+// goroutine, and nothing on the response path does. That is the whole design:
+// the lookup, the budget checks, the token insert and a blocking SMTP round
+// trip are all work that only the "account exists" branch would do, so running
+// any of it inline would make the response's latency the oracle the identical
+// 200 bodies exist to prevent.
+//
+// What does run inline is the per-IP bucket, and it runs identically for both
+// branches. Without it one address could spend anybody's per-recipient budget
+// as fast as it could issue requests -- these are the two endpoints where the
+// caller names somebody else's inbox.
+func (s *Server) requestAccountMail(w http.ResponseWriter, r *http.Request, purpose string) {
+	var req authEmailRequest
+	if err := ReadJSON(r, &req); err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "expected {email}")
+		return
+	}
+	email, err := canonicalEmail(req.Email)
+	if err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
+		return
+	}
+
+	if s.MailRate != nil && !s.MailRate.allow(ClientIP(r)) {
+		LoggerFrom(r.Context()).Warn("mail request refused by the per-IP bucket",
+			"client_ip", ClientIP(r), "path", r.URL.Path)
+		WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
+			"too many requests. Try again later.")
+		return
+	}
+
+	ctx := r.Context()
+	// WithoutCancel: the send must survive the request completing.
+	go s.mailAccountLink(context.WithoutCancel(ctx), LoggerFrom(ctx), email, purpose)
+
+	WriteJSON(w, http.StatusOK, authOK)
+}
+
+// mailAccountLink is the off-request half: look the address up, and send only
+// if there is somebody to send to.
+func (s *Server) mailAccountLink(ctx context.Context, log *slog.Logger, email, purpose string) {
+	acct, err := auth.FindUserByEmail(ctx, s.DB, email)
+	if err != nil {
+		log.Error("looking the account up", "error", err, "purpose", purpose)
+		return
+	}
+	if acct == nil {
+		// No account: no token, no send, and -- deliberately -- no charge
+		// against the service-wide daily cap either, so a sweep through
+		// addresses that do not exist cannot spend the budget real users need.
+		return
+	}
+
+	scope := auth.ScopeEmailSendReset
+	if purpose == auth.PurposeVerify {
+		if acct.Verified() {
+			// Nothing to confirm. Resending would be a way to mail somebody
+			// who already finished, on demand.
+			return
+		}
+		scope = auth.ScopeEmailSendVerify
+	}
+	s.sendAccountLink(ctx, log, acct, purpose, scope)
+}
+
+// authPasswordResetConfirm redeems a reset link and sets the new password.
+func (s *Server) authPasswordResetConfirm(w http.ResponseWriter, r *http.Request) {
+	var req authResetConfirmRequest
+	if err := ReadJSON(r, &req); err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "expected {token, new_password}")
+		return
+	}
+
+	const badToken = "this reset link is invalid or has expired"
+	if strings.TrimSpace(req.Token) == "" {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, badToken)
+		return
+	}
+	if err := checkPassword(req.NewPassword); err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, err.Error())
+		return
+	}
+
+	// Hash BEFORE the token is consumed. A busy Argon2 limiter answers 429, and
+	// a 429 after the burn would have spent the user's one link on a refusal
+	// they are told to retry.
+	hash, err := s.Argon2.Hash(req.NewPassword)
+	if errors.Is(err, auth.ErrBusy) {
+		s.authBusy(w, r)
+		return
+	}
+	if err != nil {
+		s.authFailed(w, r, "hashing the password", err)
+		return
+	}
+
+	userID, err := auth.ResetPassword(r.Context(), s.DB, req.Token, hash)
+	if errors.Is(err, auth.ErrInvalidToken) {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, badToken)
+		return
+	}
+	if err != nil {
+		s.authFailed(w, r, "resetting the password", err)
+		return
+	}
+
+	// Every session went with the reset, this request's included if it had one.
+	s.clearSessionCookie(w)
+	LoggerFrom(r.Context()).Info("password reset", "user_id", userID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// meDTO is the /me shape, from either the request-scoped user or a copy of it.
+func meDTO(u *User) authMeResponse {
+	return authMeResponse{
 		ID:              u.ID,
 		Email:           u.Email,
 		DisplayName:     u.DisplayName,
 		RootID:          u.RootID,
 		EmailVerifiedAt: u.EmailVerifiedAt,
-	})
+	}
+}
+
+// truncateRunes caps a nullable string at n runes, cutting on a rune boundary
+// so the result is still valid UTF-8.
+func truncateRunes(s *string, n int) *string {
+	if s == nil {
+		return nil
+	}
+	runes := []rune(*s)
+	if len(runes) <= n {
+		return s
+	}
+	cut := string(runes[:n])
+	return &cut
 }
 
 // ----------------------------------------------------------------- cookies --

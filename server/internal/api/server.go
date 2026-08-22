@@ -36,15 +36,20 @@ import (
 // Canonical error codes. These are the only values that appear in an error
 // envelope's "code" for a 4xx; the client's state machine switches on them.
 const (
-	CodeInvalid        = "invalid"
-	CodeUnauthorized   = "unauthorized"
-	CodeNotFound       = "not_found"
-	CodeNameConflict   = "name_conflict"
-	CodeCycle          = "cycle"
-	CodeRateLimited    = "rate_limited"
-	CodeSessionExpired = "session_expired"
-	CodeInProgress     = "in_progress"
-	CodeUnsupported    = "unsupported"
+	CodeInvalid      = "invalid"
+	CodeUnauthorized = "unauthorized"
+	// CodeEmailUnverified is login's one non-generic refusal: the password was
+	// right but the address has never been confirmed. It is a code rather than
+	// a message the client matches on, so the "resend the link" button is
+	// driven by the contract instead of by English.
+	CodeEmailUnverified = "email_unverified"
+	CodeNotFound        = "not_found"
+	CodeNameConflict    = "name_conflict"
+	CodeCycle           = "cycle"
+	CodeRateLimited     = "rate_limited"
+	CodeSessionExpired  = "session_expired"
+	CodeInProgress      = "in_progress"
+	CodeUnsupported     = "unsupported"
 
 	// CodeInternal is the one code outside the canonical list: it is reserved
 	// for 5xx responses (panics), which no client decision depends on.
@@ -83,26 +88,37 @@ type Server struct {
 	Argon2 *auth.Limiter
 	// AuthRate is the per-IP token bucket in front of /api/auth.
 	AuthRate *ipLimiter
+	// MailRate is the per-IP bucket in front of the two endpoints that mail an
+	// address the caller does not have to own: password-reset and
+	// resend-verification.
+	MailRate *ipLimiter
 }
 
 // New builds the server. Dependencies are passed in rather than constructed so
 // tests can supply exactly the ones a case touches.
 //
-// The two limiters are built here rather than passed: they carry no external
+// The limiters are built here rather than passed: they carry no external
 // dependency, they must be shared by every request in the process, and a test
 // that wants a saturated one can replace the field on the returned Server.
 func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, sender mail.Sender, s3c *s3.Client, presign *s3.PresignClient) *Server {
-	argon2Limit, authRate := 0, 0
+	argon2Limit, authRate, mailRate := 0, 0, 0
 	if cfg != nil {
-		argon2Limit, authRate = cfg.Argon2Limit, cfg.AuthRatePerMin
+		argon2Limit, authRate, mailRate = cfg.Argon2Limit, cfg.AuthRatePerMin, cfg.MailRatePerHour
 	}
 	if authRate < 1 {
 		authRate = DefaultAuthRatePerMin
+	}
+	if mailRate < 1 {
+		mailRate = DefaultMailRatePerHour
 	}
 	return &Server{
 		Cfg: cfg, DB: pool, Log: log, Mail: sender, S3: s3c, Presign: presign,
 		Argon2:   auth.NewLimiter(argon2Limit),
 		AuthRate: newIPLimiter(float64(authRate), burstFor(float64(authRate))),
+		// The mail bucket's burst is the allowance itself, not twice it: this
+		// one is a budget for the hour, and a burst on top of it would simply
+		// be a different, larger number nobody chose.
+		MailRate: newIPLimiter(float64(mailRate)/60, float64(mailRate)),
 	}
 }
 

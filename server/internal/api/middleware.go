@@ -34,6 +34,11 @@ type User struct {
 	DisplayName     string
 	RootID          uuid.UUID
 	EmailVerifiedAt *time.Time
+	// SessionID is the auth_sessions row this request arrived on. The session
+	// list marks it "current", a password change is the one session it keeps,
+	// and revoking it is what clears the caller's own cookie. It is uuid.Nil
+	// for a user put on the context by anything but the session loader.
+	SessionID uuid.UUID
 }
 
 // Verified reports whether the account finished email verification. Login is
@@ -159,12 +164,11 @@ func (s *Server) sessionLoader(next http.Handler) http.Handler {
 			 WHERE s.token_hash = $1 AND s.expires_at > now()`
 
 		var (
-			sessionID uuid.UUID
-			u         User
-			rootID    *uuid.UUID
+			u      User
+			rootID *uuid.UUID
 		)
 		if err := s.DB.QueryRow(ctx, q, sum[:]).Scan(
-			&sessionID, &u.ID, &u.Email, &u.DisplayName, &u.EmailVerifiedAt, &rootID,
+			&u.SessionID, &u.ID, &u.Email, &u.DisplayName, &u.EmailVerifiedAt, &rootID,
 		); err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				// The cookie may be perfectly good; we simply could not look it
@@ -193,7 +197,7 @@ func (s *Server) sessionLoader(next http.Handler) http.Handler {
 			   SET expires_at = now() + interval '30 days', last_seen_at = now()
 			 WHERE id = $1
 			   AND (last_seen_at IS NULL OR last_seen_at < now() - interval '1 hour')`
-		if _, err := s.DB.Exec(ctx, slide, sessionID); err != nil {
+		if _, err := s.DB.Exec(ctx, slide, u.SessionID); err != nil {
 			LoggerFrom(ctx).Warn("sliding session", "error", err)
 		}
 

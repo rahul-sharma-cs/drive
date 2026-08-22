@@ -84,6 +84,17 @@ func isPublicIP(ip net.IP) bool {
 // requests back to back is never punished for it.
 const DefaultAuthRatePerMin = 10
 
+// DefaultMailRatePerHour is how many messages one client address may ask Drive
+// to send to somebody else (DRIVE_MAIL_RATE_PER_HOUR), across password-reset
+// and resend-verification together.
+//
+// Those two endpoints answer 200 for any address, so their per-recipient
+// budgets are spent on behalf of whoever the caller names -- five requests and
+// a stranger's inbox is silent for an hour. This is the ceiling on how fast one
+// address can do that. Five an hour is more than a person who mistyped their
+// own address needs and far less than a sweep through a mailing list.
+const DefaultMailRatePerHour = 5
+
 // burstFor is the burst allowance for a rate. One knob, not two: they only ever
 // move together.
 func burstFor(perMinute float64) float64 { return perMinute * 2 }

@@ -14,9 +14,13 @@ import (
 //
 // The account exists and the password is right; only email_verified_at is
 // missing. So this also pins the order the login handler checks things in: the
-// distinct "verify your email" message is only ever shown to somebody who
+// distinct "verify your email" answer is only ever shown to somebody who
 // already proved they know the password, and it never charges the lockout
 // budget.
+//
+// It carries its own code rather than the generic one, because it is the single
+// login refusal the client acts on -- it offers to resend the link -- and a
+// client matching on the English would break the next time the wording moved.
 func TestUnverifiedEmailCannotLogIn(t *testing.T) {
 	user := H.NewUnverifiedUser(t)
 
@@ -25,8 +29,8 @@ func TestUnverifiedEmailCannotLogIn(t *testing.T) {
 		"password": testutil.FixturePassword,
 	}).Expect(http.StatusUnauthorized)
 
-	if resp.Code() != "unauthorized" {
-		t.Errorf("code = %q, want unauthorized", resp.Code())
+	if resp.Code() != "email_unverified" {
+		t.Errorf("code = %q, want email_unverified", resp.Code())
 	}
 	if !strings.Contains(strings.ToLower(resp.Message()), "verify your email") {
 		t.Errorf("message = %q, want it to name email verification", resp.Message())

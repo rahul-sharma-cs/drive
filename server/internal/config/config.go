@@ -69,6 +69,7 @@ type Config struct {
 	LogLevel        string
 	Argon2Limit     int
 	AuthRatePerMin  int
+	MailRatePerHour int
 	SignupMode      string
 	EmailDailyCap   int
 	MaxFileSize     int64
@@ -133,6 +134,12 @@ func Load() (*Config, error) {
 	// off -- a suite that would trip it raises the number instead.
 	if cfg.AuthRatePerMin, err = parseCount(env("DRIVE_AUTH_RATE_PER_MIN", "")); err != nil {
 		return nil, fmt.Errorf("DRIVE_AUTH_RATE_PER_MIN: %w", err)
+	}
+	// Messages one client address may ask Drive to send to somebody else in an
+	// hour, across password-reset and resend-verification. Like the bucket
+	// above there is no value that turns it off; 0 means the default.
+	if cfg.MailRatePerHour, err = parseCount(env("DRIVE_MAIL_RATE_PER_HOUR", "")); err != nil {
+		return nil, fmt.Errorf("DRIVE_MAIL_RATE_PER_HOUR: %w", err)
 	}
 	// Messages the whole service may send in a day. Unlike the two limits
 	// above, 0 here means no budget at all -- which is right for a local

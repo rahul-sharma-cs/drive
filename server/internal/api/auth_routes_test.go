@@ -100,6 +100,58 @@ func (s *authRecordingSender) last(t *testing.T) authMail {
 	}
 }
 
+// waitForTo returns the most recent message sent to an address with a given
+// subject, failing the test if none arrives. Like last, it polls, because every
+// send in this package is dispatched off the request goroutine on purpose.
+func (s *authRecordingSender) waitForTo(t *testing.T, to, subject string) authMail {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if all := s.matching(to, subject); len(all) > 0 {
+			return all[len(all)-1]
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no %q mail to %s within 3s (sent: %d)", subject, to, len(s.all()))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitForCountTo blocks until exactly n messages of this subject have gone to
+// an address.
+func (s *authRecordingSender) waitForCountTo(t *testing.T, to, subject string, n int) []authMail {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		all := s.matching(to, subject)
+		if len(all) >= n {
+			return all
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d %q mails to %s within 3s, want %d", len(all), subject, to, n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (s *authRecordingSender) matching(to, subject string) []authMail {
+	var out []authMail
+	for _, m := range s.all() {
+		if m.To == to && m.Subject == subject {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// authSettle gives an off-request goroutine a bounded moment to do whatever it
+// was going to do.
+//
+// It is only ever used before asserting that something did NOT happen. Anything
+// that must happen is waited for on its own signal instead, so no assertion in
+// this file passes merely because a sleep was long enough.
+func authSettle() { time.Sleep(300 * time.Millisecond) }
+
 const authTestBaseURL = "http://localhost:8081"
 
 func authTestServer(t *testing.T) (http.Handler, *authRecordingSender, *pgxpool.Pool) {
@@ -109,9 +161,20 @@ func authTestServer(t *testing.T) (http.Handler, *authRecordingSender, *pgxpool.
 
 func authTestServerWithBaseURL(t *testing.T, baseURL string) (http.Handler, *authRecordingSender, *pgxpool.Pool) {
 	t.Helper()
+	return authTestServerWithConfig(t, &config.Config{BaseURL: baseURL})
+}
+
+// authTestServerWithConfig builds a server from an explicit config.
+//
+// Every server in this package gets one, and never the process environment:
+// .env.test raises DRIVE_AUTH_RATE_PER_MIN to 100000 so the whole suite can run
+// from one address, which would make any assertion about a bucket pass
+// unconditionally. The buckets are per-Server, so each test also starts with
+// full ones.
+func authTestServerWithConfig(t *testing.T, cfg *config.Config) (http.Handler, *authRecordingSender, *pgxpool.Pool) {
+	t.Helper()
 	pool := authTestPool(t)
 	sender := &authRecordingSender{}
-	cfg := &config.Config{BaseURL: baseURL}
 	return New(cfg, pool, nil, sender, nil, nil).Routes(), sender, pool
 }
 
@@ -180,7 +243,10 @@ func authVerifiedUser(t *testing.T, h http.Handler, sender *authRecordingSender)
 		t.Fatalf("signup: status %d, body %s", rec.Code, rec.Body.String())
 	}
 
-	token := authTokenFromMail(t, sender.last(t).Body)
+	// Waited for by address, not by "the newest mail": a test that builds two
+	// accounts against one sender would otherwise redeem the first one's token
+	// twice and fail somewhere far from the cause.
+	token := authTokenFromMail(t, sender.waitForTo(t, email, verifySubject).Body)
 	rec = authDo(t, h, http.MethodPost, "/api/auth/verify-email", map[string]string{"token": token}, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("verify-email: status %d, body %s", rec.Code, rec.Body.String())
@@ -192,7 +258,18 @@ func authVerifiedUser(t *testing.T, h http.Handler, sender *authRecordingSender)
 // shape is fixed: ${DRIVE_BASE_URL}/verify?token=<raw token>.
 func authTokenFromMail(t *testing.T, body string) string {
 	t.Helper()
-	const marker = "/verify?token="
+	return authLinkToken(t, body, "/verify?token=")
+}
+
+// authResetTokenFromMail does the same for the reset link, ${DRIVE_BASE_URL}
+// /reset?token=<raw token>, which the SPA route /reset reads.
+func authResetTokenFromMail(t *testing.T, body string) string {
+	t.Helper()
+	return authLinkToken(t, body, "/reset?token=")
+}
+
+func authLinkToken(t *testing.T, body, marker string) string {
+	t.Helper()
 	i := strings.Index(body, marker)
 	if i < 0 {
 		t.Fatalf("no %q link in the mail body:\n%s", marker, body)
@@ -330,9 +407,12 @@ func TestLoginIsRefusedUntilTheEmailIsVerified(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status %d, want 401 (body %s)", rec.Code, rec.Body.String())
 	}
+	// Its own code, not the generic one. This is the single login refusal a
+	// client is allowed to act on -- it offers to resend the link -- and the
+	// SPA must not have to match on the English to find it.
 	e := decodeErr(t, rec.Body.String())
-	if e.Code != CodeUnauthorized {
-		t.Errorf("code %q, want %q", e.Code, CodeUnauthorized)
+	if e.Code != CodeEmailUnverified {
+		t.Errorf("code %q, want %q", e.Code, CodeEmailUnverified)
 	}
 	if !strings.Contains(strings.ToLower(e.Message), "verify") {
 		t.Errorf("message %q does not tell the user to verify their address", e.Message)
@@ -726,5 +806,610 @@ func TestSessionLoaderDBFailureIsRetryable(t *testing.T) {
 	anon := authDo(t, h, http.MethodGet, "/api/auth/me", nil, nil)
 	if anon.Code != http.StatusUnauthorized {
 		t.Errorf("an anonymous request answered %d, want 401 (body %s)", anon.Code, anon.Body)
+	}
+}
+
+// ------------------------------------------------------- the account itself --
+
+// authLogin signs an existing account in and returns its session cookie.
+func authLoginAs(t *testing.T, h http.Handler, email, password string) *http.Cookie {
+	t.Helper()
+	rec := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, password}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	return authCookie(t, rec)
+}
+
+// authSignedIn builds a verified account and signs it in.
+func authSignedIn(t *testing.T, h http.Handler, sender *authRecordingSender) (string, *http.Cookie) {
+	t.Helper()
+	email := authVerifiedUser(t, h, sender)
+	return email, authLoginAs(t, h, email, authTestPassword)
+}
+
+// authMeStatus is how a cookie is checked for life: 200 if the session is still
+// there, 401 once it has been revoked.
+func authMeStatus(t *testing.T, h http.Handler, cookie *http.Cookie) int {
+	t.Helper()
+	return authDo(t, h, http.MethodGet, "/api/auth/me", nil, cookie).Code
+}
+
+type authChangePasswordBody struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+type authResetConfirmBody struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+type authSessionsDTO struct {
+	Items []struct {
+		ID         uuid.UUID  `json:"id"`
+		CreatedAt  time.Time  `json:"created_at"`
+		LastSeenAt *time.Time `json:"last_seen_at"`
+		IP         *string    `json:"ip"`
+		UserAgent  *string    `json:"user_agent"`
+		Current    bool       `json:"current"`
+	} `json:"items"`
+	NextCursor *string `json:"next_cursor"`
+}
+
+func authListSessionsOf(t *testing.T, h http.Handler, cookie *http.Cookie) authSessionsDTO {
+	t.Helper()
+	rec := authDo(t, h, http.MethodGet, "/api/auth/sessions", nil, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /auth/sessions: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var out authSessionsDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decoding the session list: %v (body %s)", err, rec.Body.String())
+	}
+	return out
+}
+
+func TestUpdateMeRenamesTheAccount(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	_, cookie := authSignedIn(t, h, sender)
+
+	rec := authDo(t, h, http.MethodPatch, "/api/auth/me", map[string]string{"display_name": "  Renamed Person  "}, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// The response carries the new name, so the caller's cached copy -- and the
+	// initials in its avatar -- refresh without a second round trip.
+	var me authMeDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil {
+		t.Fatalf("decoding the response: %v (body %s)", err, rec.Body.String())
+	}
+	if me.DisplayName != "Renamed Person" {
+		t.Errorf("display_name = %q, want the trimmed %q", me.DisplayName, "Renamed Person")
+	}
+
+	// And it stuck.
+	var stored authMeDTO
+	next := authDo(t, h, http.MethodGet, "/api/auth/me", nil, cookie)
+	if err := json.Unmarshal(next.Body.Bytes(), &stored); err != nil {
+		t.Fatalf("decoding /me: %v (body %s)", err, next.Body.String())
+	}
+	if stored.DisplayName != "Renamed Person" {
+		t.Errorf("/me display_name = %q after the rename", stored.DisplayName)
+	}
+
+	for _, c := range []struct {
+		name string
+		body map[string]string
+	}{
+		{"blank", map[string]string{"display_name": "   "}},
+		{"unknown field", map[string]string{"display_nam": "typo"}},
+	} {
+		if rec := authDo(t, h, http.MethodPatch, "/api/auth/me", c.body, cookie); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status %d, want 422 (body %s)", c.name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// A password change signs out every OTHER browser and leaves this one alone.
+// Both halves matter: signing out the rest is the whole point of changing a
+// password after a scare, and signing out the person who just typed it is a
+// bug that reads as one.
+func TestChangePasswordKeepsThisSessionAndRevokesTheRest(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	email, mine := authSignedIn(t, h, sender)
+	other := authLoginAs(t, h, email, authTestPassword)
+	third := authLoginAs(t, h, email, authTestPassword)
+
+	const newPassword = "a completely different passphrase"
+	rec := authDo(t, h, http.MethodPost, "/api/auth/password",
+		authChangePasswordBody{authTestPassword, newPassword}, mine)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	if got := authMeStatus(t, h, mine); got != http.StatusOK {
+		t.Errorf("the caller's own session answered %d after changing its password, want 200", got)
+	}
+	for name, cookie := range map[string]*http.Cookie{"second": other, "third": third} {
+		if got := authMeStatus(t, h, cookie); got != http.StatusUnauthorized {
+			t.Errorf("the %s session answered %d after the password change, want 401", name, got)
+		}
+	}
+
+	// The new password is the one that works.
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, newPassword}, nil); rec.Code != http.StatusOK {
+		t.Errorf("the new password did not sign in: status %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, authTestPassword}, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("the old password still signs in: status %d", rec.Code)
+	}
+}
+
+// A wrong current password is charged to a budget of its own, keyed by user id.
+//
+// Charging the login budget instead -- which is keyed by email -- would mean
+// ten mistyped current passwords locked the account out of signing in for
+// fifteen minutes, and would hand anybody who stole a session an easy way to do
+// it on purpose.
+func TestChangePasswordChargesItsOwnBudgetNotLogin(t *testing.T) {
+	h, sender, pool := authTestServer(t)
+	email, cookie := authSignedIn(t, h, sender)
+
+	var me authMeDTO
+	if err := json.Unmarshal(authDo(t, h, http.MethodGet, "/api/auth/me", nil, cookie).Body.Bytes(), &me); err != nil {
+		t.Fatalf("decoding /me: %v", err)
+	}
+	key := me.ID.String()
+
+	before, err := auth.Count(t.Context(), pool, auth.ScopeLogin, email, auth.LoginFailWindow)
+	if err != nil {
+		t.Fatalf("counting the login budget: %v", err)
+	}
+
+	rec := authDo(t, h, http.MethodPost, "/api/auth/password",
+		authChangePasswordBody{"not the current password", "a completely different passphrase"}, cookie)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	charged, err := auth.Count(t.Context(), pool, auth.ScopePasswordChange, key, auth.PasswordChangeFailWindow)
+	if err != nil {
+		t.Fatalf("counting the password-change budget: %v", err)
+	}
+	if charged != 1 {
+		t.Errorf("the password-change budget counted %d, want 1", charged)
+	}
+
+	after, err := auth.Count(t.Context(), pool, auth.ScopeLogin, email, auth.LoginFailWindow)
+	if err != nil {
+		t.Fatalf("counting the login budget: %v", err)
+	}
+	if after != before {
+		t.Errorf("the login budget went from %d to %d; a wrong current password must not spend it", before, after)
+	}
+
+	// And the account is not locked out of signing in.
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, authTestPassword}, nil); rec.Code != http.StatusOK {
+		t.Errorf("login after a failed password change: status %d (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// The password itself is untouched.
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password",
+		authChangePasswordBody{authTestPassword, "a completely different passphrase"}, cookie); rec.Code != http.StatusNoContent {
+		t.Errorf("the real current password was refused afterwards: status %d (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSessionsListMarksTheCurrentSession(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	email, mine := authSignedIn(t, h, sender)
+	other := authLoginAs(t, h, email, authTestPassword)
+
+	list := authListSessionsOf(t, h, mine)
+	if len(list.Items) != 2 {
+		t.Fatalf("%d sessions listed, want 2", len(list.Items))
+	}
+	if list.NextCursor != nil {
+		t.Errorf("next_cursor = %v, want null -- the list is one page", *list.NextCursor)
+	}
+
+	current := 0
+	for _, item := range list.Items {
+		if item.Current {
+			current++
+		}
+		if item.CreatedAt.IsZero() {
+			t.Error("a session row carries no created_at")
+		}
+	}
+	if current != 1 {
+		t.Errorf("%d sessions are marked current, want exactly 1", current)
+	}
+
+	// Revoking the other one takes it off the list and kills its cookie.
+	var otherID uuid.UUID
+	for _, item := range list.Items {
+		if !item.Current {
+			otherID = item.ID
+		}
+	}
+	rec := authDo(t, h, http.MethodDelete, "/api/auth/sessions/"+otherID.String(), nil, mine)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("revoking a session: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if got := authMeStatus(t, h, other); got != http.StatusUnauthorized {
+		t.Errorf("the revoked session answered %d, want 401", got)
+	}
+	if got := authMeStatus(t, h, mine); got != http.StatusOK {
+		t.Errorf("the caller's own session answered %d, want 200", got)
+	}
+	if n := len(authListSessionsOf(t, h, mine).Items); n != 1 {
+		t.Errorf("%d sessions listed after revoking one, want 1", n)
+	}
+}
+
+// The owner predicate on the revoke is the authorization. Without it, anybody
+// holding a session id could sign anybody else out.
+func TestRevokingSomebodyElsesSessionIsNotFound(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	_, mine := authSignedIn(t, h, sender)
+	_, theirs := authSignedIn(t, h, sender)
+
+	var victim uuid.UUID
+	for _, item := range authListSessionsOf(t, h, theirs).Items {
+		if item.Current {
+			victim = item.ID
+		}
+	}
+	if victim == uuid.Nil {
+		t.Fatal("the other account's session was not listed")
+	}
+
+	rec := authDo(t, h, http.MethodDelete, "/api/auth/sessions/"+victim.String(), nil, mine)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := authMeStatus(t, h, theirs); got != http.StatusOK {
+		t.Errorf("the other account's session answered %d; it was revoked by a stranger", got)
+	}
+
+	// A malformed id is the same 404: an id that is not a uuid and an id that
+	// is not yours must not be distinguishable.
+	if rec := authDo(t, h, http.MethodDelete, "/api/auth/sessions/not-a-uuid", nil, mine); rec.Code != http.StatusNotFound {
+		t.Errorf("a malformed id answered %d, want 404", rec.Code)
+	}
+}
+
+func TestLogoutAllRevokesEverySessionIncludingThisOne(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	email, mine := authSignedIn(t, h, sender)
+	other := authLoginAs(t, h, email, authTestPassword)
+
+	rec := authDo(t, h, http.MethodPost, "/api/auth/logout-all", nil, mine)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+	for name, cookie := range map[string]*http.Cookie{"this": mine, "other": other} {
+		if got := authMeStatus(t, h, cookie); got != http.StatusUnauthorized {
+			t.Errorf("the %s session answered %d after logout-all, want 401", name, got)
+		}
+	}
+
+	// And the cookie is cleared, so the browser stops sending a dead credential.
+	cleared := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == SessionCookie && c.Value == "" && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("logout-all did not clear the session cookie")
+	}
+}
+
+// -------------------------------------------------- reset and resend --------
+
+// A reset for an address nobody owns must cost nothing.
+//
+// Everything conditional runs off the request goroutine, so the response says
+// the same thing either way -- and the service-wide daily budget, which is the
+// scarce thing a stranger could spend, is only charged once there is somebody
+// to send to. A sweep through addresses that do not exist must not be able to
+// silence the real users' mail.
+func TestPasswordResetForAnUnknownAddressCostsNothing(t *testing.T) {
+	h, sender, pool := authTestServerWithConfig(t,
+		&config.Config{BaseURL: authTestBaseURL, EmailDailyCap: 10})
+	known := authVerifiedUser(t, h, sender)
+	unknown := authTestEmail(t)
+
+	// One row for the whole service, so the test owns the scope and clears it
+	// after the signup mail above rather than keying it.
+	if _, err := pool.Exec(t.Context(), `DELETE FROM throttle WHERE scope = $1`, auth.ScopeEmailSendGlobal); err != nil {
+		t.Fatalf("clearing the global mail budget: %v", err)
+	}
+
+	miss := authDo(t, h, http.MethodPost, "/api/auth/password-reset", map[string]string{"email": unknown}, nil)
+	hit := authDo(t, h, http.MethodPost, "/api/auth/password-reset", map[string]string{"email": known}, nil)
+
+	if miss.Code != http.StatusOK || hit.Code != http.StatusOK {
+		t.Fatalf("statuses %d (unknown) and %d (known), want 200 for both", miss.Code, hit.Code)
+	}
+	if miss.Body.String() != hit.Body.String() {
+		t.Errorf("the bodies differ:\nunknown: %s\n  known: %s", miss.Body.String(), hit.Body.String())
+	}
+
+	// Wait on the send that must happen, then give the one that must not a
+	// moment to prove it did not.
+	sender.waitForTo(t, known, resetSubject)
+	authSettle()
+
+	spent, err := auth.Count(t.Context(), pool, auth.ScopeEmailSendGlobal, auth.GlobalKey, auth.EmailSendGlobalWindow)
+	if err != nil {
+		t.Fatalf("reading the global mail budget: %v", err)
+	}
+	if spent != 1 {
+		t.Errorf("the service-wide budget counted %d for one real address and one unknown one, want 1", spent)
+	}
+
+	stray, err := auth.Count(t.Context(), pool, auth.ScopeEmailSendReset, unknown, auth.EmailSendWindow)
+	if err != nil {
+		t.Fatalf("reading the unknown address's budget: %v", err)
+	}
+	if stray != 0 {
+		t.Errorf("the unknown address's own budget counted %d, want 0", stray)
+	}
+	if n := len(sender.matching(unknown, resetSubject)); n != 0 {
+		t.Errorf("%d reset mails went to an address with no account", n)
+	}
+}
+
+// Reset and resend-verification are charged to separate per-recipient budgets.
+//
+// Sharing one would make each a way to suppress the other: five reset requests
+// against a stranger's address would swallow the verification mail they are
+// sitting there waiting for.
+func TestResetAndVerifyBudgetsDoNotShareAScope(t *testing.T) {
+	h, sender, pool := authTestServer(t)
+
+	// An account that has signed up but never confirmed -- the one that still
+	// needs its verification link.
+	email := authTestEmail(t)
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/signup",
+		authSignupBody{email, authTestPassword, "Test User"}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("signup: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	sender.waitForTo(t, email, verifySubject)
+
+	// Spend the whole reset budget through the real endpoint. Five an hour is
+	// also exactly what the per-IP mail bucket allows, which is why the resend
+	// below goes through a second server: same database, its own bucket.
+	for i := range auth.EmailSendLimit {
+		rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset", map[string]string{"email": email}, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("reset %d: status %d, body %s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	sender.waitForCountTo(t, email, resetSubject, auth.EmailSendLimit)
+
+	spent, err := auth.Count(t.Context(), pool, auth.ScopeEmailSendReset, email, auth.EmailSendWindow)
+	if err != nil {
+		t.Fatalf("reading the reset budget: %v", err)
+	}
+	if spent != auth.EmailSendLimit {
+		t.Fatalf("the reset budget counted %d, want the limit %d", spent, auth.EmailSendLimit)
+	}
+	stray, err := auth.Count(t.Context(), pool, auth.ScopeEmailSendVerify, email, auth.EmailSendWindow)
+	if err != nil {
+		t.Fatalf("reading the verify budget: %v", err)
+	}
+	if stray != 0 {
+		t.Errorf("five resets spent %d of the verification budget, want 0", stray)
+	}
+
+	// The verification link still goes out, and still works.
+	h2, sender2, _ := authTestServer(t)
+	if rec := authDo(t, h2, http.MethodPost, "/api/auth/resend-verification",
+		map[string]string{"email": email}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("resend-verification: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	m := sender2.waitForTo(t, email, verifySubject)
+
+	token := authTokenFromMail(t, m.Body)
+	if rec := authDo(t, h2, http.MethodPost, "/api/auth/verify-email",
+		map[string]string{"token": token}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("the resent link did not verify: status %d, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A reset link is good for an hour, not for the two days a verification link
+// gets. A verification link only proves an address; a reset link is the
+// account.
+func TestResetTokenDiesAfterAnHour(t *testing.T) {
+	h, sender, pool := authTestServer(t)
+	email := authVerifiedUser(t, h, sender)
+
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset",
+		map[string]string{"email": email}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("password-reset: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	token := authResetTokenFromMail(t, sender.waitForTo(t, email, resetSubject).Body)
+
+	// Move the row ninety minutes into the past, whole. created_at and
+	// expires_at shift together, so what this tests is the interval the server
+	// chose and not a value the test wrote.
+	const backdate = `
+		UPDATE email_tokens
+		   SET created_at = created_at - interval '90 minutes',
+		       expires_at = expires_at - interval '90 minutes'
+		 WHERE token_hash = $1`
+	if _, err := pool.Exec(t.Context(), backdate, auth.HashToken(token)); err != nil {
+		t.Fatalf("backdating the token: %v", err)
+	}
+
+	const newPassword = "a completely different passphrase"
+	rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+		authResetConfirmBody{token, newPassword}, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a 90-minute-old reset link answered %d, want 422 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := decodeErr(t, rec.Body.String()).Code; got != CodeInvalid {
+		t.Errorf("code %q, want %q", got, CodeInvalid)
+	}
+
+	// And nothing changed: the old password still works, the new one does not.
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, authTestPassword}, nil); rec.Code != http.StatusOK {
+		t.Errorf("the original password stopped working: status %d", rec.Code)
+	}
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, newPassword}, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("an expired link changed the password anyway: login with it answered %d", rec.Code)
+	}
+}
+
+// Confirming a reset ends every session and spends every other live link.
+//
+// Both are the same reasoning: a reset is what somebody does when they think
+// another person is in their account, so nothing that existed before it may
+// still work afterwards -- not a session, and not a second link an attacker
+// asked for while the real user was reading their mail.
+func TestResetConfirmRevokesEverySessionAndSpendsTheOtherLinks(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	email, mine := authSignedIn(t, h, sender)
+	other := authLoginAs(t, h, email, authTestPassword)
+
+	for i := range 2 {
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset",
+			map[string]string{"email": email}, nil); rec.Code != http.StatusOK {
+			t.Fatalf("password-reset %d: status %d, body %s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	mails := sender.waitForCountTo(t, email, resetSubject, 2)
+	first := authResetTokenFromMail(t, mails[0].Body)
+	second := authResetTokenFromMail(t, mails[1].Body)
+
+	const newPassword = "a completely different passphrase"
+	rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+		authResetConfirmBody{second, newPassword}, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	for name, cookie := range map[string]*http.Cookie{"first": mine, "second": other} {
+		if got := authMeStatus(t, h, cookie); got != http.StatusUnauthorized {
+			t.Errorf("the %s session answered %d after a reset, want 401", name, got)
+		}
+	}
+
+	// The sibling link is spent, so an older mail cannot be replayed against
+	// the password that was just set.
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+		authResetConfirmBody{first, "yet another passphrase entirely"}, nil); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("the other live reset link still worked: status %d (body %s)", rec.Code, rec.Body.String())
+	}
+	// Nor can the one that was used.
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+		authResetConfirmBody{second, "yet another passphrase entirely"}, nil); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("the redeemed link worked twice: status %d", rec.Code)
+	}
+
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, newPassword}, nil); rec.Code != http.StatusOK {
+		t.Errorf("the new password did not sign in: status %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, authTestPassword}, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("the old password still signs in: status %d", rec.Code)
+	}
+}
+
+// A reset also confirms the address: whoever read that mailbox has just proven
+// exactly what the verification link proves, and an unverified account that
+// reset its password could otherwise never sign in at all.
+func TestResetConfirmVerifiesTheAddress(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+	email := authTestEmail(t)
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/signup",
+		authSignupBody{email, authTestPassword, "Test User"}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("signup: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	sender.waitForTo(t, email, verifySubject)
+
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset",
+		map[string]string{"email": email}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("password-reset: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	token := authResetTokenFromMail(t, sender.waitForTo(t, email, resetSubject).Body)
+
+	const newPassword = "a completely different passphrase"
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/password-reset/confirm",
+		authResetConfirmBody{token, newPassword}, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("confirm: status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	login := authDo(t, h, http.MethodPost, "/api/auth/login", authLoginBody{email, newPassword}, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("an account that reset its password cannot sign in: status %d (body %s)", login.Code, login.Body.String())
+	}
+	var me authMeDTO
+	if err := json.Unmarshal(login.Body.Bytes(), &me); err != nil {
+		t.Fatalf("decoding the login response: %v", err)
+	}
+	if me.EmailVerifiedAt == nil {
+		t.Error("email_verified_at is still null after a reset")
+	}
+}
+
+// Resend-verification has nothing to send to somebody who already confirmed.
+// Sending anyway would be a way to mail a stranger on demand, forever.
+func TestResendVerificationIsSilentForAVerifiedAddress(t *testing.T) {
+	h, sender, pool := authTestServer(t)
+	verified := authVerifiedUser(t, h, sender)
+
+	// A pending account too. Its mail is the signal that the send path really
+	// ran, so the assertion below is not just a race against a sleep.
+	pending := authTestEmail(t)
+	if rec := authDo(t, h, http.MethodPost, "/api/auth/signup",
+		authSignupBody{pending, authTestPassword, "Test User"}, nil); rec.Code != http.StatusOK {
+		t.Fatalf("signup: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	sender.waitForTo(t, pending, verifySubject)
+
+	for _, email := range []string{verified, pending} {
+		if rec := authDo(t, h, http.MethodPost, "/api/auth/resend-verification",
+			map[string]string{"email": email}, nil); rec.Code != http.StatusOK {
+			t.Fatalf("resend for %s: status %d, body %s", email, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Two mails to the pending address (signup's and the resend) is the proof
+	// the resend path works at all.
+	sender.waitForCountTo(t, pending, verifySubject, 2)
+	authSettle()
+
+	if n := len(sender.matching(verified, verifySubject)); n != 1 {
+		t.Errorf("%d verification mails to an address that is already verified, want only the one from signup", n)
+	}
+	spent, err := auth.Count(t.Context(), pool, auth.ScopeEmailSendVerify, verified, auth.EmailSendWindow)
+	if err != nil {
+		t.Fatalf("reading the verify budget: %v", err)
+	}
+	if spent != 0 {
+		t.Errorf("a verified address's resend budget counted %d, want 0", spent)
+	}
+}
+
+func TestResetAndResendRejectMalformedAddresses(t *testing.T) {
+	h, sender, _ := authTestServer(t)
+
+	for _, path := range []string{"/api/auth/password-reset", "/api/auth/resend-verification"} {
+		for _, bad := range []string{"", "nope", "Someone <a@b.test>", "a@b.test\r\nBcc: evil@x.test"} {
+			rec := authDo(t, h, http.MethodPost, path, map[string]string{"email": bad}, nil)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Errorf("%s with %q: status %d, want 422 (body %s)", path, bad, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	authSettle()
+	if n := len(sender.all()); n != 0 {
+		t.Errorf("%d mails sent for rejected requests, want 0", n)
 	}
 }
