@@ -20,8 +20,8 @@ export function LoginPage() {
   const setSession = useSetSession()
 
   // Login answers with the whole `me` shape, so the session cache is filled
-  // from the response rather than by a second /auth/me round trip — which the
-  // per-IP auth bucket would also count.
+  // from the response rather than by a second /auth/me round trip asking the
+  // server to repeat what it has just said.
   const mutation = useMutation({
     mutationFn: () => login(email, password),
     onSuccess: (user) => {

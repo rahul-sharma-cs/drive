@@ -15,7 +15,10 @@ import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../
  */
 export function ResetPage() {
   const [params] = useSearchParams()
-  const token = params.get('token') ?? ''
+  // Trimmed: a link copied out of a mail client arrives with whitespace around
+  // it often enough, and the server would spend the token's one redemption on
+  // rejecting it.
+  const token = (params.get('token') ?? '').trim()
 
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -74,7 +77,10 @@ export function ResetPage() {
             autoComplete="new-password"
             required
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => {
+              setPassword(e.target.value)
+              setMismatch(false)
+            }}
           />
         </label>
         <label className={fieldClass}>

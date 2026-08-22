@@ -1,11 +1,16 @@
 /**
  * Who is signed in.
  *
- * `GET /auth/me` sits inside the server's per-IP `/api/auth/*` bucket (10/min),
- * so this query is fetched once and kept: `staleTime: Infinity` plus no
- * refetch-on-focus. Login and logout write the cache directly instead of
- * triggering a refetch, which is what keeps a tab-switching user — or several
- * users behind one NAT — off the limiter.
+ * Fetched once and kept: `staleTime: Infinity` plus no refetch-on-focus. Who
+ * you are changes only when this tab changes it — signing in, signing out,
+ * renaming the account — and every one of those writes the cache from the
+ * answer it already has, so a refetch on every window focus would spend a
+ * request per tab switch to be told the same thing.
+ *
+ * `GET /auth/me` is behind RequireAuth, and the server's per-IP `/api/auth/*`
+ * bucket is in front of the unauthenticated half of that surface — plus
+ * `POST /auth/password`, the one authenticated route that keeps it. So this
+ * query is not up against that limiter; it is simply not worth re-asking.
  */
 
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'

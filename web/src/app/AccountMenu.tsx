@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { LogOut, Settings } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 
@@ -30,11 +30,17 @@ export function AccountMenu() {
   const user = useSession()
   const navigate = useNavigate()
   const setSession = useSetSession()
+  const client = useQueryClient()
 
   const signOut = useMutation({
     mutationFn: logout,
+    // The whole cache goes, not just the session: every list in it — folders,
+    // trash, usage — was fetched with a cookie that no longer exists, and the
+    // next account to sign in on this browser must not be shown the last one's
+    // files while its own answers are still in flight.
     onSuccess: () => {
       setSession(null)
+      client.clear()
       void navigate('/login', { replace: true })
     },
   })

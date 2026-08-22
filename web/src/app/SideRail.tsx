@@ -23,9 +23,10 @@ export function SideRail() {
 
   return (
     <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-4">
-      {/* Nothing is created in the trash and nothing is uploaded into it, so the
-          command that would have to land somewhere else is not offered there. */}
-      {pathname !== '/trash' && <NewMenu />}
+      {/* Nothing is created in the trash or in the account settings, and
+          nothing is uploaded into either, so the command that would have to
+          land somewhere else entirely is not offered on them. */}
+      {pathname !== '/trash' && pathname !== '/account' && <NewMenu />}
 
       <nav aria-label="Places" className="flex flex-col gap-0.5">
         <RailLink to="/" end icon={<HardDrive />} label="My Drive" />

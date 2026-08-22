@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 
 import { changePassword } from '../../lib/api'
 import { FormError } from '../../ui/controls'
+import { sessionsKey } from './SessionsSection'
 
 /**
  * Change the password.
@@ -17,6 +18,7 @@ import { FormError } from '../../ui/controls'
  * a request that could never have succeeded.
  */
 export function PasswordSection() {
+  const client = useQueryClient()
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -28,6 +30,11 @@ export function PasswordSection() {
       setCurrent('')
       setNext('')
       setConfirm('')
+      // The server revoked every other session inside the same transaction, so
+      // the list below this form is now describing devices that no longer have
+      // a session — with a live Revoke button on each. It has to be re-read, not
+      // patched: which rows went is the server's answer, not this form's.
+      void client.invalidateQueries({ queryKey: sessionsKey })
       toast.success('Password changed')
     },
   })
@@ -74,7 +81,10 @@ export function PasswordSection() {
             autoComplete="new-password"
             required
             value={next}
-            onChange={(e) => setNext(e.target.value)}
+            onChange={(e) => {
+              setNext(e.target.value)
+              setMismatch(false)
+            }}
           />
         </label>
 

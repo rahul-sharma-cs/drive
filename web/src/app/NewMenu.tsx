@@ -25,14 +25,19 @@ import { useCurrentFolder } from './CurrentFolder'
  * All three land in `useCurrentFolder()` — the menu reads the destination, it
  * does not decide it — and the two uploads hand it to the picker at the click,
  * because that is the last moment it is still certainly the folder the person
- * is looking at. What changes off a folder screen is only the wording: on search
- * results there is no "here", so the items name where the files will actually
- * go.
+ * is looking at. What changes off a folder screen is only the wording: where
+ * there is no "here", the items name where the files will actually go.
+ *
+ * Which screens have a "here" is an allowlist rather than a list of exceptions.
+ * A screen that is not a folder is the norm, not the oddity, and a denylist
+ * answers "here" for every screen nobody has thought about yet — which is the
+ * one answer that can be a lie.
  */
 export function NewMenu() {
   const folderId = useCurrentFolder()
   const [creating, setCreating] = useState(false)
-  const here = useLocation().pathname !== '/search'
+  const { pathname } = useLocation()
+  const here = pathname === '/' || pathname.startsWith('/folders/')
 
   return (
     <>

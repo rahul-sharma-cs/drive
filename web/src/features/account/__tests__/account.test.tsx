@@ -4,6 +4,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Route, Routes } from 'react-router'
+import { Toaster } from 'sonner'
 
 import { Sheet } from '@/components/ui/sheet'
 
@@ -54,6 +55,11 @@ const sessions: AuthSession[] = [
  * rendered outside its root throws rather than degrading — so composing the bar
  * on its own means supplying the root it expects. No panel: nothing here opens
  * the drawer, and the rail has a test file of its own.
+ *
+ * The `<Toaster>` is the one from `main.tsx`: half of what this screen says
+ * back is a toast, and without a toaster mounted `toast.success(...)` is a call
+ * into a store that renders nowhere — which a test asserting the call, rather
+ * than the sentence, would never notice.
  */
 function renderAccount(routes: StubRoute[] = []) {
   const calls = stubFetch([
@@ -68,6 +74,7 @@ function renderAccount(routes: StubRoute[] = []) {
           <Sheet>
             <TopBar />
             <AccountPage />
+            <Toaster />
           </Sheet>
         }
       />
@@ -164,6 +171,44 @@ describe('the password section', () => {
     // The server writes this copy; restating it here would only make it vaguer.
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'that password is not right')
   })
+
+  it('empties the form and re-reads the sessions the change has just ended', async () => {
+    const { calls } = renderAccount([{ method: 'POST', path: '/api/auth/password', status: 204 }])
+
+    await screen.findByText('Edge on Windows')
+    expect(calls.filter((c) => c.url === '/api/auth/sessions')).toHaveLength(1)
+
+    await userEvent.type(screen.getByLabelText('Current password'), 'old-passphrase')
+    await userEvent.type(screen.getByLabelText('New password'), 'new-passphrase')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'new-passphrase')
+    await userEvent.click(screen.getByRole('button', { name: 'Change password' }))
+
+    expect(await screen.findByText('Password changed')).toBeTruthy()
+    for (const field of ['Current password', 'New password', 'Confirm new password']) {
+      expect((screen.getByLabelText(field) as HTMLInputElement).value).toBe('')
+    }
+    // The server revoked every other session inside the same transaction, so a
+    // list still showing them — each with a live Revoke on it — contradicts the
+    // sentence printed above this form.
+    await waitFor(() => expect(calls.filter((c) => c.url === '/api/auth/sessions')).toHaveLength(2))
+  })
+
+  it('clears the mismatch from whichever of the two fields is corrected', async () => {
+    renderAccount()
+
+    await userEvent.type(screen.getByLabelText('Current password'), 'old-passphrase')
+    await userEvent.type(screen.getByLabelText('New password'), 'new-passphrase-a')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'new-passphrase-b')
+    await userEvent.click(screen.getByRole('button', { name: 'Change password' }))
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Those two passwords don’t match.')
+
+    // Retyping the top field is as much a correction as retyping the bottom
+    // one, and an alert that outlives the disagreement it describes is telling
+    // the person their form is wrong while they look at a form that is right.
+    await userEvent.clear(screen.getByLabelText('New password'))
+    await userEvent.type(screen.getByLabelText('New password'), 'new-passphrase-b')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })
 
 describe('the sessions section', () => {
@@ -189,10 +234,33 @@ describe('the sessions section', () => {
     expect(del?.headers['X-Drive-Client']).toBe('web')
   })
 
+  it('drops a row the server no longer has a session for', async () => {
+    renderAccount([
+      {
+        method: 'DELETE',
+        path: '/api/auth/sessions/sess-elsewhere',
+        status: 404,
+        body: { code: 'not_found', message: 'no such session' },
+      },
+    ])
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Revoke Edge on Windows' }))
+
+    // That session ended between the list being fetched and the click — it
+    // expired, or the browser holding it signed out. Either way the row
+    // describes something that is already gone, and leaving it on screen with a
+    // live Revoke is the one outcome that is wrong whichever way it is read.
+    await waitFor(() => expect(screen.queryByText('Edge on Windows')).toBeNull())
+    expect(screen.getByText('Chrome on macOS')).toBeTruthy()
+  })
+
   it('signs out everywhere behind a confirmation, and leaves for the sign-in screen', async () => {
     const { calls, client } = renderAccount([
       { method: 'POST', path: '/api/auth/logout-all', status: 204 },
     ])
+
+    // Something the last account fetched, still in the cache when it leaves.
+    client.setQueryData(['children', 'root-1'], { items: [], next_cursor: null })
 
     await userEvent.click(await screen.findByRole('button', { name: 'Sign out everywhere' }))
     const dialog = await screen.findByRole('dialog')
@@ -203,7 +271,11 @@ describe('the sessions section', () => {
 
     await waitFor(() => expect(calls.find((c) => c.url === '/api/auth/logout-all')?.method).toBe('POST'))
     expect(await screen.findByText('login')).toBeTruthy()
-    // This browser's cookie is gone too, so the cached account has to go with it.
-    expect(client.getQueryData(meKey)).toBeNull()
+    // This browser's cookie is gone too, so the cached account has to go with
+    // it — and so does everything that was fetched with it. Whoever signs in
+    // next on this browser must not be handed the last account's folders while
+    // their own answers are still in flight.
+    expect(client.getQueryData(meKey)).toBeUndefined()
+    expect(client.getQueryData(['children', 'root-1'])).toBeUndefined()
   })
 })

@@ -69,6 +69,11 @@ function renderShell(routes: StubRoute[] = [], { route = '/', page }: { route?: 
         <Route path="/folders/:id" element={page ?? <p>a folder</p>} />
         <Route path="/trash" element={<p>trash</p>} />
         <Route path="/search" element={<p>search</p>} />
+        <Route path="/account" element={<p>account</p>} />
+        {/* A stand-in for any screen behind the layout that is neither a
+            folder nor one of the named exceptions. What the New menu says on
+            a screen nobody has written a rule for is the whole question. */}
+        <Route path="/elsewhere" element={<p>elsewhere</p>} />
       </Route>
       <Route path="/login" element={<p>login</p>} />
     </Routes>,
@@ -184,6 +189,27 @@ describe('the New menu and the upload seam', () => {
     await userEvent.click(screen.getByRole('link', { name: 'Trash' }))
     await screen.findByText('trash')
     await waitFor(() => expect(screen.queryByRole('button', { name: 'New' })).toBeNull())
+  })
+
+  it('offers no New on the account screen, where there is nothing to put anything into', async () => {
+    renderShell([], { route: '/account' })
+    await screen.findByText('account')
+
+    // Every item behind it lands in a folder, and this screen is not in one:
+    // "Upload files" would mean My Drive without saying so, and New folder
+    // would create one the person cannot see from where they are standing.
+    expect(screen.queryByRole('button', { name: 'New' })).toBeNull()
+  })
+
+  it('names the destination on any screen that is not a folder, not just on search', async () => {
+    renderShell([], { route: '/elsewhere' })
+
+    await userEvent.click(screen.getByRole('button', { name: 'New' }))
+    // "Here" is an allowlist of the screens that have one. A list of exceptions
+    // instead would answer "here" for every screen added after it was written —
+    // and be wrong about all of them in the same direction.
+    expect(await screen.findByRole('menuitem', { name: 'Upload files to My Drive' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: 'Upload files' })).toBeNull()
   })
 
   it('names My Drive as the destination on the search screen, and uploads there', async () => {
@@ -364,7 +390,9 @@ describe('the rail and the account menu', () => {
   })
 
   it('signs out from the account menu, which is where it lives now', async () => {
-    const { calls } = renderShell([{ method: 'POST', path: '/api/auth/logout', body: { status: 'ok' } }])
+    const { calls, client } = renderShell([{ method: 'POST', path: '/api/auth/logout', body: { status: 'ok' } }])
+    // Something this account fetched, still in the cache when it leaves.
+    client.setQueryData(['children', 'root-1'], { items: [], next_cursor: null })
 
     // Not a button sitting in the rail beside the destinations any more.
     expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull()
@@ -382,5 +410,10 @@ describe('the rail and the account menu', () => {
       expect(post?.method).toBe('POST')
     })
     expect(await screen.findByText('login')).toBeTruthy()
+    // The cookie those answers were fetched with is gone, so they go too:
+    // whoever signs in next on this browser gets their own Drive, not a frame
+    // of the last one's.
+    expect(client.getQueryData(meKey)).toBeUndefined()
+    expect(client.getQueryData(['children', 'root-1'])).toBeUndefined()
   })
 })

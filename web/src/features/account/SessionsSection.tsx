@@ -13,12 +13,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 
-import { listSessions, logoutAll, revokeSession, type AuthSession, type Page } from '../../lib/api'
+import { ApiError, listSessions, logoutAll, revokeSession, type AuthSession, type Page } from '../../lib/api'
 import { SkeletonRows } from '../../ui/controls'
 import { formatWhen } from '../../ui/when'
 import { useSetSession } from '../auth/session'
 
-const sessionsKey = ['auth', 'sessions'] as const
+/** Exported: the password form has to re-read this list after a change. */
+export const sessionsKey = ['auth', 'sessions'] as const
 
 /**
  * Every browser currently holding a session, and the two ways to end one.
@@ -35,18 +36,33 @@ export function SessionsSection() {
 
   const sessions = useQuery({ queryKey: sessionsKey, queryFn: listSessions })
 
+  // The list is dropped to, not refetched from, the server: the row is gone
+  // because the DELETE said so, and a second GET would only re-render the same
+  // answer a beat later.
+  const dropRow = (id: string) =>
+    client.setQueryData(sessionsKey, (was: Page<AuthSession> | undefined) =>
+      was ? { ...was, items: was.items.filter((s) => s.id !== id) } : was,
+    )
+
   const revoke = useMutation({
     mutationFn: revokeSession,
-    // The list is dropped to, not refetched from, the server: the row is gone
-    // because the DELETE said so, and a second GET would only re-render the
-    // same answer a beat later.
     onSuccess: (_result, id) => {
-      client.setQueryData(sessionsKey, (was: Page<AuthSession> | undefined) =>
-        was ? { ...was, items: was.items.filter((s) => s.id !== id) } : was,
-      )
+      dropRow(id)
       toast.success('Signed that device out')
     },
-    onError: (err: unknown) => toast.error((err as Error)?.message ?? 'Could not sign that device out'),
+    onError: (err: unknown, id) => {
+      // A 404 is the session having ended between this list being fetched and
+      // the click — it expired, or the browser holding it signed out. The row
+      // describes something that is already gone, so it goes as well: leaving
+      // it there with a live Revoke on it is the one outcome that is wrong
+      // whichever way the person reads it.
+      if (err instanceof ApiError && err.code === 'not_found') {
+        dropRow(id)
+        toast.success('That device was already signed out')
+        return
+      }
+      toast.error((err as Error)?.message ?? 'Could not sign that device out')
+    },
   })
 
   const everywhere = useMutation({
@@ -61,10 +77,17 @@ export function SessionsSection() {
      * that into two commits (a modal's focus restore flushes synchronously) and
      * the screen rendered — and threw — in between; the navigation unmounts the
      * dialog anyway.
+     *
+     * Clearing the rest of the cache is the same argument one step out: the
+     * folder listings, the trash, the usage meter and this very list all belong
+     * to an account that is no longer signed in here, and the next person to
+     * sign in on this browser would be shown them before the first refetch
+     * landed.
      */
     onSuccess: () => {
       void navigate('/login', { replace: true })
       setSession(null)
+      client.clear()
     },
   })
 
@@ -114,7 +137,7 @@ export function SessionsSection() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    disabled={revoke.isPending}
+                    disabled={revoke.isPending && revoke.variables === s.id}
                     onClick={() => revoke.mutate(s.id)}
                     aria-label={`Revoke ${shortAgent(s.user_agent)}`}
                   >

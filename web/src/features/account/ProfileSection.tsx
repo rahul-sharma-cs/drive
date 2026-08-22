@@ -54,7 +54,11 @@ export function ProfileSection() {
             name="display_name"
             autoComplete="name"
             required
-            maxLength={120}
+            // The server's own cap. It counts runes and this counts UTF-16
+            // units, so a name full of astral characters stops a little early —
+            // the direction that refuses a name the server would have taken,
+            // never the one that invites a name it would refuse.
+            maxLength={100}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />

@@ -74,7 +74,7 @@ describe('/login', () => {
 
     await waitFor(() => expect(client.getQueryData(meKey)).toEqual(user))
     // One request: login answers with the whole `me` shape, so a second
-    // /auth/me would only spend the per-IP auth budget.
+    // /auth/me would only ask for what this one already returned.
     expect(calls).toHaveLength(1)
     expect(calls[0].body).toEqual({ email: 'someone@example.test', password: 'hunter2hunter2' })
   })
@@ -260,7 +260,10 @@ describe('/forgot', () => {
 describe('/reset', () => {
   it('redeems the token from the query string with the new password', async () => {
     const calls = stubFetch([{ method: 'POST', path: '/api/auth/password-reset/confirm', status: 204 }])
-    renderApp(<ResetPage />, { route: '/reset?token=reset-tok-1' })
+    // Padded on purpose: a link copied out of a mail client picks up whitespace
+    // often enough, and the server would spend this token's one redemption on
+    // rejecting it.
+    renderApp(<ResetPage />, { route: '/reset?token=%20reset-tok-1%20' })
 
     await userEvent.type(screen.getByLabelText('New password'), 'a-new-passphrase')
     await userEvent.type(screen.getByLabelText('Confirm new password'), 'a-new-passphrase')
@@ -295,6 +298,25 @@ describe('/reset', () => {
     // A dead end otherwise: that link will never work again, so the way out has
     // to be on the screen that reports it.
     expect((await screen.findByRole('link', { name: 'Send another reset link' })).getAttribute('href')).toBe('/forgot')
+  })
+
+  it('clears the mismatch from whichever of the two fields is corrected', async () => {
+    const calls = stubFetch([])
+    renderApp(<ResetPage />, { route: '/reset?token=reset-tok-1' })
+
+    await userEvent.type(screen.getByLabelText('New password'), 'a-new-passphrase')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'a-different-passphrase')
+    await userEvent.click(screen.getByRole('button', { name: 'Set password' }))
+
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Those two passwords don’t match.')
+    expect(calls).toHaveLength(0)
+
+    // Retyping the top field is as much a correction as retyping the bottom
+    // one, and an alert that outlives the disagreement it describes is telling
+    // the person their form is wrong while they look at a form that is right.
+    await userEvent.clear(screen.getByLabelText('New password'))
+    await userEvent.type(screen.getByLabelText('New password'), 'a-different-passphrase')
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('never posts an empty token', async () => {
