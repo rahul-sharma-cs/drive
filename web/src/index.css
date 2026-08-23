@@ -118,6 +118,17 @@
     -webkit-text-size-adjust: 100%;
   }
 
+  /* The generated primitives write a bare `border`, on the assumption that a
+     base rule has pointed the default border colour at the palette — that rule
+     is part of the setup they are copied out of. Tailwind's preflight leaves
+     `border-color` at `currentColor`, so without this every dialog, menu,
+     popover and outline button draws its hairline in its own *text* colour,
+     which is ink. Anything that names a colour still wins: utilities sit in a
+     later layer than this. */
+  * {
+    border-color: var(--color-line);
+  }
+
   body {
     margin: 0;
     background: var(--color-canvas);
