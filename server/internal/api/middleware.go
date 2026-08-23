@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -109,12 +110,41 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 
 		l.Debug("request",
 			"method", r.Method,
-			"path", r.URL.Path,
+			"path", redactSharePath(r.URL.Path),
 			"status", ww.Status(),
 			"bytes", ww.BytesWritten(),
 			"duration_ms", time.Since(start).Milliseconds(),
 		)
 	})
+}
+
+// redactSharePath replaces the token segment of a share URL -- /api/s/{token}
+// and the page's /s/{token} -- with a placeholder, and leaves every other path
+// alone. The segments after the token stay, so the line still says which route
+// it was.
+//
+// A passwordless share token is the entire credential, and the request logger
+// writes every path at Debug. Leading slashes are trimmed before the prefix is
+// checked for the reason spaHandler gives: chi does not clean the path, so
+// //s/{token} arrives with both slashes and serves the share page all the same.
+func redactSharePath(path string) string {
+	name := strings.TrimLeft(path, "/")
+	var prefix string
+	switch {
+	case strings.HasPrefix(name, "api/s/"):
+		prefix = "api/s/"
+	case strings.HasPrefix(name, "s/"):
+		prefix = "s/"
+	default:
+		return path
+	}
+	rest := name[len(prefix):]
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		rest = rest[i:]
+	} else {
+		rest = ""
+	}
+	return "/" + prefix + "{redacted}" + rest
 }
 
 // recoverer turns a panic into a logged 500 carrying the JSON error envelope.

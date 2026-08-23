@@ -409,3 +409,40 @@ func TestGoogleIssuerDefaultsWithoutAnEnvFile(t *testing.T) {
 		t.Errorf("issuer = %q, want the environment's value", cfg.GoogleIssuer)
 	}
 }
+
+// ------------------------------------------------------------ share bucket --
+
+// The share bucket's allowance reads like the two beside it: unset is 0, which
+// the api package turns into its own default; a number is the number; and
+// anything else refuses to boot naming the variable.
+func TestLoadShareRateFromEnv(t *testing.T) {
+	t.Setenv("DRIVE_SHARE_RATE_PER_MIN", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if cfg.ShareRatePerMin != 0 {
+		t.Errorf("unset share rate = %d, want 0 (the default belongs to the api package)", cfg.ShareRatePerMin)
+	}
+
+	t.Setenv("DRIVE_SHARE_RATE_PER_MIN", "120")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if cfg.ShareRatePerMin != 120 {
+		t.Errorf("share rate = %d, want 120", cfg.ShareRatePerMin)
+	}
+
+	for _, bad := range []string{"nonsense", "-1", "1.5"} {
+		t.Setenv("DRIVE_SHARE_RATE_PER_MIN", bad)
+		_, err := Load()
+		if err == nil {
+			t.Errorf("Load() with DRIVE_SHARE_RATE_PER_MIN=%q: want error, got nil", bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), "DRIVE_SHARE_RATE_PER_MIN") {
+			t.Errorf("error for %q = %q, want it to name DRIVE_SHARE_RATE_PER_MIN", bad, err)
+		}
+	}
+}

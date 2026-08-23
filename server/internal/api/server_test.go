@@ -388,3 +388,44 @@ func TestUnknownAssetIs404NotTheSPA(t *testing.T) {
 		t.Errorf("a route whose name merely starts with \"assets\" = %d, want the SPA", rec.Code)
 	}
 }
+
+// A share page's URL is its credential, so the document answering /s/{token}
+// tells crawlers to keep out and browsers to send no Referer. Nothing else the
+// SPA serves carries either: the app's own pages sit behind a session and want
+// neither, and "s/" -- slash included -- is the prefix, so /search and /shared
+// are not share pages.
+func TestSharePageDocumentCarriesTheCrawlerAndReferrerHeaders(t *testing.T) {
+	h := newTestServer(t)
+	want := map[string]string{
+		"Referrer-Policy": "no-referrer",
+		"X-Robots-Tag":    "noindex, nofollow",
+	}
+
+	// The second leading slash is the shape chi hands through uncleaned (see
+	// TestUnknownAssetIs404NotTheSPA); to a browser it is the same page.
+	for _, path := range []string{"/s/tok", "/s/tok/", "//s/tok"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want the SPA document", path, rec.Code)
+		}
+		for name, v := range want {
+			if got := rec.Header().Get(name); got != v {
+				t.Errorf("GET %s: %s = %q, want %q", path, name, got, v)
+			}
+		}
+	}
+
+	for _, path := range []string{"/", "/account", "/shared", "/search", "/s", "/verify"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want the SPA document", path, rec.Code)
+		}
+		for name := range want {
+			if got := rec.Header().Get(name); got != "" {
+				t.Errorf("GET %s: %s = %q, want none off the share page", path, name, got)
+			}
+		}
+	}
+}

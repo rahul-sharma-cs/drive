@@ -129,6 +129,17 @@ const DefaultAuthRatePerMin = 10
 // own address needs and far less than a sweep through a mailing list.
 const DefaultMailRatePerHour = 5
 
+// DefaultShareRatePerMin is the public share surface's allowance when nothing
+// configures it (DRIVE_SHARE_RATE_PER_MIN): /api/s/{token}/* minus the
+// password route, which sits in the auth bucket because it reaches Argon2.
+//
+// Sixty a minute, not the auth bucket's ten, because a share page load is
+// three requests and the people behind one address open links independently
+// of each other. It is not what bounds a token scan -- 256 bits of entropy do
+// that long before any bucket would -- so it only has to be low enough that
+// one address cannot make the database the bottleneck.
+const DefaultShareRatePerMin = 60
+
 // burstFor is the burst allowance for a rate. One knob, not two: they only ever
 // move together.
 func burstFor(perMinute float64) float64 { return perMinute * 2 }

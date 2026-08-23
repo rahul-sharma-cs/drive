@@ -52,6 +52,15 @@ const (
 	CodeSessionExpired  = "session_expired"
 	CodeInProgress      = "in_progress"
 	CodeUnsupported     = "unsupported"
+	// CodeExists is a 409 for a create whose one slot is already taken -- a
+	// share link for a file that has an active one. It is not CodeNameConflict:
+	// nothing was named, and the client's answer is to show the existing link
+	// rather than to ask for another name.
+	CodeExists = "exists"
+	// CodeExhausted is a 403 for a share link whose download cap is spent. The
+	// link is live and the caller may well hold its password; what is gone is
+	// the budget, which is why it is neither not_found nor unauthorized.
+	CodeExhausted = "exhausted"
 
 	// CodeInternal is the one code outside the canonical list: it is reserved
 	// for 5xx responses (panics), which no client decision depends on.
@@ -99,6 +108,11 @@ type Server struct {
 	// address the caller does not have to own: password-reset and
 	// resend-verification.
 	MailRate *ipLimiter
+	// ShareRate is the bucket in front of the public share routes, with an
+	// allowance of its own (DefaultShareRatePerMin): a share page load is three
+	// requests, and a stranger's link must not be able to spend the sign-in
+	// allowance of whoever shares the address.
+	ShareRate *ipLimiter
 	// Google is the OIDC client, or nil when no Google client is configured --
 	// which is a deployment that offers password sign-in only. Building it
 	// makes no network request: discovery happens on the first sign-in, so a
@@ -117,15 +131,19 @@ type Server struct {
 // dependency, they must be shared by every request in the process, and a test
 // that wants a saturated one can replace the field on the returned Server.
 func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, sender mail.Sender, s3c *s3.Client, presign *s3.PresignClient) *Server {
-	argon2Limit, authRate, mailRate := 0, 0, 0
+	argon2Limit, authRate, mailRate, shareRate := 0, 0, 0, 0
 	if cfg != nil {
-		argon2Limit, authRate, mailRate = cfg.Argon2Limit, cfg.AuthRatePerMin, cfg.MailRatePerHour
+		argon2Limit, authRate, mailRate, shareRate =
+			cfg.Argon2Limit, cfg.AuthRatePerMin, cfg.MailRatePerHour, cfg.ShareRatePerMin
 	}
 	if authRate < 1 {
 		authRate = DefaultAuthRatePerMin
 	}
 	if mailRate < 1 {
 		mailRate = DefaultMailRatePerHour
+	}
+	if shareRate < 1 {
+		shareRate = DefaultShareRatePerMin
 	}
 	// The redirect URI is derived from the deployment's own base URL and
 	// nothing else -- never from r.Host, which a caller controls. One source of
@@ -150,7 +168,8 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, sender mail.S
 		// The mail bucket's burst is the allowance itself, not twice it: this
 		// one is a budget for the hour, and a burst on top of it would simply
 		// be a different, larger number nobody chose.
-		MailRate: newIPLimiter(float64(mailRate)/60, float64(mailRate)),
+		MailRate:  newIPLimiter(float64(mailRate)/60, float64(mailRate)),
+		ShareRate: newIPLimiter(float64(shareRate), burstFor(float64(shareRate))),
 	}
 }
 
@@ -182,6 +201,7 @@ func (s *Server) Routes() http.Handler {
 		s.mountDownload(r)
 		s.mountUploads(r)
 		s.mountUploadComplete(r)
+		s.mountShare(r)
 
 		// Unmatched /api paths answer with the JSON envelope, never the SPA.
 		// This is also what keeps the chain above alive: chi skips a mux's
@@ -259,6 +279,14 @@ func (s *Server) spaHandler() http.HandlerFunc {
 		if name == "" {
 			name = "index.html"
 		}
+		// A share page's URL is its credential. The two headers keep it out of
+		// search indexes and out of the Referer of anything the page loads,
+		// and they are decided here, on the raw name, because the fallback
+		// below rewrites the path to / before the response is written.
+		if strings.HasPrefix(name, sharePagePrefix) {
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+		}
 		if _, err := fs.Stat(dist, name); err != nil {
 			// Under assets/ the fallback is wrong. Every name there is written
 			// by the build and carries a content hash, so a miss is a missing
@@ -284,6 +312,10 @@ func (s *Server) spaHandler() http.HandlerFunc {
 // assetPrefix is the build's fingerprinted output directory. Vite writes every
 // hashed file under it, and nothing else is served from there.
 const assetPrefix = "assets/"
+
+// sharePagePrefix is where the SPA's share page lives: /s/{token}. The slash
+// is part of it, so /search and /shared are not share pages.
+const sharePagePrefix = "s/"
 
 // spaCacheControl decides how long a served SPA file may be cached.
 //

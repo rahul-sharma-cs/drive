@@ -78,6 +78,7 @@ type Config struct {
 	Argon2Limit     int
 	AuthRatePerMin  int
 	MailRatePerHour int
+	ShareRatePerMin int
 	SignupMode      string
 	EmailDailyCap   int
 	MaxFileSize     int64
@@ -159,6 +160,14 @@ func Load() (*Config, error) {
 	// above there is no value that turns it off; 0 means the default.
 	if cfg.MailRatePerHour, err = parseCount(env("DRIVE_MAIL_RATE_PER_HOUR", "")); err != nil {
 		return nil, fmt.Errorf("DRIVE_MAIL_RATE_PER_HOUR: %w", err)
+	}
+	// Requests per minute allowed on the public share routes from one client
+	// address; the burst is twice it. Its own number rather than the auth
+	// allowance because a share page load is three requests, and the auth
+	// bucket's ten would refuse an ordinary visit. As with the two buckets
+	// above there is no value that turns it off; 0 means the default.
+	if cfg.ShareRatePerMin, err = parseCount(env("DRIVE_SHARE_RATE_PER_MIN", "")); err != nil {
+		return nil, fmt.Errorf("DRIVE_SHARE_RATE_PER_MIN: %w", err)
 	}
 	// Messages the whole service may send in a day. Unlike the two limits
 	// above, 0 here means no budget at all -- which is right for a local

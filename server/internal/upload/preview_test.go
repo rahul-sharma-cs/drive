@@ -326,3 +326,48 @@ func TestPreviewOverridesAreInsideTheSignature(t *testing.T) {
 		t.Errorf("two URLs differing in both overrides sign identically (%s)", sig(text))
 	}
 }
+
+// ------------------------------------------------------------- share pages --
+
+// A share page's allowlist is the owner's minus one entry. Each allowed case is
+// asserted against PreviewContentType's own answer rather than a literal, so
+// the two cannot drift; the PDF cases are the subtraction, and a copy that
+// forgot it fails on exactly those lines.
+func TestSharePreviewContentTypeIsTheAllowlistMinusPDF(t *testing.T) {
+	cases := []struct {
+		what  string
+		raw   string
+		allow bool
+	}{
+		{"png", "image/png", true},
+		{"mp4 video", "video/mp4", true},
+		{"markdown becomes plain text", "text/markdown", true},
+		{"a source type becomes plain text", "text/x-go", true},
+		{"case and parameters are normalized", "IMAGE/PNG; q=1", true},
+
+		{"pdf is refused on a share page", "application/pdf", false},
+		{"pdf with parameters is still refused", "Application/PDF; charset=binary", false},
+
+		{"svg stays refused", "image/svg+xml", false},
+		{"html stays refused", "text/html", false},
+		{"an empty mime stays refused", "", false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.what, func(t *testing.T) {
+			got, ok := SharePreviewContentType(c.raw)
+			if ok != c.allow {
+				t.Fatalf("SharePreviewContentType(%q) allowed = %v, want %v", c.raw, ok, c.allow)
+			}
+			if !c.allow {
+				if got != "" {
+					t.Errorf("SharePreviewContentType(%q) returned %q with its refusal", c.raw, got)
+				}
+				return
+			}
+			if want, _ := PreviewContentType(c.raw); got != want {
+				t.Errorf("SharePreviewContentType(%q) = %q, want PreviewContentType's %q", c.raw, got, want)
+			}
+		})
+	}
+}

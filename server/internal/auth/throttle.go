@@ -21,6 +21,10 @@ const (
 	// signing in for fifteen minutes. Different key, different budget, same
 	// numbers.
 	ScopePasswordChange = "password_change"
+	// ScopeSharePassword counts wrong passwords on a share link, keyed by
+	// share_id:ip -- the share alone would let anyone holding the link lock
+	// its real recipient out.
+	ScopeSharePassword = "share_password"
 	// ScopeEmailSend counts outbound mail, keyed by recipient address. It is
 	// signup's budget; the two purposes below have their own.
 	ScopeEmailSend = "email_send"

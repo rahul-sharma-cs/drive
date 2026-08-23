@@ -36,6 +36,10 @@ import "strings"
 // sign an empty content type the day somebody renames that key.
 const previewTextPlain = "text/plain"
 
+// previewPDF is the one allowlisted type a share page refuses; see
+// SharePreviewContentType.
+const previewPDF = "application/pdf"
+
 // previewTypes is the allowlist. Keys are normalized client-declared types;
 // values are what the presign emits -- which is not always the key.
 var previewTypes = map[string]string{
@@ -53,7 +57,7 @@ var previewTypes = map[string]string{
 	"audio/wav":  "audio/wav",
 	"audio/mp4":  "audio/mp4",
 
-	"application/pdf": "application/pdf",
+	"application/pdf": previewPDF,
 
 	"text/plain":    previewTextPlain,
 	"text/markdown": previewTextPlain,
@@ -94,4 +98,20 @@ func PreviewContentType(raw string) (string, bool) {
 		return previewTextPlain, true
 	}
 	return "", false
+}
+
+// SharePreviewContentType is PreviewContentType for a share page: the same
+// allowlist minus application/pdf, answering constant for constant otherwise.
+//
+// A PDF preview is an unsandboxed frame rendering a document, and what that
+// costs -- the viewer's own scripting surface on the store origin -- was
+// accepted for a user looking at a file they uploaded themselves. A share page
+// shows a stranger's upload to whoever holds the link, which is not the same
+// bargain, so there a PDF is the card and the Download button.
+func SharePreviewContentType(raw string) (string, bool) {
+	ct, ok := PreviewContentType(raw)
+	if !ok || ct == previewPDF {
+		return "", false
+	}
+	return ct, true
 }
