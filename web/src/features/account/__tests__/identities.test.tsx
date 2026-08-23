@@ -250,5 +250,7 @@ describe('the password section splits on has_password', () => {
     // No current password exists, so there is nothing here to ask for one.
     expect(screen.queryByRole('button', { name: 'Change password' })).toBeNull()
     expect(screen.queryByLabelText('Current password')).toBeNull()
+    // And the flow it names is a click away rather than a route to go and find.
+    expect(screen.getByRole('link', { name: 'Forgot password' }).getAttribute('href')).toBe('/forgot')
   })
 })

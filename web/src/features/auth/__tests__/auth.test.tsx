@@ -406,6 +406,36 @@ describe('/reset', () => {
     expect(screen.queryByLabelText('New password')).toBeNull()
     expect(calls).toHaveLength(0)
   })
+
+  it('drops the session this tab was holding, because the server just deleted it', async () => {
+    stubFetch([{ method: 'POST', path: '/api/auth/password-reset/confirm', status: 204 }])
+    const { client } = renderApp(<ResetPage />, {
+      route: '/reset?token=reset-tok-1',
+      // Signed in and on /reset is not a contradiction: the route sits outside
+      // RequireAuth, and the account screen points a password-less account
+      // straight at it.
+      seed: (c) =>
+        c.setQueryData(meKey, {
+          id: 'u-1',
+          email: 'ada@example.test',
+          display_name: 'Ada Lovelace',
+          root_id: 'root-1',
+          email_verified_at: '2026-08-17T00:00:00Z',
+          has_password: false,
+        }),
+    })
+
+    await userEvent.type(screen.getByLabelText('New password'), 'a-new-passphrase')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'a-new-passphrase')
+    await userEvent.click(screen.getByRole('button', { name: 'Set password' }))
+
+    expect(await screen.findByText(/your new password is in place/i)).toBeTruthy()
+    // The server deleted every session for this account and cleared the cookie.
+    // `me` is kept at `staleTime: Infinity` with no refetch on focus, so a tab
+    // that holds on to it goes back to /account and draws a signed-in screen —
+    // "You sign in with Google", Unlink refusing — against a dead cookie.
+    expect(client.getQueryData(meKey)).toBeUndefined()
+  })
 })
 
 /**

@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
@@ -18,6 +18,7 @@ import { isAcceptablePassword, passwordHint } from './password'
  * to redeem, and posting an empty one would spend a request to be told so.
  */
 export function ResetPage() {
+  const client = useQueryClient()
   const [params] = useSearchParams()
   // Trimmed: a link copied out of a mail client arrives with whitespace around
   // it often enough, and the server would spend the token's one redemption on
@@ -31,7 +32,21 @@ export function ResetPage() {
 
   const passwordBad = passwordJudged && !isAcceptablePassword(password)
 
-  const mutation = useMutation({ mutationFn: () => confirmReset(token, password) })
+  const mutation = useMutation({
+    mutationFn: () => confirmReset(token, password),
+    /**
+     * This route is reachable while signed in, and the account screen sends
+     * people here on purpose: an account with no password is told to set one
+     * through "Forgot password". The server answers by deleting *every* session
+     * for the account and clearing the cookie — so the tab that did it is now
+     * signed out, while `me` is held at `staleTime: Infinity` with no refetch
+     * on focus and would never be re-asked. Left alone it goes on drawing a
+     * signed-in screen — the account page still saying "You sign in with
+     * Google", still refusing to unlink — against a dead cookie. Everything
+     * else in the cache belongs to that same session, so it goes too.
+     */
+    onSuccess: () => client.clear(),
+  })
 
   // A spent or expired link is the ordinary failure here, and the way out is
   // another link — not another attempt with the same one. Anything else is not

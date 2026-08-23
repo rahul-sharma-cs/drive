@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -57,9 +58,15 @@ export function PasswordSection() {
         <h2 id="password-heading" className="text-[15px] font-semibold text-ink">
           Password
         </h2>
+        {/* A real link, not styled text: this sentence is the documented way
+            to get a password, and naming a route without offering it leaves
+            the person to find it themselves. */}
         <p className="text-[13px] text-ink-3">
-          You sign in with Google. To add a password, use <span className="font-medium text-ink-2">Forgot
-          password</span> from the sign-in screen — it sends a link to your address.
+          You sign in with Google. To add a password, use{' '}
+          <Link className="font-medium text-teal hover:underline" to="/forgot">
+            Forgot password
+          </Link>{' '}
+          — it sends a link to your address.
         </p>
       </section>
     )
