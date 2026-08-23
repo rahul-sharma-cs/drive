@@ -78,7 +78,7 @@ func TestDownloadRedirectsToASignedURLCarryingTheOverrides(t *testing.T) {
 	if q.Get("X-Amz-Signature") == "" {
 		t.Error("the redirect target is not signed")
 	}
-	if got, want := q.Get("X-Amz-Expires"), "900"; got != want {
+	if got, want := q.Get("X-Amz-Expires"), presignTTLSeconds(t); got != want {
 		t.Errorf("X-Amz-Expires = %q, want %q (the config's PresignTTL)", got, want)
 	}
 }
@@ -344,9 +344,11 @@ func TestDownloadFormatJSONSignsTheSameURLAsTheRedirect(t *testing.T) {
 		t.Errorf("the two forms point at different objects: %q vs %q", signed.Path, redirected.Path)
 	}
 
-	// X-Amz-Date and the signature over it move with the clock; everything else
-	// is the request the URL commits the store to.
-	volatile := map[string]bool{"X-Amz-Date": true, "X-Amz-Signature": true}
+	// X-Amz-Date, the signature over it, and the credential -- whose scope
+	// carries the yyyymmdd of the signing date -- move with the clock; everything
+	// else is the request the URL commits the store to. (Comparing the credential
+	// would pass all day and fail on the two calls that straddle UTC midnight.)
+	volatile := map[string]bool{"X-Amz-Date": true, "X-Amz-Signature": true, "X-Amz-Credential": true}
 	sq, rq := signed.Query(), redirected.Query()
 	if len(sq) != len(rq) {
 		t.Fatalf("query parameters differ: json %v, redirect %v", sq, rq)
@@ -363,6 +365,21 @@ func TestDownloadFormatJSONSignsTheSameURLAsTheRedirect(t *testing.T) {
 			t.Errorf("%s = %v in the json form, want %v (the redirect's)", k, got, want)
 		}
 	}
+	// The credential moves only in its date scope, so it is compared without it
+	// rather than not compared at all: the key id and the rest of the scope
+	// still have to be the same two URLs' worth.
+	credWithoutDate := func(what string, q url.Values) string {
+		cred, stamp := q.Get("X-Amz-Credential"), q.Get("X-Amz-Date")
+		if len(stamp) < 8 || !strings.Contains(cred, "/"+stamp[:8]+"/") {
+			t.Errorf("the %s credential %q does not carry its own signing date %q", what, cred, stamp)
+			return cred
+		}
+		return strings.Replace(cred, "/"+stamp[:8]+"/", "/", 1)
+	}
+	if got, want := credWithoutDate("json", sq), credWithoutDate("redirect", rq); got != want {
+		t.Errorf("the two forms sign under different credentials: %q vs %q", got, want)
+	}
+
 	if got, want := sq.Get("response-content-disposition"), upload.AttachmentDisposition(name); got != want {
 		t.Errorf("response-content-disposition = %q, want %q", got, want)
 	}
