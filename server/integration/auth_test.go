@@ -2,10 +2,13 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/rahul-sharma-cs/drive/server/internal/auth"
 	"github.com/rahul-sharma-cs/drive/server/internal/testutil"
 )
 
@@ -92,4 +95,117 @@ func TestLogoutRevokesTheSessionServerSide(t *testing.T) {
 		t.Errorf("%d session(s) survive logout, want 0", n)
 	}
 	user.Get(t, "/api/auth/me").Expect(http.StatusUnauthorized)
+}
+
+// -------------------------------------------------------- abuse controls --
+//
+// The two limits below are configured out of the way for the whole suite:
+// .env.test raises DRIVE_AUTH_RATE_PER_MIN and DRIVE_MAIL_RATE_PER_HOUR to
+// 100000 (every test runs from one address, so real allowances would refuse the
+// run itself) and sets DRIVE_EMAIL_DAILY_CAP=0 (Mailpit has no vendor quota to
+// protect). internal/api covers the behaviour with hand-built configs, but that
+// leaves the wiring dark end to end: nothing proved that these variables reach
+// the limiter at all in the real binary. A variable typo'd here would look
+// exactly like a limit nobody hit.
+//
+// Each test gets its own server carrying its own value, so the suite's generous
+// limits are untouched for everybody else.
+
+// DRIVE_AUTH_RATE_PER_MIN reaches the per-IP bucket in a real process.
+func TestAuthRateLimitIsReadFromTheEnvironment(t *testing.T) {
+	child := H.SpawnServerWithEnv(t, "DRIVE_AUTH_RATE_PER_MIN=1")
+	anon := H.Anonymous(t).At(child.URL)
+
+	// One a minute, burst twice the rate: two requests pass, the third does
+	// not. verify-email with a junk token is the cheapest thing on the
+	// unauthenticated surface -- what is being measured is the bucket, not a
+	// handler.
+	spend := func() *testutil.Resp {
+		return anon.Post(t, "/api/auth/verify-email", map[string]any{"token": "nope"})
+	}
+	for i := 1; i <= 2; i++ {
+		if resp := spend(); resp.Status == http.StatusTooManyRequests {
+			t.Fatalf("request %d of the burst was refused; the burst is twice the rate", i)
+		}
+	}
+	refused := spend().Expect(http.StatusTooManyRequests)
+	if refused.Code() != "rate_limited" {
+		t.Errorf("code = %q, want rate_limited", refused.Code())
+	}
+
+	// The suite's own server is not affected: the limit came from this child's
+	// environment, not from anything shared.
+	if got := H.Anonymous(t).Post(t, "/api/auth/verify-email",
+		map[string]any{"token": "nope"}).Status; got == http.StatusTooManyRequests {
+		t.Error("the shared server was refused too; the child's limit is not its own")
+	}
+}
+
+// DRIVE_EMAIL_DAILY_CAP reaches the service-wide send budget in a real process.
+//
+// This is the budget that protects a vendor quota: once it is spent, nobody can
+// verify an address until the window rolls. It is charged before the decision to
+// send, so a suppressed attempt still counts -- which is the direction to be
+// wrong in when the alternative is a quota that takes verification mail down for
+// everyone.
+func TestServiceWideMailBudgetIsReadFromTheEnvironment(t *testing.T) {
+	ctx := context.Background()
+
+	// One row for the whole service, so this test owns the scope rather than a
+	// key of its own and clears it before counting.
+	if _, err := H.Pool.Exec(ctx, `DELETE FROM throttle WHERE scope = $1`, auth.ScopeEmailSendGlobal); err != nil {
+		t.Fatalf("clearing the global mail budget: %v", err)
+	}
+
+	const dailyCap = 2
+	child := H.SpawnServerWithEnv(t, "DRIVE_EMAIL_DAILY_CAP=2")
+	anon := H.Anonymous(t).At(child.URL)
+
+	const attempts = dailyCap + 1
+	var addresses []string
+	for i := 0; i < attempts; i++ {
+		email := fmt.Sprintf("cap%d-%d@drive.test", time.Now().UnixNano(), i)
+		addresses = append(addresses, email)
+		// Every signup succeeds: a suppressed message must tell the caller
+		// nothing, and the account exists either way.
+		anon.Post(t, "/api/auth/signup", map[string]any{
+			"email":        email,
+			"password":     testutil.FixturePassword,
+			"display_name": "Budget Test",
+		}).Expect(http.StatusOK)
+	}
+
+	// The sends are dispatched off the request goroutine, so wait on the budget
+	// rather than on a clock. Charge-first means all three attempts are counted
+	// whether or not anything went out, which is also what makes the mail
+	// assertion below safe to make: once the count is in, every attempt is done.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		n, err := auth.Count(ctx, H.Pool, auth.ScopeEmailSendGlobal, auth.GlobalKey, auth.EmailSendGlobalWindow)
+		if err != nil {
+			t.Fatalf("reading the global mail budget: %v", err)
+		}
+		if n == attempts {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the global budget counted %d of %d attempts -- DRIVE_EMAIL_DAILY_CAP never reached the sender", n, attempts)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	sent := 0
+	for i, email := range addresses {
+		msg, err := H.Mailpit.LatestTo(ctx, email)
+		if err == nil && msg != nil {
+			sent++
+			continue
+		}
+		if i < dailyCap {
+			t.Errorf("no verification mail for %s, which was inside the cap of %d", email, dailyCap)
+		}
+	}
+	if sent != dailyCap {
+		t.Errorf("%d messages went out under a cap of %d", sent, dailyCap)
+	}
 }
