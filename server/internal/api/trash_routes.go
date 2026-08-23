@@ -265,23 +265,30 @@ func (s *Server) bulkTrashOp(w http.ResponseWriter, r *http.Request, op func(con
 		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "malformed request body")
 		return
 	}
-	if len(req.IDs) == 0 || len(req.IDs) > BulkIDLimit {
-		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid,
-			fmt.Sprintf("ids: want 1 to %d node ids, got %d", BulkIDLimit, len(req.IDs)))
-		return
-	}
-
-	deadline := s.bulkDeadline()
+	// Deduplicated before the limit is applied, in that order: the contract is
+	// up to BulkIDLimit *distinct* ids, and an id sent twice is one selected
+	// row, not two operations. Checking first would refuse a client whose
+	// selection was inside the limit all along.
+	ids := make([]uuid.UUID, 0, len(req.IDs))
 	seen := make(map[uuid.UUID]struct{}, len(req.IDs))
-	results := make([]BulkResult, 0, len(req.IDs))
-	remaining := false
-
 	for _, id := range req.IDs {
 		if _, dup := seen[id]; dup {
 			continue
 		}
 		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 || len(ids) > BulkIDLimit {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid,
+			fmt.Sprintf("ids: want 1 to %d distinct node ids, got %d", BulkIDLimit, len(ids)))
+		return
+	}
 
+	deadline := s.bulkDeadline()
+	results := make([]BulkResult, 0, len(ids))
+	remaining := false
+
+	for _, id := range ids {
 		// Checked before each root rather than after: what the budget bounds is
 		// work started, and starting one more purge is what would overrun it.
 		if !time.Now().Before(deadline) {
@@ -305,10 +312,17 @@ func bulkStatus(r *http.Request, err error) string {
 	case errors.Is(err, node.ErrNameConflict):
 		return bulkNameConflict
 	case errors.Is(err, node.ErrRootNode):
-		// A client that sent its own root folder's id; nothing failed here.
+		// A client that sent its own root folder's id. It is a client bug rather
+		// than a server one, but the id genuinely was not acted on, so it is an
+		// error like any other -- just not one worth a log line.
 		return bulkError
 	default:
-		LoggerFrom(r.Context()).Error("bulk trash operation failed", "error", err)
+		// One id of many, and the caller already sees it as "error": a failure
+		// here is worth noticing, not worth paging anyone. A cancelled request
+		// is not even that -- it means the browser went away mid-selection.
+		if !errors.Is(err, context.Canceled) {
+			LoggerFrom(r.Context()).Warn("bulk trash operation failed", "error", err)
+		}
 		return bulkError
 	}
 }
@@ -320,6 +334,11 @@ func bulkStatus(r *http.Request, err error) string {
 // fresh page each pass rather than paginating with a cursor, because the pass
 // deletes the rows it just read -- the next read is the next batch by
 // construction.
+//
+// The answer is always a 200 carrying {purged, remaining}, including when
+// something goes wrong mid-sweep. Everything purged before that point is
+// committed, and reporting a 500 would throw the count away and tell the client
+// to stop looping while its trash still had rows in it.
 func (s *Server) emptyTrash(w http.ResponseWriter, r *http.Request) {
 	u := MustUser(r.Context())
 	store := node.NewStore(s.DB)
@@ -328,6 +347,7 @@ func (s *Server) emptyTrash(w http.ResponseWriter, r *http.Request) {
 	purged := 0
 	remaining := false
 
+pages:
 	for {
 		if !time.Now().Before(deadline) {
 			remaining = true
@@ -342,7 +362,12 @@ func (s *Server) emptyTrash(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		done := 0
+		// Purges and misses both count as progress. A miss means the root left
+		// the trash by some other route, so the next read returns a different
+		// page -- counting only purges would stop the sweep dead on a page the
+		// hourly GC (or a second tab) had just emptied, leaving every root
+		// behind it untouched and telling the client there was nothing left.
+		advanced := 0
 		for _, id := range roots {
 			if !time.Now().Before(deadline) {
 				remaining = true
@@ -351,19 +376,27 @@ func (s *Server) emptyTrash(w http.ResponseWriter, r *http.Request) {
 			switch err := store.Purge(r.Context(), u.ID, id); {
 			case err == nil:
 				purged++
-				done++
+				advanced++
 			case errors.Is(err, node.ErrNotFound):
 				// Restored or purged from another tab between the read and the
 				// write. It is out of the trash either way, and the next read
 				// will not return it.
+				advanced++
 			default:
-				s.writeTrashErr(w, r, err)
-				return
+				// A cancelled request (the user navigated away) or a deadlock
+				// against the GC's own purge. Neither is a reason to discard
+				// what is already committed: stop here and say there is more.
+				if !errors.Is(err, context.Canceled) {
+					LoggerFrom(r.Context()).Warn("emptying the trash stopped early",
+						"error", err, "node_id", id, "purged", purged)
+				}
+				remaining = true
+				break pages
 			}
 		}
-		// A page that purged nothing will not purge anything by being read
-		// again. Stop instead of spinning the budget away.
-		if done == 0 {
+		// A page that neither purged nor lost a single root cannot do better by
+		// being read again. Stop instead of spinning the budget away.
+		if advanced == 0 {
 			break
 		}
 	}

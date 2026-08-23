@@ -84,6 +84,11 @@ func TestExplainChildrenSortPlans(t *testing.T) {
 // same way. Nothing fails loudly when they drift -- the plan just quietly
 // starts sorting 5 000 rows -- so the two texts are compared here, where a
 // rewrite of either one is caught the moment it happens. No database needed.
+//
+// The comparison is against the whole rendered column list, not against the
+// sort key alone. "updated_at" as a substring proves nothing: it is in nodeCols,
+// in the query's SELECT, and in the index's own *name*, so an index rebuilt on
+// created_at would pass a contains-check while serving nothing.
 func TestSortExpressionsMatchTheMigration(t *testing.T) {
 	raw, err := os.ReadFile("../../migrations/0003_children_sort_indexes.sql")
 	if err != nil {
@@ -94,18 +99,25 @@ func TestSortExpressionsMatchTheMigration(t *testing.T) {
 	if !strings.Contains(migration, rankExpr) {
 		t.Errorf("the migration does not contain the folders-first expression %q", rankExpr)
 	}
+	// The listing pages over live rows only, so an unpartial index would be a
+	// second copy of the table rather than the one the keyset walks.
+	if !strings.Contains(migration, `WHERE deleted_at IS NULL`) {
+		t.Error("migration 0003's indexes are not restricted to live rows")
+	}
 	for _, key := range []string{SortUpdatedAt, SortSize} {
 		spec := sortSpecs[key]
-		if !strings.Contains(migration, spec.key) {
-			t.Errorf("sort=%s orders by %q, which appears in no index in migration 0003", key, spec.key)
+
+		// The keyset's own columns, in the keyset's own order.
+		columns := `(parent_id, ` + rankExpr + `, ` + spec.key + `, lower(name), id)`
+		if !strings.Contains(migration, columns) {
+			t.Errorf("sort=%s pages over %s, which is not an index in migration 0003", key, columns)
 		}
 		for _, dir := range []string{DirAsc, DirDesc} {
 			q := childrenQuery(ChildSort{Key: key, Dir: dir})
-			if !strings.Contains(q, spec.key) {
-				t.Errorf("sort=%s dir=%s does not order by %q", key, dir, spec.key)
-			}
-			if !strings.Contains(q, rankExpr+` ASC`) {
-				t.Errorf("sort=%s dir=%s does not keep folders first", key, dir)
+			// Folders first, then this key -- adjacent, so the index prefix is
+			// the ordering rather than merely appearing somewhere in it.
+			if want := `ORDER BY ` + rankExpr + ` ASC, ` + spec.key + ` `; !strings.Contains(q, want) {
+				t.Errorf("sort=%s dir=%s does not order by %q", key, dir, want)
 			}
 		}
 	}

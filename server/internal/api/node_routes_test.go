@@ -435,6 +435,95 @@ func TestChildrenCursorFromAnotherSortIsRejected(t *testing.T) {
 	}
 }
 
+// nodeReSign decodes a cursor, lets the caller edit it, and encodes it again --
+// which is how a cursor no version of this server would mint gets built without
+// hand-assembling a keyset position that has to be exactly right to mean
+// anything.
+func nodeReSign(t *testing.T, cursor string, edit func(*node.ChildCursor)) string {
+	t.Helper()
+	var c node.ChildCursor
+	if err := DecodeCursor(cursor, &c); err != nil {
+		t.Fatalf("decoding the cursor the server just issued: %v", err)
+	}
+	edit(&c)
+	return url.QueryEscape(EncodeCursor(c))
+}
+
+// nodeFirstCursor pages one row off a folder and hands back the cursor.
+func nodeFirstCursor(t *testing.T, h http.Handler, owner nodeUser, parent uuid.UUID, query string) string {
+	t.Helper()
+	path := fmt.Sprintf("/api/nodes/%s/children?limit=1&%s", parent, query)
+	rec := authDo(t, h, http.MethodGet, path, nil, owner.Cookie)
+	nodeWant(t, rec, http.StatusOK, "")
+	var page List[NodeDTO]
+	nodeDecode(t, rec, &page)
+	if page.NextCursor == nil {
+		t.Fatalf("the first page of %s handed back no cursor", path)
+	}
+	return *page.NextCursor
+}
+
+// A cursor minted before sorting shipped carries no s and no d. Empty means the
+// only ordering there was -- name, ascending -- and it has to keep paging: every
+// client that was mid-scroll across the deploy is holding one, and answering
+// 422 would strand the list at whatever row it had reached.
+func TestChildrenCursorWithoutASortPagesNameAscending(t *testing.T) {
+	h, pool := nodeTestServer(t)
+	owner := nodeNewUser(t, pool)
+	parent := nodeMkFolder(t, pool, owner, owner.RootID, "Parent")
+	for _, name := range []string{"a.bin", "b.bin", "c.bin"} {
+		nodeMkFile(t, pool, owner, parent, name)
+	}
+
+	// The same position the old server would have minted: the keyset, and
+	// nothing about the ordering it belongs to.
+	old := nodeReSign(t, nodeFirstCursor(t, h, owner, parent, ""), func(c *node.ChildCursor) {
+		if c.Sort != node.SortName || c.Dir != node.DirAsc {
+			t.Fatalf("a cursor from the default listing says sort=%q dir=%q", c.Sort, c.Dir)
+		}
+		c.Sort, c.Dir = "", ""
+	})
+
+	rec := authDo(t, h, http.MethodGet,
+		fmt.Sprintf("/api/nodes/%s/children?limit=1&cursor=%s", parent, old), nil, owner.Cookie)
+	nodeWant(t, rec, http.StatusOK, "")
+	var second List[NodeDTO]
+	nodeDecode(t, rec, &second)
+	if len(second.Items) != 1 || second.Items[0].Name != "b.bin" {
+		t.Fatalf("second page = %+v, want just b.bin", second.Items)
+	}
+}
+
+// A cursor naming a sort key but carrying no boundary value for it is not one
+// this server minted -- somebody edited it, or a client wrote its own. Paging
+// from the zero value would silently hand back rows the caller has already
+// seen, so it is refused; and it is refused as an invalid cursor, which is a
+// 422, not as an error nobody classified, which is a 500.
+func TestChildrenCursorMissingItsSortValueIsAnInvalidCursor(t *testing.T) {
+	h, pool := nodeTestServer(t)
+	owner := nodeNewUser(t, pool)
+	parent := nodeMkFolder(t, pool, owner, owner.RootID, "Parent")
+	for i, name := range []string{"a.bin", "b.bin", "c.bin"} {
+		nodeMkSortable(t, pool, owner, parent, node.KindFile, name, nodeSize(int64(10*(i+1))), time.Duration(i)*time.Second)
+	}
+
+	for _, c := range []struct {
+		what  string
+		query string
+		strip func(*node.ChildCursor)
+	}{
+		{"updated_at with no timestamp", "sort=updated_at&dir=asc", func(c *node.ChildCursor) { c.UpdatedAt = nil }},
+		{"size with no byte count", "sort=size&dir=asc", func(c *node.ChildCursor) { c.Size = nil }},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			stripped := nodeReSign(t, nodeFirstCursor(t, h, owner, parent, c.query), c.strip)
+			rec := authDo(t, h, http.MethodGet,
+				fmt.Sprintf("/api/nodes/%s/children?limit=1&%s&cursor=%s", parent, c.query, stripped), nil, owner.Cookie)
+			nodeWant(t, rec, http.StatusUnprocessableEntity, CodeInvalid)
+		})
+	}
+}
+
 // A sort key or direction outside the vocabulary is a 422, never a fallback to
 // the default and never SQL.
 func TestChildrenSortParamRefusals(t *testing.T) {

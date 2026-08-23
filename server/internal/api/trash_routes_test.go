@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
@@ -742,5 +743,214 @@ func TestTrashDTOCarriesDeletedAtAndChildrenDoNot(t *testing.T) {
 	}
 	if got := NodeDTOFrom(row).DeletedAt; got != nil {
 		t.Errorf("NodeDTOFrom deleted_at = %s, want nil -- live responses must stay byte-identical", got)
+	}
+}
+
+// ------------------------------------------------ the sweep under contention --
+
+// Roots do not only leave the trash by this handler's hand. The hourly GC
+// purges, a second tab empties, a phone restores -- and each of those turns a
+// root the sweep has already listed into something its purge cannot find. The
+// two cases below arrange exactly that, using a row lock in place of the
+// timing: the handler reads its page, blocks inside Purge, and the test changes
+// the world while it waits there.
+
+// lockNodes takes a row lock on ids so the next Purge of any of them blocks,
+// and hands back the transaction holding it. The caller commits or rolls back.
+func (c *trashClient) lockNodes(ids []uuid.UUID) pgx.Tx {
+	c.t.Helper()
+	tx, err := c.pool.Begin(c.ctx)
+	if err != nil {
+		c.t.Fatalf("opening the locking transaction: %v", err)
+	}
+	if _, err := tx.Exec(c.ctx, `SELECT id FROM nodes WHERE id = ANY($1) FOR UPDATE`, ids); err != nil {
+		_ = tx.Rollback(c.ctx)
+		c.t.Fatalf("locking %d nodes: %v", len(ids), err)
+	}
+	return tx
+}
+
+// waitForABlockedPurge waits until a backend is stuck on one of those locks.
+//
+// It is the synchronization these cases rest on, and it is also what stops them
+// being vacuous: SELECT ... FOR UPDATE is reached only after the page of roots
+// has been read, so a backend waiting on one is proof that the sweep read the
+// page this test arranged. Without it, a test that changed the rows too early
+// would simply be watching the handler read the rows it had left behind, and
+// would pass for the wrong reason.
+func (c *trashClient) waitForABlockedPurge() {
+	c.t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := c.pool.QueryRow(c.ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			 WHERE datname = current_database()
+			   AND pid <> pg_backend_pid()
+			   AND state = 'active'
+			   AND wait_event_type = 'Lock'
+			   AND query LIKE '%FOR UPDATE%'`).Scan(&n); err != nil {
+			c.t.Fatalf("reading pg_stat_activity: %v", err)
+		}
+		if n > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	c.t.Fatal("no backend ever blocked on a node row lock, so the sweep never reached the rows under test")
+}
+
+// sendAsync serves a request on its own goroutine and hands back a channel
+// carrying the recorder. The request is built here rather than there so nothing
+// on that goroutine ever calls t.Fatalf.
+func (c *trashClient) sendAsync(ctx context.Context, method, path string) <-chan *httptest.ResponseRecorder {
+	c.t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader("")).WithContext(ctx)
+	req.Header.Set(ClientHeader, "web")
+	req.AddCookie(c.cookie)
+
+	h, done := c.h, make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		done <- rec
+	}()
+	return done
+}
+
+// A page whose roots all vanished before the sweep reached them is not the end
+// of the trash -- it is one page of a list that still has rows behind it.
+//
+// Counting only successful purges made the handler stop on such a page and
+// answer {purged:0, remaining:false}, which leaves everything past the first
+// 200 in the bin and tells the client there is nothing left to loop for. The
+// hourly GC is a real actor here, not a hypothetical one.
+func TestEmptyTrashCarriesOnPastAPageSomethingElseAlreadyPurged(t *testing.T) {
+	const behind = 50
+
+	c := newTrashClient(t)
+	c.seedTrashedFiles(emptyTrashPage + behind)
+
+	// The first page, in the order the sweep is about to read it.
+	first, err := node.NewStore(c.pool).TrashRootIDs(c.ctx, c.owner, emptyTrashPage)
+	if err != nil {
+		t.Fatalf("reading the first page of trashed roots: %v", err)
+	}
+	if len(first) != emptyTrashPage {
+		t.Fatalf("the first page is %d roots, want %d", len(first), emptyTrashPage)
+	}
+
+	tx := c.lockNodes(first)
+	defer tx.Rollback(c.ctx) //nolint:errcheck // rollback after commit is a no-op
+
+	done := c.sendAsync(c.ctx, http.MethodDelete, "/api/trash")
+	c.waitForABlockedPurge()
+
+	// The other actor's part: by the time the lock lifts, that whole page is
+	// gone and every root on it is a miss.
+	if _, err := tx.Exec(c.ctx, `DELETE FROM nodes WHERE id = ANY($1)`, first); err != nil {
+		t.Fatalf("purging the first page out from under the sweep: %v", err)
+	}
+	if err := tx.Commit(c.ctx); err != nil {
+		t.Fatalf("committing the concurrent purge: %v", err)
+	}
+
+	rec := <-done
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/trash = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := c.decodeEmpty(rec); got.Purged != behind || got.Remaining {
+		t.Errorf("response = %+v, want {purged:%d, remaining:false} -- the roots behind the vanished page",
+			got, behind)
+	}
+	if n := c.trashedCount(); n != 0 {
+		t.Errorf("%d roots left in the trash, want 0", n)
+	}
+}
+
+// Anything that is not a miss ends the sweep, not the request.
+//
+// A cancelled request (the user navigated away mid-empty) and a deadlock
+// against the GC's own purge both land here, and both used to be a 500 that
+// threw away a count the database had already committed -- the client saw an
+// error, retried from scratch, and the response never said how far it got. The
+// contract is one shape: 200 {purged, remaining}, and the client loops.
+func TestEmptyTrashReportsWhatItPurgedWhenTheSweepIsCutShort(t *testing.T) {
+	const (
+		roots  = 5
+		stopAt = 3 // the 1-based root the request dies on
+	)
+
+	c := newTrashClient(t)
+	c.seedTrashedFiles(roots)
+
+	page, err := node.NewStore(c.pool).TrashRootIDs(c.ctx, c.owner, roots)
+	if err != nil {
+		t.Fatalf("reading the trashed roots: %v", err)
+	}
+	if len(page) != roots {
+		t.Fatalf("the page is %d roots, want %d", len(page), roots)
+	}
+
+	tx := c.lockNodes(page[stopAt-1 : stopAt])
+	defer tx.Rollback(c.ctx) //nolint:errcheck // rollback after commit is a no-op
+
+	ctx, cancel := context.WithCancel(c.ctx)
+	defer cancel()
+
+	done := c.sendAsync(ctx, http.MethodDelete, "/api/trash")
+	c.waitForABlockedPurge() // the first two are purged and committed; the third is waiting
+	cancel()
+
+	rec := <-done
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/trash = %d, want 200 even though the sweep was cut short (body %s)",
+			rec.Code, rec.Body.String())
+	}
+	got := c.decodeEmpty(rec)
+	if got.Purged != stopAt-1 || !got.Remaining {
+		t.Errorf("response = %+v, want {purged:%d, remaining:true}", got, stopAt-1)
+	}
+	if n := c.trashedCount(); n != roots-(stopAt-1) {
+		t.Errorf("%d roots left in the trash, want %d -- what was purged before the interruption is committed",
+			n, roots-(stopAt-1))
+	}
+}
+
+// The same id twice is one selected row, not two operations. It is deduplicated
+// before the id count is checked, so a selection that is inside the limit is
+// never refused for having repeats in it.
+func TestBulkPurgeDeduplicatesBeforeCountingIDs(t *testing.T) {
+	c := newTrashClient(t)
+	id := c.file(c.root, "twice.txt", 10)
+	c.trash(id)
+
+	rec := c.send(http.MethodPost, "/api/trash/purge", map[string]any{"ids": []uuid.UUID{id, id, id}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/trash/purge = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	got := c.decodeBulk(rec)
+	if len(got.Results) != 1 {
+		t.Fatalf("results = %+v, want exactly one -- the id was sent three times and purged once", got.Results)
+	}
+	if got.Results[0].ID != id || got.Results[0].Status != bulkOK {
+		t.Errorf("results[0] = %+v, want {%s ok}", got.Results[0], id)
+	}
+
+	// One over the limit, with one repeat in it: BulkIDLimit distinct ids, which
+	// is the number the contract bounds.
+	ids := make([]uuid.UUID, 0, BulkIDLimit+1)
+	for i := 0; i < BulkIDLimit; i++ {
+		ids = append(ids, uuid.New())
+	}
+	ids = append(ids, ids[0])
+
+	rec = c.send(http.MethodPost, "/api/trash/purge", map[string]any{"ids": ids})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/trash/purge with %d ids and one repeat = %d, want 200 (body %s)",
+			len(ids), rec.Code, rec.Body.String())
+	}
+	if got := c.decodeBulk(rec); len(got.Results) != BulkIDLimit {
+		t.Errorf("results = %d, want %d (one per distinct id)", len(got.Results), BulkIDLimit)
 	}
 }
