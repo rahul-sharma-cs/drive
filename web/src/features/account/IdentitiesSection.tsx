@@ -1,9 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
-import { listIdentities, unlinkIdentity, type Identity, type Page } from '../../lib/api'
+import { ApiError, listIdentities, unlinkIdentity, type Identity, type Page } from '../../lib/api'
 import { FormError, SkeletonRows } from '../../ui/controls'
 import { formatWhen } from '../../ui/when'
 import { useSession } from '../auth/session'
@@ -20,22 +29,52 @@ const providerName: Record<Identity['provider'], string> = { google: 'Google' }
  * files, and the server refuses it with a 409 anyway. Drawing it disabled with
  * the reason under it says why, where hiding it would leave somebody looking
  * for a control that is not there.
+ *
+ * And it asks first. The button sits where the session list's Revoke sits, at
+ * the right edge of a row, in the same variant and size; a mis-aimed press has
+ * no undo, and getting the link back means signing out and going round Google
+ * again.
  */
 export function IdentitiesSection() {
   const me = useSession()
   const client = useQueryClient()
+  // The row being asked about, not its id: the question outlives the row on the
+  // paths that drop it, and the dialog still has to name what it removed.
+  const [confirming, setConfirming] = useState<Identity | null>(null)
 
   const identities = useQuery({ queryKey: identitiesKey, queryFn: listIdentities })
+
+  // Dropped to, not refetched from, the server: the row is gone because the
+  // DELETE said so — the same argument the session list makes.
+  const dropRow = (id: string) =>
+    client.setQueryData(identitiesKey, (was: Page<Identity> | undefined) =>
+      was ? { ...was, items: was.items.filter((i) => i.id !== id) } : was,
+    )
 
   const unlink = useMutation({
     mutationFn: unlinkIdentity,
     onSuccess: (_result, id) => {
-      // Dropped to, not refetched from, the server: the row is gone because the
-      // DELETE said so — the same argument the session list makes.
-      client.setQueryData(identitiesKey, (was: Page<Identity> | undefined) =>
-        was ? { ...was, items: was.items.filter((i) => i.id !== id) } : was,
-      )
+      dropRow(id)
+      setConfirming(null)
       toast.success('Sign-in method removed')
+    },
+    onError: (err: unknown, id) => {
+      // A 404 is the link having gone between this list being fetched and the
+      // click — unlinked in another tab, or on another device. The row
+      // describes something that is already gone, so it goes as well, and the
+      // question being asked about it goes with it: leaving the row there with
+      // a live Unlink on it is the one outcome that is wrong whichever way the
+      // person reads it.
+      if (err instanceof ApiError && err.code === 'not_found') {
+        dropRow(id)
+        setConfirming(null)
+        toast.success('That sign-in method was already removed')
+        return
+      }
+      // Everything else keeps the dialog open with the server's own words in
+      // it. The 409 — this is the account's last way in — is a refusal about
+      // the row the question names, and closing on it would hide the answer
+      // behind the screen the person just came from.
     },
   })
 
@@ -84,7 +123,12 @@ export function IdentitiesSection() {
                     variant="ghost"
                     size="sm"
                     disabled={!me.has_password || (unlink.isPending && unlink.variables === i.id)}
-                    onClick={() => unlink.mutate(i.id)}
+                    onClick={() => {
+                      // A refusal from a previous question is not an answer to
+                      // this one.
+                      unlink.reset()
+                      setConfirming(i)
+                    }}
                   >
                     Unlink
                   </Button>
@@ -100,11 +144,42 @@ export function IdentitiesSection() {
         </p>
       )}
 
-      {/* The one refusal worth showing in place rather than as a toast: it says
-          the row is still there and why, and the row is still on screen. */}
-      <div className="mt-2 empty:mt-0">
-        <FormError error={unlink.error} />
-      </div>
+      <Dialog
+        open={confirming !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirming(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          {confirming && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Unlink {providerName[confirming.provider]}?</DialogTitle>
+                <DialogDescription>
+                  Signing in with {providerName[confirming.provider]} as {confirming.email_at_link} will no longer
+                  open this account — from then on it opens with its password only.
+                </DialogDescription>
+              </DialogHeader>
+              {/* The one refusal worth showing in place rather than as a toast:
+                  it says the row is still there and why, and the question it
+                  answers is still on screen. */}
+              <FormError error={unlink.error} />
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setConfirming(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={unlink.isPending}
+                  onClick={() => unlink.mutate(confirming.id)}
+                >
+                  {unlink.isPending ? 'Unlinking…' : 'Unlink'}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

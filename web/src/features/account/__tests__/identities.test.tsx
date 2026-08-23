@@ -12,6 +12,7 @@
 
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { Toaster } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { Me } from '../../../lib/api'
@@ -41,15 +42,32 @@ const linked: StubRoute = {
   body: { items: [identity], next_cursor: null },
 }
 
-function renderAccount({ me = user, routes = [] }: { me?: Me; routes?: StubRoute[] } = {}) {
+/**
+ * The `<Toaster>` is the one from `main.tsx`: what the screen says back after an
+ * unlink is a toast, and without a toaster mounted `toast.success(...)` is a
+ * call into a store that renders nowhere — which a test asserting the call,
+ * rather than the sentence, would never notice.
+ */
+function renderAccount({
+  me = user,
+  routes = [],
+  google = true,
+}: { me?: Me; routes?: StubRoute[]; google?: boolean } = {}) {
   const calls = stubFetch([
-    { path: '/api/auth/sessions', body: { items: [], next_cursor: null } },
     ...routes,
+    { path: '/api/auth/sessions', body: { items: [], next_cursor: null } },
+    { path: '/api/auth/providers', body: { google } },
   ])
-  const rendered = renderApp(<AccountPage />, {
-    route: '/account',
-    seed: (client) => client.setQueryData(meKey, me),
-  })
+  const rendered = renderApp(
+    <>
+      <AccountPage />
+      <Toaster />
+    </>,
+    {
+      route: '/account',
+      seed: (client) => client.setQueryData(meKey, me),
+    },
+  )
   return { calls, ...rendered }
 }
 
@@ -100,17 +118,66 @@ describe('unlinking', () => {
     ).toBeTruthy()
   })
 
-  it('sends the DELETE with the CSRF header and drops the row', async () => {
+  it('asks first, and asks the server nothing until the answer is yes', async () => {
     const { calls } = renderAccount({
       routes: [linked, { method: 'DELETE', path: '/api/auth/identities/id-1', status: 204 }],
     })
 
     await userEvent.click(await within(methods()).findByRole('button', { name: 'Unlink' }))
 
+    // The row's Unlink sits where the session list's Revoke sits, in the same
+    // variant and size, and there is no undo behind it.
+    const asking = await screen.findByRole('dialog')
+    expect(within(asking).getByRole('heading', { name: 'Unlink Google?' })).toBeTruthy()
+    expect(within(asking).getByText(/ada@example\.test/)).toBeTruthy()
+    expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(0)
+
+    await userEvent.click(within(asking).getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(0)
+    expect(within(methods()).getByRole('listitem')).toBeTruthy()
+  })
+
+  it('sends the DELETE with the CSRF header and drops the row', async () => {
+    const { calls } = renderAccount({
+      routes: [linked, { method: 'DELETE', path: '/api/auth/identities/id-1', status: 204 }],
+    })
+
+    await userEvent.click(await within(methods()).findByRole('button', { name: 'Unlink' }))
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Unlink' }))
+
     await waitFor(() => expect(within(methods()).queryByRole('listitem')).toBeNull())
+    expect(await screen.findByText('Sign-in method removed')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
     const sent = calls.find((c) => c.method === 'DELETE')
     expect(sent?.url).toBe('/api/auth/identities/id-1')
     expect(sent?.headers.get('X-Drive-Client')).toBe('web')
+  })
+
+  it('drops a row the server no longer has a link for', async () => {
+    renderAccount({
+      routes: [
+        linked,
+        {
+          method: 'DELETE',
+          path: '/api/auth/identities/id-1',
+          status: 404,
+          body: { code: 'not_found', message: 'no such identity' },
+        },
+      ],
+    })
+
+    await userEvent.click(await within(methods()).findByRole('button', { name: 'Unlink' }))
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Unlink' }))
+
+    // The link went between this list being fetched and the click — another
+    // tab, another device. The row describes something that is already gone,
+    // and leaving it on screen with a live Unlink is the one outcome that is
+    // wrong whichever way it is read.
+    await waitFor(() => expect(within(methods()).queryByRole('listitem')).toBeNull())
+    expect(await screen.findByText('That sign-in method was already removed')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('shows the server’s refusal and keeps the row on a 409', async () => {
@@ -127,11 +194,18 @@ describe('unlinking', () => {
     })
 
     await userEvent.click(await within(methods()).findByRole('button', { name: 'Unlink' }))
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Unlink' }))
 
     expect(
       await screen.findByText('That is the only way to sign in to this account.'),
     ).toBeTruthy()
-    expect(within(methods()).getByRole('listitem')).toBeTruthy()
+    // By role the page is hidden behind the open dialog, so the row is looked
+    // for by its text: it is still there, which is the half of the refusal the
+    // wording is about.
+    expect(screen.getByText(/Google · ada@example\.test/)).toBeTruthy()
+    // Still asking: the refusal is about the row the question names, and
+    // closing on it would put the answer behind the screen it was asked from.
+    expect(screen.getByRole('dialog')).toBeTruthy()
   })
 })
 
