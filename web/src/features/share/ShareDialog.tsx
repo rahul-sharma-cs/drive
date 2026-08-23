@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useRef, useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 
-import { ApiError, type DriveNode, type Share, type ShareSettings } from '../../lib/api'
+import { ApiError, type DriveNode, type Share, type ShareSettingsPatch } from '../../lib/api'
 import { fieldClass, FormError, SkeletonRows } from '../../ui/controls'
 import { formatUntil } from '../../ui/when'
 import { isAcceptablePassword, passwordHint } from '../auth/password'
@@ -210,11 +210,12 @@ interface Fields {
 }
 
 /**
- * Turns the fields into the wire triple. A preset is counted from now, at the
- * moment of the submit; a chosen day lasts until the end of that day, which is
- * what a person picking "the 30th" means by it.
+ * The two wire fields that are always sent. A preset is counted from now, at
+ * the moment of the submit; a chosen day lasts until the end of that day,
+ * which is what a person picking "the 30th" means by it. The password is not
+ * here — it reaches the wire only when the person acted on it.
  */
-function toSettings(fields: Fields): ShareSettings {
+function toSettings(fields: Fields): { expires_at: string | null; max_downloads: number | null } {
   let expires_at: string | null = null
   if (fields.expiry === '1d') expires_at = new Date(Date.now() + DAY_MS).toISOString()
   else if (fields.expiry === '7d') expires_at = new Date(Date.now() + 7 * DAY_MS).toISOString()
@@ -226,7 +227,6 @@ function toSettings(fields: Fields): ShareSettings {
   const limit = fields.limit.trim() === '' ? null : Number(fields.limit)
   return {
     expires_at,
-    password: fields.password === '' ? null : fields.password,
     max_downloads: limit !== null && Number.isFinite(limit) ? Math.floor(limit) : null,
   }
 }
@@ -234,14 +234,12 @@ function toSettings(fields: Fields): ShareSettings {
 function SettingsFields({
   fields,
   onChange,
-  passwordBad,
-  hasPassword,
+  password,
 }: {
   fields: Fields
   onChange: (next: Fields) => void
-  passwordBad: boolean
-  /** Editing a share that has one: an empty field turns it off, and says so. */
-  hasPassword: boolean
+  /** The password control: a plain optional field on create, the tri-state on settings. */
+  password: ReactNode
 }) {
   return (
     <>
@@ -266,33 +264,7 @@ function SettingsFields({
         </label>
       )}
 
-      <div className="flex flex-col gap-1.5">
-        <label className={fieldClass}>
-          Password
-          <Input
-            type={fields.showPassword ? 'text' : 'password'}
-            autoComplete="off"
-            aria-invalid={passwordBad || undefined}
-            aria-describedby="share-password-hint"
-            value={fields.password}
-            onChange={(e) => onChange({ ...fields, password: e.target.value })}
-          />
-        </label>
-        <label className="flex items-center gap-2 text-[13px] text-ink-2">
-          <input
-            type="checkbox"
-            checked={fields.showPassword}
-            onChange={(e) => onChange({ ...fields, showPassword: e.target.checked })}
-          />
-          Show password
-        </label>
-        {/* The rule, on screen before it is broken — the sign-up form's line. */}
-        <p id="share-password-hint" className={`text-[13px] ${passwordBad ? 'text-danger' : 'text-ink-3'}`}>
-          {hasPassword && fields.password === ''
-            ? 'Leave it empty to turn the password off, or enter a new one.'
-            : `Optional. ${passwordHint(fields.password)}.`}
-        </p>
-      </div>
+      {password}
 
       <label className={fieldClass}>
         Download limit
@@ -308,6 +280,46 @@ function SettingsFields({
         />
       </label>
     </>
+  )
+}
+
+function PasswordField({
+  fields,
+  onChange,
+  bad,
+  hint,
+}: {
+  fields: Fields
+  onChange: (next: Fields) => void
+  bad: boolean
+  hint: string
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className={fieldClass}>
+        Password
+        <Input
+          type={fields.showPassword ? 'text' : 'password'}
+          autoComplete="off"
+          aria-invalid={bad || undefined}
+          aria-describedby="share-password-hint"
+          value={fields.password}
+          onChange={(e) => onChange({ ...fields, password: e.target.value })}
+        />
+      </label>
+      <label className="flex items-center gap-2 text-[13px] text-ink-2">
+        <input
+          type="checkbox"
+          checked={fields.showPassword}
+          onChange={(e) => onChange({ ...fields, showPassword: e.target.checked })}
+        />
+        Show password
+      </label>
+      {/* The rule, on screen before it is broken — the sign-up form's line. */}
+      <p id="share-password-hint" className={`text-[13px] ${bad ? 'text-danger' : 'text-ink-3'}`}>
+        {hint}
+      </p>
+    </div>
   )
 }
 
@@ -330,7 +342,8 @@ function CreateForm({ node }: { node: DriveNode }) {
     password.judge()
     if (!password.acceptable) return
     create.mutate(
-      { nodeId: node.id, settings: toSettings(fields) },
+      // All four keys, null for "none": a create has no current state to keep.
+      { nodeId: node.id, settings: { ...toSettings(fields), password: fields.password === '' ? null : fields.password } },
       {
         // A 409 is a link that already exists — made in another tab, or
         // between this dialog opening and the click. Re-reading puts that
@@ -348,7 +361,18 @@ function CreateForm({ node }: { node: DriveNode }) {
 
   return (
     <form noValidate onSubmit={onSubmit} className="flex flex-col gap-3">
-      <SettingsFields fields={fields} onChange={setFields} passwordBad={password.bad} hasPassword={false} />
+      <SettingsFields
+        fields={fields}
+        onChange={setFields}
+        password={
+          <PasswordField
+            fields={fields}
+            onChange={setFields}
+            bad={password.bad}
+            hint={`Optional. ${passwordHint(fields.password)}.`}
+          />
+        }
+      />
       {!exists && <FormError error={create.error} />}
       <div className="flex justify-end pt-1">
         <Button type="submit" disabled={create.isPending}>
@@ -359,6 +383,9 @@ function CreateForm({ node }: { node: DriveNode }) {
   )
 }
 
+/** What the person has said about the password so far. Untouched means untouched. */
+type PasswordAction = 'keep' | 'clear' | 'set'
+
 function SettingsForm({ share, onDone }: { share: Share; onDone: () => void }) {
   const update = useUpdateShareSettings()
   const [fields, setFields] = useState<Fields>({
@@ -368,26 +395,83 @@ function SettingsForm({ share, onDone }: { share: Share; onDone: () => void }) {
     showPassword: false,
     limit: share.max_downloads === null ? '' : String(share.max_downloads),
   })
-  const password = usePasswordJudged(fields)
+  // Mirrors the wire's tri-state: absent keeps, null clears, a string sets.
+  // A link with no password starts at 'set', where an empty field still sends
+  // nothing — the field was never acted on.
+  const [action, setAction] = useState<PasswordAction>(share.has_password ? 'keep' : 'set')
+  const [judged, setJudged] = useState(false)
+
+  const typing = action === 'set' && fields.password !== ''
+  const bad = judged && typing && !isAcceptablePassword(fields.password)
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault()
-    password.judge()
-    if (!password.acceptable) return
-    // All three keys, every time: the server cannot tell "absent" from "clear",
-    // so a body that left out the password would be refused, and one that
-    // guessed would wipe it.
-    update.mutate({ id: share.id, settings: toSettings(fields) }, { onSuccess: onDone })
+    setJudged(true)
+    if (typing && !isAcceptablePassword(fields.password)) return
+    // Expiry and cap always; the password key only when acted on. Absent is
+    // "keep", which is what lets an expiry change leave a password standing
+    // that nobody can re-type.
+    const settings: ShareSettingsPatch = toSettings(fields)
+    if (action === 'clear') settings.password = null
+    else if (typing) settings.password = fields.password
+    update.mutate({ id: share.id, settings }, { onSuccess: onDone })
   }
+
+  const keep = (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={() => {
+        setAction('keep')
+        setFields({ ...fields, password: '' })
+      }}
+    >
+      Keep password
+    </Button>
+  )
+
+  const password =
+    action === 'keep' ? (
+      <div className={fieldClass}>
+        Password
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="font-normal text-ink-2">Password is on</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => setAction('set')}>
+            Change password
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => setAction('clear')}>
+            Remove password
+          </Button>
+        </div>
+      </div>
+    ) : action === 'clear' ? (
+      <div className={fieldClass}>
+        Password
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="font-normal text-ink-2">Comes off when you save.</p>
+          {keep}
+        </div>
+      </div>
+    ) : (
+      <div className="flex flex-col gap-1.5">
+        <PasswordField
+          fields={fields}
+          onChange={setFields}
+          bad={bad}
+          hint={
+            share.has_password
+              ? `${passwordHint(fields.password)}. Leave it empty to keep the current one.`
+              : `Optional. ${passwordHint(fields.password)}.`
+          }
+        />
+        {share.has_password && <div>{keep}</div>}
+      </div>
+    )
 
   return (
     <form noValidate onSubmit={onSubmit} className="flex flex-col gap-3">
-      <SettingsFields
-        fields={fields}
-        onChange={setFields}
-        passwordBad={password.bad}
-        hasPassword={share.has_password}
-      />
+      <SettingsFields fields={fields} onChange={setFields} password={password} />
       <FormError error={update.error} />
       <div className="flex justify-end gap-2 pt-1">
         <Button type="button" variant="outline" onClick={onDone}>

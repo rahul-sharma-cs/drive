@@ -368,15 +368,26 @@ export interface Share {
 }
 
 /**
- * The full triple, always. The server refuses a body with a key missing (422
- * `invalid`) because its PATCH idiom cannot tell "absent" from "clear" — so
- * `null` is the one way to clear a column, and a caller that wants to keep a
- * password has to say what it is.
+ * What a link is created with. All three, `null` for "none": a create has no
+ * current state to keep, so there is nothing tri-state about it.
  */
 export interface ShareSettings {
   expires_at: string | null
   password: string | null
   max_downloads: number | null
+}
+
+/**
+ * What a settings PATCH carries. `expires_at` and `max_downloads` are always
+ * sent (`null` clears / means unlimited); `password` goes on the wire only
+ * when the person acted on it — **absent** keeps the current password, `null`
+ * takes it off, a string sets a new one. That is what lets an expiry change
+ * leave a password standing without anyone re-typing it.
+ */
+export interface ShareSettingsPatch {
+  expires_at: string | null
+  max_downloads: number | null
+  password?: string | null
 }
 
 /** What a recipient is told before anything is minted. Read without a session. */
@@ -420,8 +431,10 @@ export const regenerateShare = (id: string) =>
 /**
  * The answer's shape is not relied on: every caller re-reads the share
  * through the `['shares']` invalidation rather than trusting what came back.
+ * An absent `password` key survives to the wire — `JSON.stringify` drops it —
+ * which is the "keep" of the tri-state.
  */
-export const updateShareSettings = (id: string, settings: ShareSettings) =>
+export const updateShareSettings = (id: string, settings: ShareSettingsPatch) =>
   request<unknown>('PATCH', `/shares/${id}`, settings)
 
 /** 204. The row stays, for the access log; the link stops. */

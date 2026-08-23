@@ -269,7 +269,7 @@ describe('a link that exists', () => {
     expect(await within(dialog).findByRole('button', { name: 'Create link' })).toBeTruthy()
   })
 
-  it('Settings posts all three keys, null for the ones cleared', async () => {
+  it('Settings sends expiry and cap always, and keeps an untouched password unsaid', async () => {
     const { calls, client } = renderFolder([
       { path: FOR_NODE, body: { items: [share()], next_cursor: null } },
       { method: 'PATCH', path: '/api/shares/s1', body: {} },
@@ -277,21 +277,54 @@ describe('a link that exists', () => {
 
     const dialog = await openDialog()
     await userEvent.click(await within(dialog).findByRole('button', { name: 'Settings' }))
+    // The password stands apart, on, with its own two actions — no field to
+    // re-type and nothing to wipe by accident.
+    expect(within(dialog).getByText('Password is on')).toBeTruthy()
+    expect(within(dialog).queryByLabelText('Password')).toBeNull()
     await userEvent.selectOptions(within(dialog).getByLabelText('Expires'), 'never')
     await userEvent.clear(within(dialog).getByLabelText('Download limit'))
-    // The password field is empty, and the line under it says what that means.
-    expect(within(dialog).getByText('Leave it empty to turn the password off, or enter a new one.')).toBeTruthy()
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }))
 
     await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1))
     const patch = calls.find((c) => c.method === 'PATCH')!
-    // The server cannot tell a missing key from a cleared one, and refuses the
-    // former: every key, every time.
-    expect(patch.body).toEqual({ expires_at: null, password: null, max_downloads: null })
-    expect(Object.keys(patch.body as object)).toHaveLength(3)
+    // Absent means keep: a password nobody touched never reaches the wire, so
+    // an expiry change cannot cost a password nobody can re-type.
+    expect(patch.body).toEqual({ expires_at: null, max_downloads: null })
+    expect('password' in (patch.body as object)).toBe(false)
+    expect(Object.keys(patch.body as object).sort()).toEqual(['expires_at', 'max_downloads'])
     expect(client.getQueryState(sharesKey)?.isInvalidated).toBe(true)
     // Back to the facts once saved.
     expect(await within(dialog).findByRole('button', { name: 'Settings' })).toBeTruthy()
+  })
+
+  it('removes or replaces the password only when asked to', async () => {
+    const { calls } = renderFolder([
+      { path: FOR_NODE, body: { items: [share()], next_cursor: null } },
+      { method: 'PATCH', path: '/api/shares/s1', body: {} },
+    ])
+
+    const dialog = await openDialog()
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Settings' }))
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove password' }))
+    expect(within(dialog).getByText('Comes off when you save.')).toBeTruthy()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }))
+
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1))
+    const removed = calls.filter((c) => c.method === 'PATCH')[0].body as Record<string, unknown>
+    // Null clears — and it is null, not undefined: the key is really there.
+    expect(removed.password).toBeNull()
+    expect('password' in removed).toBe(true)
+    expect(removed.max_downloads).toBe(2)
+
+    // Round two: a new password, typed on purpose.
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Settings' }))
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Change password' }))
+    await userEvent.type(within(dialog).getByLabelText('Password'), 'a brand new secret')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }))
+
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(2))
+    const set = calls.filter((c) => c.method === 'PATCH')[1].body as Record<string, unknown>
+    expect(set.password).toBe('a brand new secret')
   })
 })
 

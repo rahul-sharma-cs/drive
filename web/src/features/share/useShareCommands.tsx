@@ -20,6 +20,7 @@ import {
   updateShareSettings,
   type Share,
   type ShareSettings,
+  type ShareSettingsPatch,
 } from '../../lib/api'
 import { FormError } from '../../ui/controls'
 import { sharesKey } from './queries'
@@ -70,7 +71,7 @@ export function useRegenerateShare() {
 export function useUpdateShareSettings() {
   const invalidate = useInvalidateShares()
   return useMutation({
-    mutationFn: ({ id, settings }: { id: string; settings: ShareSettings }) => updateShareSettings(id, settings),
+    mutationFn: ({ id, settings }: { id: string; settings: ShareSettingsPatch }) => updateShareSettings(id, settings),
     onSuccess: invalidate,
   })
 }
