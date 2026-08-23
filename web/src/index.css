@@ -86,8 +86,11 @@
   /* The one type colour that is a fill rather than an outline, and so the one
      that cannot be `warn`: `--color-warn` is tuned to carry 12px text on white
      at 4.5:1, and a whole shape painted that dark reads as brown rather than
-     as the amber folder everyone already knows. */
-  --color-type-folder: #d59b34;
+     as the amber folder everyone already knows. It is still the one type
+     colour a person could be said to *need* — the folder silhouette is what
+     says "you can go in here" — so it clears 3:1 against white, the muted row
+     and the selected row alike (3.5, 3.3, 3.0). */
+  --color-type-folder: #b87d1c;
 
   /* Instrument Sans is the UI face: a grotesque with short extenders and open
      apertures, which is what keeps a 13px file name legible in a dense list.
