@@ -367,3 +367,9 @@ function NoPreviewCard({ id, node }: { id: string; node: DriveNode | undefined }
     </div>
   )
 }
+
+/**
+ * Default as well as named: the named export is what the tests reach for, and
+ * `React.lazy` in `PreviewDialog.lazy.tsx` needs the default.
+ */
+export default PreviewDialog

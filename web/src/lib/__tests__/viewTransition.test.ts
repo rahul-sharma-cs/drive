@@ -12,7 +12,19 @@ import { isPlainClick, navigateWithTransition } from '../viewTransition'
  * person who has asked for less movement, gets the folder they clicked on.
  */
 
-type Doc = Document & { startViewTransition?: unknown }
+/**
+ * The DOM lib types `startViewTransition` as always present, so a test that
+ * takes it away has to go around the type rather than through it. `as unknown`
+ * on the way in for the same reason: the stubs answer the two promises this
+ * helper reads and nothing else.
+ */
+const give = (impl: unknown) => Object.assign(document, { startViewTransition: impl })
+const takeAway = () => Reflect.deleteProperty(document, 'startViewTransition')
+
+/** `process` is real under vitest; @types/node is deliberately not installed. */
+const proc = (globalThis as unknown as {
+  process: { on: (event: string, fn: () => void) => void; off: (event: string, fn: () => void) => void }
+}).process
 
 const reducedMotion = (reduce: boolean) =>
   vi.stubGlobal('matchMedia', (media: string) => ({
@@ -23,7 +35,7 @@ const reducedMotion = (reduce: boolean) =>
   }))
 
 afterEach(() => {
-  delete (document as Doc).startViewTransition
+  takeAway()
   vi.unstubAllGlobals()
 })
 
@@ -35,7 +47,7 @@ describe('navigateWithTransition', () => {
       callback()
       return { ready: Promise.resolve(), finished: Promise.resolve() }
     })
-    ;(document as Doc).startViewTransition = start
+    give(start)
 
     const navigate = vi.fn(() => {
       inside = start.mock.calls.length === 1
@@ -60,7 +72,7 @@ describe('navigateWithTransition', () => {
   it('navigates plainly under reduced motion, without starting a transition', () => {
     reducedMotion(true)
     const start = vi.fn()
-    ;(document as Doc).startViewTransition = start
+    give(start)
 
     const navigate = vi.fn()
     navigateWithTransition(navigate)
@@ -71,21 +83,21 @@ describe('navigateWithTransition', () => {
 
   it('swallows the rejection an interrupted transition produces', async () => {
     reducedMotion(false)
-    ;(document as Doc).startViewTransition = (callback: () => void) => {
+    give((callback: () => void) => {
       callback()
       return {
         ready: Promise.reject(new DOMException('skipped', 'AbortError')),
         finished: Promise.reject(new DOMException('skipped', 'AbortError')),
       }
-    }
+    })
 
     const unhandled = vi.fn()
-    process.on('unhandledRejection', unhandled)
+    proc.on('unhandledRejection', unhandled)
     navigateWithTransition(() => {})
     // Two turns: one for the rejections to settle, one for Node to decide they
     // were never claimed.
     await new Promise((resolve) => setTimeout(resolve, 0))
-    process.off('unhandledRejection', unhandled)
+    proc.off('unhandledRejection', unhandled)
 
     expect(unhandled).not.toHaveBeenCalled()
   })

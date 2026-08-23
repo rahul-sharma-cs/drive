@@ -3,7 +3,6 @@ import { toast } from 'sonner'
 
 import { type DriveNode } from '../../lib/api'
 import {
-  archiveBytes,
   archiveName,
   blobSink,
   canStreamToDisk,
@@ -13,7 +12,6 @@ import {
   isAbort,
   liveDeps,
   MEMORY_LIMIT,
-  writeArchive,
   type ZipDeps,
   type ZipEntry,
 } from './zip'
@@ -161,6 +159,13 @@ async function run(
   // needs nothing from their answer. Both run under `ac`, so a dismissed dialog
   // stops the walk it overlapped with.
   const walking = collectSubtree(roots, ac.signal, deps)
+  // And so is client-zip, which is not in the main bundle. It is wanted only
+  // once there are bytes to write, and by then the dialog and the walk have
+  // both had their turn — so the chunk arrives inside time that was being spent
+  // anyway rather than adding any of its own. Started here rather than awaited
+  // further down for exactly that overlap.
+  const streaming = import('./archiveStream')
+  void streaming.catch(() => {})
   // Claimed now rather than only at the `await` below, which sits behind the
   // dialog: a walk that fails or is cancelled while the dialog is still open
   // would otherwise be an unhandled rejection. The promise stays rejected, so
@@ -170,6 +175,7 @@ async function run(
   try {
     const file = handle === undefined ? null : await saveTarget(handle, ac)
     const entries = await walking
+    const { archiveBytes, writeArchive } = await streaming
     const total = archiveBytes(entries)
 
     // No File System Access: the whole archive would have to be assembled in

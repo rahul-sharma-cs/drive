@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 
 import { search } from '../../lib/api'
 import { Card, EmptyState } from '../../ui/controls'
-import { PreviewDialog } from '../preview/PreviewDialog'
+import { PreviewDialog } from '../preview/PreviewDialog.lazy'
 import { FileList } from './FileList'
 import { rowActions } from './RowMenu'
 import { nodeBandActions, useNodeCommands } from './commands'

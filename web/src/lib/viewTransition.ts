@@ -19,13 +19,11 @@ import { flushSync } from 'react-dom'
  * page, runs the callback, and snapshots again — so the DOM has to have
  * actually changed by the time the callback returns, and React's default
  * batching would leave the update sitting in a queue until after.
+ *
+ * `Document.startViewTransition` is typed as always present and is not — no
+ * Safari before 18 and no Firefox before 144 has it — so the runtime check
+ * below is the real gate, whatever the DOM lib says.
  */
-type ViewTransitionDocument = Document & {
-  startViewTransition?: (callback: () => void) => {
-    ready?: Promise<void>
-    finished?: Promise<void>
-  }
-}
 
 /** Reduced motion asks for no crossfade at all here: it is pure movement. */
 function wantsMotion(): boolean {
@@ -33,17 +31,16 @@ function wantsMotion(): boolean {
 }
 
 export function navigateWithTransition(navigate: () => void): void {
-  const doc = document as ViewTransitionDocument
-  if (typeof doc.startViewTransition !== 'function' || !wantsMotion()) {
+  if (typeof document.startViewTransition !== 'function' || !wantsMotion()) {
     navigate()
     return
   }
-  const transition = doc.startViewTransition(() => flushSync(navigate))
+  const transition = document.startViewTransition(() => flushSync(navigate))
   // A transition interrupted by the next one rejects both of these. That is an
   // ordinary outcome — somebody clicked twice — and must not surface as an
   // unhandled rejection.
-  transition.ready?.catch(() => {})
-  transition.finished?.catch(() => {})
+  transition.ready.catch(() => {})
+  transition.finished.catch(() => {})
 }
 
 /**

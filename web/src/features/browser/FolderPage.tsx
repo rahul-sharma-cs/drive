@@ -3,7 +3,7 @@ import { useParams } from 'react-router'
 
 import { EmptyState } from '../../ui/controls'
 import { useSession } from '../auth/session'
-import { PreviewDialog } from '../preview/PreviewDialog'
+import { PreviewDialog } from '../preview/PreviewDialog.lazy'
 import { DropZone } from '../upload/ui/DropZone'
 import { Breadcrumbs } from './Breadcrumbs'
 import { FileList } from './FileList'

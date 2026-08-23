@@ -153,8 +153,11 @@ describe('opening a preview', () => {
     // A location, not a mode: the id is in the URL, so the viewer is linkable
     // and the back button closes it.
     await waitFor(() => expect(where()).toBe('?preview=f2'))
+    // Waited for rather than read: the viewer is a lazy chunk, so the URL
+    // changes on the click and the request goes out on the tick the chunk
+    // lands. Both still happen from one click, which is what this asserts.
+    await waitFor(() => expect(previewCalls(calls, 'f2')).toHaveLength(1))
     const asked = previewCalls(calls, 'f2')
-    expect(asked).toHaveLength(1)
     // The link itself is an API call like any other and carries the CSRF header.
     expect(asked[0].headers.get('X-Drive-Client')).toBe('web')
 
