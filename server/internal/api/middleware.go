@@ -92,7 +92,15 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		start := time.Now()
 
-		next.ServeHTTP(ww, r.WithContext(context.WithValue(r.Context(), loggerKey{}, l)))
+		r = r.WithContext(context.WithValue(r.Context(), loggerKey{}, l))
+		// The caller's address is resolved here, once, and everything
+		// downstream reads that answer: the rule logs when it will not trust a
+		// forwarded header, and three separate layers ask for the address on a
+		// single request. The logger goes on the context first so that line
+		// carries the request id.
+		r = withResolvedClientIP(r)
+
+		next.ServeHTTP(ww, r)
 
 		l.Debug("request",
 			"method", r.Method,

@@ -708,9 +708,10 @@ func (s *Server) requestAccountMail(w http.ResponseWriter, r *http.Request, purp
 		return
 	}
 
-	if s.MailRate != nil && !s.MailRate.allow(ClientIP(r)) {
+	ip := ClientIP(r)
+	if s.MailRate != nil && !s.MailRate.allow(ip) {
 		LoggerFrom(r.Context()).Warn("mail request refused by the per-IP bucket",
-			"client_ip", ClientIP(r), "path", r.URL.Path)
+			"client_ip", ip, "path", r.URL.Path)
 		WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
 			"too many requests. Try again later.")
 		return

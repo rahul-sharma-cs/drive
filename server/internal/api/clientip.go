@@ -8,6 +8,7 @@ package api
 // user in the world together under one proxy address and lock them out as a set.
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -35,7 +36,32 @@ import (
 // assumption is checked in deployment with a forged-header request from
 // outside; if a spoofed value ever survives, a trusted-proxy list has to land
 // before the service is shared.
+//
+// It resolves the address at most once per request. The rule writes a log line
+// for a header it will not trust, and several layers ask for the address on the
+// same request -- the bucket in front of /api/auth, the mail bucket behind it,
+// the audit column on login -- so without this every one of those layers would
+// repeat the same complaint. requestLogger seeds the context; a request that
+// never went through it (a unit test, a handler called directly) still gets an
+// answer, it is simply computed on the spot.
 func ClientIP(r *http.Request) string {
+	if ip, ok := r.Context().Value(clientIPKey{}).(string); ok {
+		return ip
+	}
+	return resolveClientIP(r)
+}
+
+// clientIPKey carries the resolved address on the request context.
+type clientIPKey struct{}
+
+// withResolvedClientIP resolves the address and returns a request carrying it.
+// Called once, by requestLogger, after the request logger is in place so the
+// untrusted-header line lands with a request_id like every other line.
+func withResolvedClientIP(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), clientIPKey{}, resolveClientIP(r)))
+}
+
+func resolveClientIP(r *http.Request) string {
 	direct := remoteHost(r)
 
 	forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
@@ -193,9 +219,10 @@ func (l *ipLimiter) sweepLocked(now time.Time) {
 // additionally reaches the mail sender.
 func (s *Server) RateLimitAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.AuthRate != nil && !s.AuthRate.allow(ClientIP(r)) {
+		ip := ClientIP(r)
+		if s.AuthRate != nil && !s.AuthRate.allow(ip) {
 			LoggerFrom(r.Context()).Warn("auth request refused by the per-IP bucket",
-				"client_ip", ClientIP(r), "path", r.URL.Path)
+				"client_ip", ip, "path", r.URL.Path)
 			WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
 				"too many requests. Try again in a minute.")
 			return

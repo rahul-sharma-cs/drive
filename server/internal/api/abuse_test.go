@@ -9,9 +9,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -242,6 +244,91 @@ func TestMailRequestsAreBucketedPerAddress(t *testing.T) {
 	if got := abuseDo(t, h, http.MethodPost, "/api/auth/resend-verification",
 		map[string]string{"email": "nobody@drive.test"}, "203.0.113.7").Code; got != http.StatusTooManyRequests {
 		t.Errorf("resend-verification answered %d from an address that had spent its mail allowance, want 429", got)
+	}
+}
+
+// ------------------------------------------------------------ log volume --
+
+// recordingLog is a slog.Handler that keeps every record's level and message,
+// so a test can count lines instead of eyeballing them. The mutex is not
+// decoration: the mail endpoints dispatch their send off the request goroutine
+// with the same request logger.
+type recordingLog struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingLog) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingLog) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *recordingLog) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingLog) WithGroup(string) slog.Handler      { return h }
+
+// count returns how many records carry exactly this level and message.
+func (h *recordingLog) count(level slog.Level, msg string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, r := range h.records {
+		if r.Level == level && r.Message == msg {
+			n++
+		}
+	}
+	return n
+}
+
+// A request whose forwarded header cannot be trusted says so once, not twice.
+//
+// ClientIP logs when it refuses to believe the header, and both bucket call
+// sites used to resolve the address a second time inside the refusal branch --
+// so precisely the requests that arrive during a flood wrote the line twice.
+// The cost is log volume on the one platform where log volume is billed, and it
+// hides the count: two lines per request makes an attack look twice its size.
+func TestAnUntrustedForwardedHeaderIsLoggedOncePerRequest(t *testing.T) {
+	rec := &recordingLog{}
+	pool := authTestPool(t)
+	s := New(&config.Config{BaseURL: authTestBaseURL}, pool, slog.New(rec),
+		&authRecordingSender{}, nil, nil)
+	h := s.Routes()
+
+	// A private leftmost entry is not something the edge writes, so every
+	// request below distrusts the header -- and each must account for exactly
+	// one line.
+	const forged = "10.1.2.3"
+	requests := 0
+
+	// The mail bucket first, while the auth bucket still has tokens: past its
+	// allowance, so its own refusal branch runs.
+	for i := 0; i <= DefaultMailRatePerHour; i++ {
+		abuseDo(t, h, http.MethodPost, "/api/auth/password-reset",
+			map[string]string{"email": "nobody-" + uuid.NewString() + "@drive.test"}, forged)
+		requests++
+	}
+	// Then the auth bucket, spent past its burst.
+	for i := 0; i < int(burstFor(DefaultAuthRatePerMin)); i++ {
+		abuseDo(t, h, http.MethodPost, "/api/auth/verify-email",
+			map[string]string{"token": "nope"}, forged)
+		requests++
+	}
+
+	// Both refusal branches really ran; otherwise this test would pass on a
+	// build where neither was reached.
+	if n := rec.count(slog.LevelWarn, "mail request refused by the per-IP bucket"); n == 0 {
+		t.Fatal("the mail bucket never refused anything; its call site was not exercised")
+	}
+	if n := rec.count(slog.LevelWarn, "auth request refused by the per-IP bucket"); n == 0 {
+		t.Fatal("the auth bucket never refused anything; its call site was not exercised")
+	}
+
+	const line = "untrustworthy X-Forwarded-For; keying on the peer address instead"
+	if got := rec.count(slog.LevelError, line); got != requests {
+		t.Errorf("%d %q lines for %d requests, want one each", got, line, requests)
 	}
 }
 

@@ -450,12 +450,28 @@ func guardLocalEndpoint(endpoint string) error {
 	if err != nil {
 		return fmt.Errorf("DRIVE_S3_ENDPOINT: not a valid URL: %w", err)
 	}
-	switch u.Hostname() {
-	case "localhost", "127.0.0.1", "::1", "garage", "":
+
+	// The scheme is checked before the host, because without one there is no
+	// host to check. url.Parse never fails on a scheme-less value: it reads
+	// "garage:3900" as the scheme "garage" and
+	// "0123456789abcdef.r2.example.com" as a bare path, and both leave
+	// Hostname() empty. Treating empty as local -- which is what the switch
+	// below used to do -- meant a hosted endpoint typed without its https://
+	// was the one value that sailed through the guard.
+	host := u.Hostname()
+	if (u.Scheme != "http" && u.Scheme != "https") || host == "" {
+		return fmt.Errorf(
+			"DRIVE_S3_ENDPOINT: %q is not an http:// or https:// URL. Without a scheme there is "+
+				"no hostname to check, and this guard exists to tell a local store from a hosted "+
+				"one", endpoint)
+	}
+
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "garage":
 		return nil
 	}
 	return fmt.Errorf(
 		"refusing to bootstrap %s: infra-init brings up the local docker stack and writes a bucket CORS rule "+
 			"naming a localhost origin, which would overwrite a hosted store's own rule. It only ever runs "+
-			"against the local Garage", u.Hostname())
+			"against the local Garage", host)
 }
