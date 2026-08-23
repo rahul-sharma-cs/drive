@@ -247,6 +247,43 @@ func TestMailRequestsAreBucketedPerAddress(t *testing.T) {
 	}
 }
 
+// Two tests sharing a handler must not share a rate bucket.
+//
+// httptest.NewRequest gives every request it builds the same peer address, and
+// the bucket is keyed by address, so the whole package used to knock from one
+// caller. The limiters are per-Server and every test here builds its own, which
+// is the only reason nothing has bled yet -- and it is a property of the test
+// setup, not of anything under test. A package-level server, or a t.Parallel
+// group, and the first test to spend a burst quietly starts refusing the next
+// one, which fails somewhere else entirely.
+func TestEachTestSpeaksFromItsOwnAddress(t *testing.T) {
+	h, _, _ := authTestServer(t)
+	mine := testClientAddr(t)
+
+	spend := func(t *testing.T) int {
+		return authDo(t, h, http.MethodPost, "/api/auth/verify-email",
+			map[string]string{"token": "nope"}, nil).Code
+	}
+
+	for i := 1; i <= int(burstFor(DefaultAuthRatePerMin)); i++ {
+		if got := spend(t); got == http.StatusTooManyRequests {
+			t.Fatalf("request %d of this test's own burst was refused", i)
+		}
+	}
+	if got := spend(t); got != http.StatusTooManyRequests {
+		t.Fatalf("status %d past the burst, want 429 -- this test never emptied its bucket, so what follows proves nothing", got)
+	}
+
+	t.Run("the neighbour", func(t *testing.T) {
+		if addr := testClientAddr(t); addr == mine {
+			t.Fatalf("both tests speak from %s", addr)
+		}
+		if got := spend(t); got == http.StatusTooManyRequests {
+			t.Error("refused on the same handler, by a bucket the previous test emptied")
+		}
+	})
+}
+
 // ------------------------------------------------------------ log volume --
 
 // recordingLog is a slog.Handler that keeps every record's level and message,

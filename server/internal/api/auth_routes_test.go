@@ -234,6 +234,7 @@ func authDo(t *testing.T, h http.Handler, method, path string, body any, cookie 
 	req := httptest.NewRequest(method, path, reader)
 	req.Header.Set(ClientHeader, "web")
 	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = testClientAddr(t)
 	if cookie != nil {
 		req.AddCookie(cookie)
 	}
@@ -241,6 +242,44 @@ func authDo(t *testing.T, h http.Handler, method, path string, body any, cookie 
 	h.ServeHTTP(rec, req)
 	return rec
 }
+
+// testClientAddr is a peer address no other test in this package shares, and
+// the same one every time within a test.
+//
+// httptest.NewRequest stamps every request it builds with 192.0.2.1:1234, so
+// without this the whole package speaks from a single address -- and a single
+// address is exactly one per-IP bucket. Nothing bleeds today, because the
+// limiters live on the Server and every test here builds its own; the moment
+// two tests share a handler (a package-level server, a t.Parallel group) the
+// first one to spend a burst starts refusing the second, and the failure lands
+// in whichever test happened to run after the limiter test rather than in the
+// limiter test itself.
+//
+// Stable within a test, because the tests that measure a bucket depend on their
+// own requests sharing one: TestMeIsNotInThePerIPBucket spends twenty tokens
+// across signup, verification, login and twenty-one /me calls, and the point it
+// is making is that they are all the same caller.
+//
+// The addresses come from the IPv6 documentation prefix (RFC 3849's
+// 2001:db8::/32) rather than RFC 5737's three /24s, for room: auth_sessions.ip
+// is an inet column, so this has to be a real address, and the package has more
+// tests than a /24 has hosts to give one each.
+func testClientAddr(t testing.TB) string {
+	t.Helper()
+	testAddrMu.Lock()
+	defer testAddrMu.Unlock()
+	if addr, ok := testAddrs[t.Name()]; ok {
+		return addr
+	}
+	addr := fmt.Sprintf("[2001:db8::%x]:41234", len(testAddrs)+1)
+	testAddrs[t.Name()] = addr
+	return addr
+}
+
+var (
+	testAddrMu sync.Mutex
+	testAddrs  = map[string]string{}
+)
 
 func authCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 	t.Helper()
@@ -1462,6 +1501,7 @@ func TestPasswordResetAnswersWhileTheSendIsStillInFlight(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/password-reset", strings.NewReader(string(body)))
 	req.Header.Set(ClientHeader, "web")
 	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = testClientAddr(t)
 	rec := httptest.NewRecorder()
 
 	// Served on a goroutine of its own, because the whole question is whether
@@ -1744,6 +1784,7 @@ func TestSessionListCapsTheUserAgentInRunes(t *testing.T) {
 	req.Header.Set(ClientHeader, "web")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", ua)
+	req.RemoteAddr = testClientAddr(t)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
