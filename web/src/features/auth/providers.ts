@@ -13,7 +13,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { getProviders } from '../../lib/api'
 
-export const providersKey = ['auth', 'providers'] as const
+const providersKey = ['auth', 'providers'] as const
 
 export function useProviders(): { google: boolean } {
   const { data } = useQuery({

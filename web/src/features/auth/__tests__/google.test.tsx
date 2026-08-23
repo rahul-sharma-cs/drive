@@ -16,6 +16,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { renderApp, stubFetch, type StubRoute } from '../../../test/render'
+import { GOOGLE_START } from '../GoogleButton'
 import { meKey } from '../session'
 import { LoginPage } from '../LoginPage'
 import { SignupPage } from '../SignupPage'
@@ -29,18 +30,25 @@ afterEach(() => {
 const googleLink = () => screen.findByRole('link', { name: 'Continue with Google' })
 
 describe('the button appears only where the deployment offers it', () => {
+  it('points at the route the server serves, not a client path', () => {
+    // The one place the literal is spelled out rather than imported: every
+    // other assertion here reads it off the module, so this is what stops a
+    // rename on this side from agreeing with itself.
+    expect(GOOGLE_START).toBe('/api/auth/google/start')
+  })
+
   it('renders on the sign-in screen when the server says google', async () => {
     stubFetch([configured])
     renderApp(<LoginPage />, { route: '/login' })
 
-    expect((await googleLink()).getAttribute('href')).toBe('/api/auth/google/start')
+    expect((await googleLink()).getAttribute('href')).toBe(GOOGLE_START)
   })
 
   it('renders on the sign-up screen when the server says google', async () => {
     stubFetch([configured])
     renderApp(<SignupPage />, { route: '/signup' })
 
-    expect((await googleLink()).getAttribute('href')).toBe('/api/auth/google/start')
+    expect((await googleLink()).getAttribute('href')).toBe(GOOGLE_START)
   })
 
   it('renders on neither screen when the server says it is not configured', async () => {
@@ -67,11 +75,27 @@ describe('pressing it is a navigation, not a request', () => {
 
     const link = await googleLink()
     expect(link.tagName).toBe('A')
-    // jsdom refuses the navigation itself ("Not implemented: navigation to
-    // another Document"), which is exactly the proof wanted: the click left the
-    // document rather than being handled inside it.
+    // A `<Link to>` renders an `<a>` with this exact href too, so the tag and
+    // the address prove nothing on their own. react-router stamps
+    // `data-discover` on every SPA link it draws; a plain anchor never has it.
+    expect(link.getAttribute('data-discover')).toBeNull()
+
+    // And the click: a routed link calls preventDefault on its way past, which
+    // is the failure this file exists to catch — no request is made either way,
+    // so "fetched nothing" is true of the broken version as well. jsdom refuses
+    // the real navigation ("Not implemented: navigation to another Document"),
+    // which is what a click that left the document looks like from in here.
+    let prevented: boolean | undefined
+    document.addEventListener(
+      'click',
+      (e) => {
+        prevented = e.defaultPrevented
+      },
+      { once: true },
+    )
     await userEvent.click(link)
 
+    expect(prevented).toBe(false)
     expect(calls.filter((c) => c.url.includes('/auth/google'))).toEqual([])
   })
 })

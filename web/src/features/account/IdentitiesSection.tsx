@@ -8,7 +8,7 @@ import { FormError, SkeletonRows } from '../../ui/controls'
 import { formatWhen } from '../../ui/when'
 import { useSession } from '../auth/session'
 
-export const identitiesKey = ['auth', 'identities'] as const
+const identitiesKey = ['auth', 'identities'] as const
 
 const providerName: Record<Identity['provider'], string> = { google: 'Google' }
 
