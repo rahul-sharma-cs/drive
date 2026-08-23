@@ -58,10 +58,17 @@ var ErrInvalidToken = errors.New("auth: token is invalid, expired or already use
 
 // Account is a user plus the id of their root folder.
 type Account struct {
-	ID              uuid.UUID
-	Email           string
-	DisplayName     string
-	PasswordHash    string
+	ID          uuid.UUID
+	Email       string
+	DisplayName string
+	// PasswordHash is nil for an account whose only sign-in method is an
+	// external identity -- users.password_hash is nullable since migration
+	// 0005. It is a pointer and not a string coalesced to "" on purpose:
+	// VerifyPassword("") does not answer "wrong password", it answers
+	// ErrBadHash, which the login handler turns into a 500. That would be both
+	// a bug and an oracle -- a 500 for an identity-only account and a 401 for
+	// every other address separates the two.
+	PasswordHash    *string
 	RootID          uuid.UUID
 	EmailVerifiedAt *time.Time
 }
@@ -111,7 +118,7 @@ func CreateUser(ctx context.Context, pool *pgxpool.Pool, email, passwordHash, di
 	if err := tx.Commit(ctx); err != nil {
 		return nil, false, fmt.Errorf("auth: creating user: %w", err)
 	}
-	return &Account{ID: id, Email: email, DisplayName: displayName, PasswordHash: passwordHash, RootID: rootID}, true, nil
+	return &Account{ID: id, Email: email, DisplayName: displayName, PasswordHash: &passwordHash, RootID: rootID}, true, nil
 }
 
 // FindUserByEmail returns the account for email, or (nil, nil) if there is

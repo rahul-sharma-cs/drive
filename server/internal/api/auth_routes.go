@@ -73,6 +73,12 @@ const mailSendTimeout = 30 * time.Second
 // password, so it keeps the bucket even though it is authenticated.
 func (s *Server) mountAuth(r chi.Router) {
 	r.Route("/auth", func(r chi.Router) {
+		// Which sign-in methods this deployment offers. Deliberately outside
+		// the bucket: it is a static fact, it is the first thing the sign-in
+		// screen asks for, and a caller who has just spent their allowance
+		// would otherwise be shown a screen missing half its buttons.
+		r.Get("/providers", s.authProviders)
+
 		r.Group(func(r chi.Router) {
 			r.Use(s.RateLimitAuth)
 
@@ -119,6 +125,18 @@ type authMeResponse struct {
 	DisplayName     string     `json:"display_name"`
 	RootID          uuid.UUID  `json:"root_id"`
 	EmailVerifiedAt *time.Time `json:"email_verified_at"`
+	// HasPassword is false for an account that signs in with an identity
+	// provider and has never set a password. The account screen needs it to
+	// know whether to offer a change-password form or a set-a-password one, and
+	// it rides here rather than on its own endpoint because every client
+	// already has this body.
+	HasPassword bool `json:"has_password"`
+}
+
+// authProvidersResponse is the body of GET /auth/providers: one key per
+// external sign-in method, true when this deployment is configured for it.
+type authProvidersResponse struct {
+	Google bool `json:"google"`
 }
 
 type authSignupRequest struct {
@@ -410,9 +428,15 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 
 	// An unknown address still pays for a full Argon2 verification, so the
 	// response time does not separate "no such user" from "wrong password".
+	//
+	// An account with no password -- one that signs in with Google and has
+	// never set one -- takes the same branch as an unknown address, and for the
+	// same reason. Verifying against a nil hash coalesced to "" would not fail
+	// the comparison, it would fail to parse, which is a 500 and a perfectly
+	// good oracle for "this address exists but signs in another way".
 	stored := decoyHash()
-	if acct != nil {
-		stored = acct.PasswordHash
+	if acct != nil && acct.PasswordHash != nil {
+		stored = *acct.PasswordHash
 	}
 	ok, err := s.Argon2.Verify(stored, req.Password)
 	if errors.Is(err, auth.ErrBusy) {
@@ -452,13 +476,35 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	s.setSessionCookie(w, raw)
 
 	LoggerFrom(ctx).Info("login", "user_id", acct.ID, "session_id", sess.ID)
-	WriteJSON(w, http.StatusOK, authMeResponse{
-		ID:              acct.ID,
-		Email:           acct.Email,
-		DisplayName:     acct.DisplayName,
-		RootID:          acct.RootID,
-		EmailVerifiedAt: acct.EmailVerifiedAt,
-	})
+	// Through meDTO, not a literal built here. The SPA seeds its /me cache
+	// straight from this body and never refetches, so a field that exists in
+	// one shape and not the other is a field the whole session is wrong about.
+	WriteJSON(w, http.StatusOK, meDTO(userFromAccount(acct)))
+}
+
+// userFromAccount is the account as the request-scoped user, for the one caller
+// that has the former and owes a client the latter. SessionID is deliberately
+// left zero: nothing in the /me shape reads it.
+func userFromAccount(a *auth.Account) *User {
+	return &User{
+		ID:              a.ID,
+		Email:           a.Email,
+		DisplayName:     a.DisplayName,
+		RootID:          a.RootID,
+		EmailVerifiedAt: a.EmailVerifiedAt,
+		HasPassword:     a.PasswordHash != nil,
+	}
+}
+
+// authProviders reports which sign-in methods this deployment offers besides
+// the email and password every deployment has.
+//
+// It is the feature flag the SPA reads before deciding whether to render a
+// "Continue with Google" button, and it leaks nothing: whether a Drive has a
+// Google client configured is visible from the sign-in screen of any deployment
+// that has one.
+func (s *Server) authProviders(w http.ResponseWriter, r *http.Request) {
+	WriteJSON(w, http.StatusOK, authProvidersResponse{Google: s.Cfg.UseGoogle()})
 }
 
 // authLogout revokes the session server-side and clears the cookie. It answers
@@ -560,7 +606,18 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ok, err := s.Argon2.Verify(acct.PasswordHash, req.CurrentPassword)
+	if acct.PasswordHash == nil {
+		// This account signs in with Google and has never had a password, so
+		// there is no current one to prove. The way to get one is the reset
+		// link, which proves mailbox control instead -- and that is not an
+		// oracle: the caller is authenticated as themselves and is being told
+		// about their own account.
+		WriteErr(w, r, http.StatusConflict, CodeUnsupported,
+			"this account has no password yet — use the emailed link to set one")
+		return
+	}
+
+	ok, err := s.Argon2.Verify(*acct.PasswordHash, req.CurrentPassword)
 	if errors.Is(err, auth.ErrBusy) {
 		s.authBusy(w, r)
 		return
@@ -822,6 +879,7 @@ func meDTO(u *User) authMeResponse {
 		DisplayName:     u.DisplayName,
 		RootID:          u.RootID,
 		EmailVerifiedAt: u.EmailVerifiedAt,
+		HasPassword:     u.HasPassword,
 	}
 }
 

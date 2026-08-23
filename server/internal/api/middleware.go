@@ -34,6 +34,11 @@ type User struct {
 	DisplayName     string
 	RootID          uuid.UUID
 	EmailVerifiedAt *time.Time
+	// HasPassword says whether users.password_hash is set. It is the boolean
+	// and not the hash on purpose: the account screen needs to know which
+	// password section to render, and nothing in a request needs the credential
+	// itself -- the one handler that does reads it from the database.
+	HasPassword bool
 	// SessionID is the auth_sessions row this request arrived on. The session
 	// list marks it "current", a password change is the one session it keeps,
 	// and revoking it is what clears the caller's own cookie. It is uuid.Nil
@@ -164,7 +169,8 @@ func (s *Server) sessionLoader(next http.Handler) http.Handler {
 		ctx := r.Context()
 
 		const q = `
-			SELECT s.id, u.id, u.email, u.display_name, u.email_verified_at, root.id
+			SELECT s.id, u.id, u.email, u.display_name, u.email_verified_at,
+			       u.password_hash IS NOT NULL, root.id
 			  FROM auth_sessions s
 			  JOIN users u ON u.id = s.user_id
 			  LEFT JOIN nodes root
@@ -176,7 +182,7 @@ func (s *Server) sessionLoader(next http.Handler) http.Handler {
 			rootID *uuid.UUID
 		)
 		if err := s.DB.QueryRow(ctx, q, sum[:]).Scan(
-			&u.SessionID, &u.ID, &u.Email, &u.DisplayName, &u.EmailVerifiedAt, &rootID,
+			&u.SessionID, &u.ID, &u.Email, &u.DisplayName, &u.EmailVerifiedAt, &u.HasPassword, &rootID,
 		); err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				// The cookie may be perfectly good; we simply could not look it

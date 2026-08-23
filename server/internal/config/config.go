@@ -51,18 +51,26 @@ const (
 
 // Config is the server's fully resolved configuration.
 type Config struct {
-	Addr            string
-	BaseURL         string
-	DBDSN           string
-	S3Endpoint      string
-	S3Bucket        string
-	S3AccessKey     string
-	S3SecretKey     string
-	S3Region        string
-	SMTPAddr        string
-	MailpitAPI      string
-	ResendKey       string
-	MailFrom        string
+	Addr        string
+	BaseURL     string
+	DBDSN       string
+	S3Endpoint  string
+	S3Bucket    string
+	S3AccessKey string
+	S3SecretKey string
+	S3Region    string
+	SMTPAddr    string
+	MailpitAPI  string
+	ResendKey   string
+	MailFrom    string
+	// The OIDC client this deployment signs users in with. Both empty means
+	// the feature is off and the sign-in screens never offer it; see UseGoogle.
+	GoogleClientID     string
+	GoogleClientSecret string
+	// GoogleIssuer is the discovery root. It is a variable only so the test
+	// suite and `make e2e` can point at a local fake provider; a real
+	// deployment never sets it.
+	GoogleIssuer    string
 	PartSize        int64
 	PresignTTL      time.Duration
 	TokenPresignTTL time.Duration
@@ -113,9 +121,20 @@ func Load() (*Config, error) {
 		// Blank MailFrom means the sender's own default (mail.DefaultFrom); a
 		// deployment on a verified domain must set it, and no default can guess
 		// what that domain is.
-		ResendKey:  env("DRIVE_RESEND_KEY", ""),
-		MailFrom:   env("DRIVE_MAIL_FROM", ""),
-		SignupMode: env("DRIVE_SIGNUP_MODE", SignupOpen),
+		ResendKey: env("DRIVE_RESEND_KEY", ""),
+		MailFrom:  env("DRIVE_MAIL_FROM", ""),
+		// Sign in with Google. The pair's presence is the whole switch, the way
+		// ResendKey's is; empty is a deployment that offers password sign-in
+		// only, which is what a fresh clone gets.
+		GoogleClientID:     env("DRIVE_GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret: env("DRIVE_GOOGLE_CLIENT_SECRET", ""),
+		// The default lives here and in no other file. It is 27 characters of
+		// non-localhost value, which is exactly the shape `make verify-public`
+		// greps .env for, and .env is copied verbatim from .env.example -- so
+		// writing it there, even in a comment, would trip that check for
+		// whoever uncommented it. Nothing in an env file ever needs to name it.
+		GoogleIssuer: env("DRIVE_GOOGLE_ISSUER", "https://accounts.google.com"),
+		SignupMode:   env("DRIVE_SIGNUP_MODE", SignupOpen),
 		// info by default, so an environment that sets nothing -- which is what
 		// a deployment looks like -- is not writing a line per request. The dev
 		// and test .env files ask for debug explicitly.
@@ -222,6 +241,25 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("DRIVE_SIGNUP_MODE: %q is not one of open, invite, closed", c.SignupMode)
 	}
 
+	// Half a Google client is worse than none: the deployment looks configured,
+	// the button renders, and the first person to press it gets an error nobody
+	// is watching for. Both or neither, decided at boot.
+	id := strings.TrimSpace(c.GoogleClientID)
+	secret := strings.TrimSpace(c.GoogleClientSecret)
+	switch {
+	case id == "" && secret != "":
+		return fmt.Errorf("DRIVE_GOOGLE_CLIENT_ID: must be set too, or clear DRIVE_GOOGLE_CLIENT_SECRET")
+	case id != "" && secret == "":
+		return fmt.Errorf("DRIVE_GOOGLE_CLIENT_SECRET: must be set too, or clear DRIVE_GOOGLE_CLIENT_ID")
+	}
+	// The issuer is where an ID token's signing keys come from, so a plaintext
+	// one is a person's account in the hands of anything on the path. Loopback
+	// is the exception because that is the fake provider the suite and `make
+	// e2e` run against, and it never leaves the machine.
+	if err := checkIssuer(c.GoogleIssuer); err != nil {
+		return fmt.Errorf("DRIVE_GOOGLE_ISSUER: %w", err)
+	}
+
 	if c.PartSize < minPartSize {
 		return fmt.Errorf("DRIVE_PART_SIZE: %d is below S3's 5MiB minimum part size", c.PartSize)
 	}
@@ -263,6 +301,43 @@ func (c *Config) ValidateRuntime(ctx context.Context) error {
 // The key's presence is the whole switch: there is no mode variable to get out
 // of step with it.
 func (c *Config) UseResend() bool { return strings.TrimSpace(c.ResendKey) != "" }
+
+// UseGoogle reports whether this deployment can sign anybody in with Google.
+// The pair's presence is the whole switch, as with UseResend: there is no mode
+// variable that could get out of step with the credentials.
+func (c *Config) UseGoogle() bool {
+	return c != nil &&
+		strings.TrimSpace(c.GoogleClientID) != "" &&
+		strings.TrimSpace(c.GoogleClientSecret) != ""
+}
+
+// checkIssuer accepts an https issuer, or an http one on a loopback host.
+//
+// A blank value is accepted and means the same as "not configured": Load always
+// fills in the default, so an empty issuer only reaches here from a hand-built
+// Config in a test, where refusing it would be noise.
+func checkIssuer(issuer string) error {
+	trimmed := strings.TrimSpace(issuer)
+	if trimmed == "" {
+		return nil
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("not a valid URL: %w", err)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return nil
+		}
+		return fmt.Errorf("http is only allowed for a loopback host, not %q", host)
+	default:
+		return fmt.Errorf("%q is not an http(s) URL", trimmed)
+	}
+}
 
 // dialDSN opens a TCP connection to the Postgres host in the DSN. It proves
 // reachability without pulling a driver into this package; internal/db does the

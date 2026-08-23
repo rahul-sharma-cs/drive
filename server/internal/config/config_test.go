@@ -291,3 +291,121 @@ func TestUnsetSigningRegionFailsValidationFromLoad(t *testing.T) {
 		t.Errorf("Validate() with a region set: %v", err)
 	}
 }
+
+// ------------------------------------------------------------ sign in with --
+
+// The Google client pair is the whole feature switch, and half of it is the one
+// state that must not boot: the deployment looks configured, the sign-in screen
+// renders the button, and the failure waits for a real person to press it.
+func TestGoogleClientPairIsAllOrNothing(t *testing.T) {
+	if validConfig().UseGoogle() {
+		t.Error("a config with no Google client wants the Google path")
+	}
+
+	both := validConfig()
+	both.GoogleClientID = "client-id"
+	both.GoogleClientSecret = "client-secret"
+	if !both.UseGoogle() {
+		t.Error("a config with both halves set does not want the Google path")
+	}
+	if err := both.Validate(); err != nil {
+		t.Errorf("Validate() with a complete pair: %v", err)
+	}
+
+	idOnly := validConfig()
+	idOnly.GoogleClientID = "client-id"
+	err := idOnly.Validate()
+	if err == nil {
+		t.Fatal("Validate() with an id and no secret: want an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "DRIVE_GOOGLE_CLIENT_SECRET") {
+		t.Errorf("error = %q, want it to name the missing half", err)
+	}
+	if idOnly.UseGoogle() {
+		t.Error("a half-configured pair counts as configured")
+	}
+
+	secretOnly := validConfig()
+	secretOnly.GoogleClientSecret = "client-secret"
+	err = secretOnly.Validate()
+	if err == nil {
+		t.Fatal("Validate() with a secret and no id: want an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "DRIVE_GOOGLE_CLIENT_ID") {
+		t.Errorf("error = %q, want it to name the missing half", err)
+	}
+
+	whitespace := validConfig()
+	whitespace.GoogleClientID = "   "
+	whitespace.GoogleClientSecret = "   "
+	if whitespace.UseGoogle() {
+		t.Error("a whitespace-only pair counts as configured")
+	}
+}
+
+// The issuer is where an ID token's signing keys come from. A plaintext one
+// hands somebody's account to anything on the path, so only https -- or
+// loopback, which is the fake provider the suite and `make e2e` run against and
+// which never leaves the machine.
+func TestGoogleIssuerMustBeHTTPSOrLoopback(t *testing.T) {
+	ok := []string{
+		"",
+		"https://issuer.example.test",
+		"http://localhost:9099",
+		"http://127.0.0.1:9099",
+		"http://[::1]:9099",
+	}
+	for _, issuer := range ok {
+		cfg := validConfig()
+		cfg.GoogleIssuer = issuer
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() with issuer %q: %v", issuer, err)
+		}
+	}
+
+	bad := []string{
+		"http://issuer.example.test",
+		"http://192.0.2.10:9099",
+		"ftp://issuer.example.test",
+		"issuer.example.test",
+	}
+	for _, issuer := range bad {
+		cfg := validConfig()
+		cfg.GoogleIssuer = issuer
+		err := cfg.Validate()
+		if err == nil {
+			t.Errorf("Validate() with issuer %q: want an error, got nil", issuer)
+			continue
+		}
+		if !strings.Contains(err.Error(), "DRIVE_GOOGLE_ISSUER") {
+			t.Errorf("error for %q = %q, want it to name DRIVE_GOOGLE_ISSUER", issuer, err)
+		}
+	}
+}
+
+// The issuer default lives in Load and in no other file: writing it into
+// .env.example would put a 27-character non-localhost value into the generated
+// .env, which is exactly the shape `make verify-public` greps the tracked tree
+// for.
+func TestGoogleIssuerDefaultsWithoutAnEnvFile(t *testing.T) {
+	t.Setenv("DRIVE_GOOGLE_ISSUER", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if !strings.HasPrefix(cfg.GoogleIssuer, "https://") {
+		t.Errorf("default issuer = %q, want an https URL", cfg.GoogleIssuer)
+	}
+	if err := checkIssuer(cfg.GoogleIssuer); err != nil {
+		t.Errorf("the built-in default does not pass its own check: %v", err)
+	}
+
+	t.Setenv("DRIVE_GOOGLE_ISSUER", "http://localhost:9099")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if cfg.GoogleIssuer != "http://localhost:9099" {
+		t.Errorf("issuer = %q, want the environment's value", cfg.GoogleIssuer)
+	}
+}
