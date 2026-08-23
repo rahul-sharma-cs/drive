@@ -333,7 +333,7 @@ test('clicking Size sorts by size, both ways, with folders always first', async 
   await expect.poll(fileNames).toEqual(BY_SIZE_ASC);
   await expectFoldersFirst();
 
-  await page.getByRole('button', { name: 'Size', exact: true }).click();
+  await page.getByRole('button', { name: /^Size\b/ }).click();
 
   const descending = new URL(page.url()).searchParams;
   expect(descending.get('sort')).toBe('size');
