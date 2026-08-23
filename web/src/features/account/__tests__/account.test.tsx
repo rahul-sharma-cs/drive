@@ -125,7 +125,7 @@ describe('the profile section', () => {
     const patch = calls.find((c) => c.method === 'PATCH')
     expect(patch?.url).toBe('/api/auth/me')
     expect(patch?.body).toEqual({ display_name: 'Grace Hopper' })
-    expect(patch?.headers['X-Drive-Client']).toBe('web')
+    expect(patch?.headers.get('X-Drive-Client')).toBe('web')
     // And that it did so without spending a request on an answer it already had.
     expect(calls.filter((c) => c.method === 'GET' && c.url === '/api/auth/me')).toHaveLength(0)
   })
@@ -231,7 +231,7 @@ describe('the sessions section', () => {
     expect(screen.getByText('Chrome on macOS')).toBeTruthy()
     const del = calls.find((c) => c.method === 'DELETE')
     expect(del?.url).toBe('/api/auth/sessions/sess-elsewhere')
-    expect(del?.headers['X-Drive-Client']).toBe('web')
+    expect(del?.headers.get('X-Drive-Client')).toBe('web')
   })
 
   it('drops a row the server no longer has a session for', async () => {

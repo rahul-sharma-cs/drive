@@ -29,7 +29,15 @@ export function renderApp(
 export interface StubbedCall {
   method: string
   url: string
-  headers: Record<string, string>
+  /**
+   * What the request actually carried, not the object the caller happened to
+   * pass. A plain record only reads back headers written as a plain object: a
+   * call that built a `Headers` instead would read as carrying none at all,
+   * and every assertion that a header is *absent* would pass without being
+   * true — which is exactly the assertion the preview's bare cross-origin GET
+   * rests on.
+   */
+  headers: Headers
   body: unknown
 }
 
@@ -57,7 +65,7 @@ export function stubFetch(routes: StubRoute[]) {
     calls.push({
       method,
       url,
-      headers: (init.headers ?? {}) as Record<string, string>,
+      headers: new Headers(init.headers as HeadersInit | undefined),
       body: init.body === undefined ? undefined : JSON.parse(init.body as string),
     })
     const route = routes.find(

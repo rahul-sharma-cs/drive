@@ -27,7 +27,7 @@ describe('/verify', () => {
     expect(calls[0].url).toBe('/api/auth/verify-email')
     expect(calls[0].body).toEqual({ token: 'tok-123' })
     // The CSRF gate rejects a cookie-authed mutation without this header.
-    expect(calls[0].headers['X-Drive-Client']).toBe('web')
+    expect(calls[0].headers.get('X-Drive-Client')).toBe('web')
   })
 
   it("shows the server's own message when the link is spent", async () => {
@@ -172,7 +172,7 @@ describe('an unverified account signing in', () => {
       const post = calls.find((c) => c.url === '/api/auth/resend-verification')
       expect(post?.method).toBe('POST')
       expect(post?.body).toEqual({ email: 'someone@example.test' })
-      expect(post?.headers['X-Drive-Client']).toBe('web')
+      expect(post?.headers.get('X-Drive-Client')).toBe('web')
     })
     // Once, and then it says so — a button that stays offering to send again
     // invites spending the account's whole mail budget from one screen.
@@ -269,7 +269,7 @@ describe('/forgot', () => {
 
     expect(await screen.findByText(/has an account, a reset link is on its way/i)).toBeTruthy()
     expect(calls[0].body).toEqual({ email: 'someone@example.test' })
-    expect(calls[0].headers['X-Drive-Client']).toBe('web')
+    expect(calls[0].headers.get('X-Drive-Client')).toBe('web')
   })
 
   it('says the same thing however much the answer gives away', async () => {
@@ -326,7 +326,7 @@ describe('/reset', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0].url).toBe('/api/auth/password-reset/confirm')
     expect(calls[0].body).toEqual({ token: 'reset-tok-1', new_password: 'a-new-passphrase' })
-    expect(calls[0].headers['X-Drive-Client']).toBe('web')
+    expect(calls[0].headers.get('X-Drive-Client')).toBe('web')
   })
 
   it('shows the server\u2019s own words on a spent link, and a way to get another', async () => {

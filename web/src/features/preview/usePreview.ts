@@ -27,6 +27,26 @@ export const previewKey = (id: string) => ['preview', id] as const
 const REFRESH_MARGIN_MS = 60_000
 
 /**
+ * The floor under that. An expiry already in the past — a browser clock running
+ * ahead, or a TTL shorter than the margin — would otherwise mean a timer with
+ * no delay at all: it fires, the refetch re-arms it, and every round hands the
+ * elements a new URL, which for an `<img>` or a `<video>` is the file pulled
+ * off the store again. Fifteen seconds is far longer than a round trip, so the
+ * worst case is a slow retry rather than a browser downloading a file on a
+ * loop.
+ */
+const MIN_REFRESH_MS = 15_000
+
+/**
+ * The ceiling. `setTimeout` holds its delay in a signed 32-bit int and fires
+ * *immediately* on anything larger — so an expiry weeks out, which is the one
+ * case that needs no timer at all, is the case that would spin one. Nothing
+ * this far ahead is worth arming: no viewer stays open for 24 days, and
+ * reopening one signs a fresh link anyway.
+ */
+const MAX_REFRESH_MS = 2_147_000_000
+
+/**
  * Where a file's name points: this route, plus the parameter.
  *
  * Seeded from the parameters already there, never rebuilt from scratch — on a
@@ -135,9 +155,11 @@ export function usePreview(id: string | null): Preview {
     // An unparseable date must not become a zero-delay timer that refetches
     // forever.
     if (!Number.isFinite(at)) return
+    const delay = at - Date.now() - REFRESH_MARGIN_MS
+    if (delay > MAX_REFRESH_MS) return
     const timer = setTimeout(
       () => void client.invalidateQueries({ queryKey: previewKey(id) }),
-      Math.max(0, at - Date.now() - REFRESH_MARGIN_MS),
+      Math.max(delay, MIN_REFRESH_MS),
     )
     return () => clearTimeout(timer)
     // `updatedAt` re-arms the timer after a refetch that answered with the same

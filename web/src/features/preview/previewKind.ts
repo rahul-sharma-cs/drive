@@ -8,51 +8,30 @@
  * back in the client's hands, which is the whole thing the allowlist exists to
  * prevent.
  *
+ * A file's *name* is not a signal either, and there is deliberately no fallback
+ * to its extension. The kind such a fallback reaches that matters is `pdf`, and
+ * the PDF body is the one that is a navigable cross-origin frame: guessing it
+ * from the end of a name would put bytes the server declined to describe into a
+ * frame the browser navigates to. A link that arrives without a type is a link
+ * this viewer has nothing to say about.
+ *
  * SVG is refused here as well as there. It is an image element away from being
  * script running on the store's origin, and the redundancy costs one line.
  */
 
 export type PreviewKind = 'image' | 'video' | 'audio' | 'text' | 'pdf' | 'none'
 
-/**
- * The fallback for a link that arrived without a type at all. Deliberately
- * short, and deliberately without `svg` or `html`: a name is not evidence.
- */
-const BY_EXTENSION: Record<string, PreviewKind> = {
-  png: 'image',
-  jpg: 'image',
-  jpeg: 'image',
-  gif: 'image',
-  webp: 'image',
-  avif: 'image',
-  mp4: 'video',
-  webm: 'video',
-  mp3: 'audio',
-  ogg: 'audio',
-  wav: 'audio',
-  pdf: 'pdf',
-  txt: 'text',
-  md: 'text',
-  csv: 'text',
-  json: 'text',
-  log: 'text',
-}
-
-export function previewKind(mime: string | null | undefined, name: string): PreviewKind {
+export function previewKind(mime: string | null | undefined): PreviewKind {
   const type = (mime ?? '').split(';')[0].trim().toLowerCase()
 
-  if (type !== '') {
-    if (type === 'image/svg+xml') return 'none'
-    if (type === 'application/pdf') return 'pdf'
-    if (type === 'text/plain') return 'text'
-    if (type.startsWith('image/')) return 'image'
-    if (type.startsWith('video/')) return 'video'
-    if (type.startsWith('audio/')) return 'audio'
-    // A type the server named and this viewer has no body for. The name cannot
-    // overrule it — a `.png` served as `application/zip` is a zip.
-    return 'none'
-  }
-
-  const ext = name.toLowerCase().split('.').pop()
-  return (ext && BY_EXTENSION[ext]) || 'none'
+  if (type === 'image/svg+xml') return 'none'
+  if (type === 'application/pdf') return 'pdf'
+  if (type === 'text/plain') return 'text'
+  if (type.startsWith('image/')) return 'image'
+  if (type.startsWith('video/')) return 'video'
+  if (type.startsWith('audio/')) return 'audio'
+  // A type the server named and this viewer has no body for, or no type at all.
+  // The name cannot overrule either: a `.png` served as `application/zip` is a
+  // zip, and a `.pdf` served as nothing is nothing.
+  return 'none'
 }

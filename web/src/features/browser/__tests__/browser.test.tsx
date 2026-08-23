@@ -135,7 +135,7 @@ describe('file browser', () => {
     await waitFor(() => {
       const del = calls.find((c) => c.method === 'DELETE')
       expect(del?.url).toBe('/api/nodes/f2')
-      expect(del?.headers['X-Drive-Client']).toBe('web')
+      expect(del?.headers.get('X-Drive-Client')).toBe('web')
     })
     // The list is re-read rather than patched in place, so the row cannot
     // linger after the server has moved it to the trash.

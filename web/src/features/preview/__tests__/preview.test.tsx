@@ -81,7 +81,8 @@ function FolderContext() {
 }
 
 interface StoreAnswer {
-  body?: string
+  /** A whole string, or a stream for an answer whose length is never declared. */
+  body?: string | ReadableStream<Uint8Array>
   status?: number
   headers?: Record<string, string>
 }
@@ -102,7 +103,7 @@ function stubAll(routes: StubRoute[], store: Record<string, StoreAnswer> = {}): 
     calls.push({
       method: init?.method ?? 'GET',
       url,
-      headers: (init?.headers ?? {}) as Record<string, string>,
+      headers: new Headers(init?.headers as HeadersInit | undefined),
       body: undefined,
     })
     return new Response(answer.body ?? '', { status: answer.status ?? 200, headers: answer.headers })
@@ -155,7 +156,7 @@ describe('opening a preview', () => {
     const asked = previewCalls(calls, 'f2')
     expect(asked).toHaveLength(1)
     // The link itself is an API call like any other and carries the CSRF header.
-    expect(asked[0].headers['X-Drive-Client']).toBe('web')
+    expect(asked[0].headers.get('X-Drive-Client')).toBe('web')
 
     const image = await screen.findByRole('img', { name: 'shot.png' })
     // Straight from the store. Not through this app, and not a blob: URL, which
@@ -264,8 +265,10 @@ describe('what the viewer shows', () => {
     const read = calls.filter((call) => call.url === `${STORE}/notes.txt`)
     expect(read).toHaveLength(1)
     // A custom header would turn this plain cross-origin GET into a preflight,
-    // and the store's rule answers preflights with a 403.
-    expect(read[0].headers['X-Drive-Client']).toBeUndefined()
+    // and the store's rule answers preflights with a 403. Asked of the headers
+    // the request really carried: a plain-object lookup reads a `Headers` as
+    // nothing at all, so it would pass whether the rule held or not.
+    expect(read[0].headers.get('X-Drive-Client')).toBeNull()
   })
 
   it('refuses a text file too big to read, and offers the download instead', async () => {
@@ -283,6 +286,58 @@ describe('what the viewer shows', () => {
 
     expect(await screen.findByTestId('no-preview')).toBeTruthy()
     expect(screen.queryByText('a line of it')).toBeNull()
+  })
+
+  it('stops reading a text file whose length the store never declared', async () => {
+    // A chunked answer carries no Content-Length at all, and `Number(null)` is
+    // zero — under every ceiling there is.
+    const CHUNK = 256 * 1024
+    const CHUNKS = 12
+    let sent = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent === CHUNKS) {
+          controller.close()
+          return
+        }
+        sent += 1
+        controller.enqueue(new Uint8Array(CHUNK).fill(0x61))
+      },
+    })
+
+    renderFolder(
+      [
+        ...listing([node({ id: 'f5', kind: 'file', name: 'chunked.log', size: 3_145_728, mime: 'text/plain' })]),
+        { path: '/api/files/f5/preview', body: { url: `${STORE}/chunked.log`, expires_at: soon(), mime: 'text/plain' } },
+      ],
+      { [`${STORE}/chunked.log`]: { body } },
+    )
+    await screen.findByText('chunked.log')
+
+    await userEvent.click(screen.getByRole('link', { name: 'chunked.log' }))
+
+    expect(await screen.findByTestId('no-preview')).toBeTruthy()
+    // The card is not the point — a read that swallowed all three megabytes and
+    // measured them afterwards shows the same one. The point is that the store
+    // stopped being asked: the transfer was cut off part way down the file.
+    expect(sent).toBeLessThan(CHUNKS)
+  })
+
+  it('will not guess a PDF from a name the link carries no type for', async () => {
+    renderFolder([
+      ...listing([node({ id: 'f7', kind: 'file', name: 'invoice.pdf', size: 5000, mime: 'application/pdf' })]),
+      // Signed, but with no type named on it. The stored mime is the client's
+      // own claim and the name is worth even less — and `pdf` is the one body
+      // that is a frame the browser navigates to, so a guess here is a guess
+      // about what gets loaded, not about which element shows it.
+      { path: '/api/files/f7/preview', body: { url: `${STORE}/invoice.pdf`, expires_at: soon(), mime: '' } },
+    ])
+    await screen.findByText('invoice.pdf')
+
+    await userEvent.click(screen.getByRole('link', { name: 'invoice.pdf' }))
+
+    expect(await screen.findByTestId('no-preview')).toBeTruthy()
+    expect(document.querySelector('iframe')).toBeNull()
   })
 
   it('shows the download card for a PDF on a touch device rather than an empty frame', async () => {
@@ -305,42 +360,115 @@ describe('what the viewer shows', () => {
   })
 })
 
+/**
+ * Opens the deep link on a fake clock, with every signature carrying the same
+ * `expiresAt`, and counts how many times the app went and asked for one.
+ *
+ * The count is the whole instrument here: each new signature re-points the
+ * `<img>`'s `src`, so a timer that fires more than it should is not a wasted
+ * API call — it is the file coming back off the store, again, for as long as
+ * the viewer is open.
+ */
+function openWithExpiry(expiresAt: string) {
+  let signings = 0
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  vi.stubGlobal('fetch', async (url: string) => {
+    if (url === '/api/nodes/root-1') return json(root)
+    if (url === '/api/nodes/root-1/children') return json({ items: [shot], next_cursor: 'page-2' })
+    if (url === '/api/files/f2/preview') {
+      signings += 1
+      return json({ url: `${STORE}/shot.png?sig=${signings}`, expires_at: expiresAt, mime: 'image/png' })
+    }
+    throw new Error(`unstubbed request: ${url}`)
+  })
+
+  // Straight in on the parameter: this is the deep link, and it needs no
+  // click to open — which keeps the fake clock out of userEvent's way.
+  renderApp(
+    <Routes>
+      <Route element={<FolderContext />}>
+        <Route path="/" element={<FolderPage />} />
+      </Route>
+    </Routes>,
+    { route: '/?preview=f2', seed: (client) => client.setQueryData(meKey, user) },
+  )
+
+  // Testing Library's own waiting helpers look for Jest to decide whether the
+  // clock is faked, find nothing here, and would sit on a timer that never
+  // advances — so the settling is done by hand.
+  const settle = async (ms = 0) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms)
+    })
+  }
+
+  return { signings: () => signings, settle }
+}
+
+describe('a preview parameter the list cannot account for', () => {
+  it('opens on a deep link to a file the loaded pages do not hold', async () => {
+    renderFolder(
+      [
+        ...listing([shot]),
+        {
+          path: '/api/files/f9/preview',
+          body: { url: `${STORE}/elsewhere.png`, expires_at: soon(), mime: 'image/png' },
+        },
+      ],
+      {},
+      '/?preview=f9',
+    )
+
+    const dialog = await screen.findByRole('dialog')
+    // The answer carries a URL, an expiry and a type, and no name — so the
+    // title is the generic one, and the counter, which counts loaded siblings,
+    // has nothing to count rather than counting wrong.
+    expect(within(dialog).getByText('Preview')).toBeTruthy()
+    expect(within(dialog).queryByText(/ of /)).toBeNull()
+    await waitFor(() =>
+      expect(dialog.querySelector('img')?.getAttribute('src')).toBe(`${STORE}/elsewhere.png`),
+    )
+  })
+
+  it('closes without throwing on a preview id that is not a selector', async () => {
+    // The id comes out of the address bar, and on the way out the viewer looks
+    // for the row it was opened from by attribute. A quote in it ends the
+    // attribute selector early and `querySelector` throws — out of a focus
+    // handler, where nothing catches it.
+    const crafted = 'a"]'
+    const errors: unknown[] = []
+    const record = (event: ErrorEvent) => errors.push(event.error)
+    window.addEventListener('error', record)
+    try {
+      renderFolder(
+        [
+          ...listing([shot]),
+          {
+            path: `/api/files/${crafted}/preview`,
+            status: 415,
+            body: { code: 'unsupported', message: 'no preview' },
+          },
+        ],
+        {},
+        `/?preview=${encodeURIComponent(crafted)}`,
+      )
+
+      await screen.findByRole('dialog')
+      await userEvent.keyboard('{Escape}')
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      expect(errors).toEqual([])
+    } finally {
+      window.removeEventListener('error', record)
+    }
+  })
+})
+
 describe('a link that is about to expire', () => {
   it('is replaced while the viewer is still open', async () => {
     vi.useFakeTimers()
-    const expiresAt = new Date(Date.now() + 900_000).toISOString()
-    let signed = 0
-    const json = (body: unknown, status = 200) =>
-      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
-    vi.stubGlobal('fetch', async (url: string) => {
-      if (url === '/api/nodes/root-1') return json(root)
-      if (url === '/api/nodes/root-1/children') return json({ items: [shot], next_cursor: 'page-2' })
-      if (url === '/api/files/f2/preview') {
-        signed += 1
-        return json({ url: `${STORE}/shot.png?sig=${signed}`, expires_at: expiresAt, mime: 'image/png' })
-      }
-      throw new Error(`unstubbed request: ${url}`)
-    })
-
-    // Straight in on the parameter: this is the deep link, and it needs no
-    // click to open — which keeps the fake clock out of userEvent's way.
-    renderApp(
-      <Routes>
-        <Route element={<FolderContext />}>
-          <Route path="/" element={<FolderPage />} />
-        </Route>
-      </Routes>,
-      { route: '/?preview=f2', seed: (client) => client.setQueryData(meKey, user) },
-    )
-
-    // Testing Library's own waiting helpers look for Jest to decide whether the
-    // clock is faked, find nothing here, and would sit on a timer that never
-    // advances — so the settling is done by hand.
-    const settle = async (ms = 0) => {
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(ms)
-      })
-    }
+    const { signings, settle } = openWithExpiry(new Date(Date.now() + 900_000).toISOString())
 
     await settle()
     expect(screen.getByRole('img', { name: 'shot.png' }).getAttribute('src')).toBe(
@@ -354,9 +482,41 @@ describe('a link that is about to expire', () => {
     // <img> or an <iframe> is a 403 nobody reports.
     await settle(840_001)
 
-    expect(signed).toBe(2)
+    expect(signings()).toBe(2)
     expect(screen.getByRole('img', { name: 'shot.png' }).getAttribute('src')).toBe(
       `${STORE}/shot.png?sig=2`,
     )
+  })
+
+  it('does not chase an expiry that has already passed', async () => {
+    vi.useFakeTimers()
+    // A browser clock running ten seconds ahead of the signer's is enough:
+    // subtract the refresh margin and the delay is negative, which a timer
+    // reads as "now". The refetch that follows re-arms it, and the loop that
+    // makes is one download of the file per round trip.
+    const { signings, settle } = openWithExpiry(new Date(Date.now() - 10_000).toISOString())
+
+    await settle()
+    expect(screen.getByRole('img', { name: 'shot.png' })).toBeTruthy()
+
+    await settle(10_000)
+
+    // The one the deep link opened with, and nothing since.
+    expect(signings()).toBe(1)
+  })
+
+  it('does not arm a timer for an expiry further out than a timer can hold', async () => {
+    vi.useFakeTimers()
+    // `setTimeout` truncates its delay to a signed 32-bit int, so anything past
+    // about 24.8 days fires on the next tick instead of in a month — the same
+    // loop, reached from the opposite end.
+    const { signings, settle } = openWithExpiry(new Date(Date.now() + 40 * 86_400_000).toISOString())
+
+    await settle()
+    expect(screen.getByRole('img', { name: 'shot.png' })).toBeTruthy()
+
+    await settle(1_000)
+
+    expect(signings()).toBe(1)
   })
 })

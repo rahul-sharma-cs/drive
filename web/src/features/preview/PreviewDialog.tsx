@@ -95,7 +95,12 @@ export function PreviewDialog({ nodes, hasMore = false }: PreviewDialogProps) {
           // Radix returns focus to the trigger, and this dialog has none — it
           // was opened by following a link. Put it back on that link, which is
           // where the person left it.
-          const row = document.querySelector<HTMLElement>(`[data-preview-id="${shown}"]`)
+          // Escaped: the id is a URL parameter, so it is whatever was typed
+          // into the address bar, and an unescaped `"` in it turns this
+          // selector into a syntax error that throws out of a focus handler.
+          const row = document.querySelector<HTMLElement>(
+            `[data-preview-id="${CSS.escape(shown)}"]`,
+          )
           if (!row) return
           event.preventDefault()
           row.focus()
@@ -212,7 +217,7 @@ function PreviewBody({
   }
   if (link === undefined || preview.broken) return card
 
-  const kind = previewKind(link.mime, node?.name ?? '')
+  const kind = previewKind(link.mime)
   const name = node?.name ?? ''
 
   switch (kind) {
@@ -278,11 +283,13 @@ function TextBody({ url, card }: { url: string; card: ReactNode }) {
       // GET a preflight, and the store's rule answers preflights with a 403.
       const res = await fetch(url, { signal })
       if (!res.ok) throw new Error(`the file could not be read (${res.status})`)
+      // A shortcut, not the guard: the header is absent on a chunked answer —
+      // where `Number(null)` is 0, which is under every ceiling there is — and
+      // on a gzipped one it describes the compressed length, which a 50 MB log
+      // slips under. So the ceiling is enforced against the bytes themselves.
       const declared = Number(res.headers.get('Content-Length'))
-      // Refused before the body is read, when the store says how big it is.
-      if (Number.isFinite(declared) && declared > TEXT_LIMIT_BYTES) return null
-      const body = await res.text()
-      return new TextEncoder().encode(body).length > TEXT_LIMIT_BYTES ? null : body
+      if (declared > TEXT_LIMIT_BYTES) return null
+      return readCapped(res)
     },
     gcTime: 0,
   })
@@ -295,6 +302,48 @@ function TextBody({ url, card }: { url: string; card: ReactNode }) {
       {text.data}
     </pre>
   )
+}
+
+/**
+ * The body, up to the ceiling and not a byte past it.
+ *
+ * Read as it arrives rather than in one `res.text()`, because `text()` has no
+ * ceiling: by the time it resolves the whole file is in memory, and the check
+ * that follows can only decide whether to show what was already paid for. The
+ * transfer is cancelled at the moment the count goes over, which is the only
+ * thing that keeps a log file from being pulled down in full to be thrown away.
+ */
+async function readCapped(res: Response): Promise<string | null> {
+  const reader = res.body?.getReader()
+  // Nothing to stream — an answer with no body stream at all. The declared
+  // length was the only guard there, and the whole of it is already here.
+  if (!reader) {
+    const body = await res.text()
+    return new TextEncoder().encode(body).length > TEXT_LIMIT_BYTES ? null : body
+  }
+
+  const chunks: Uint8Array[] = []
+  let read = 0
+  for (;;) {
+    const next = await reader.read()
+    if (next.done) break
+    read += next.value.length
+    if (read > TEXT_LIMIT_BYTES) {
+      await reader.cancel()
+      return null
+    }
+    chunks.push(next.value)
+  }
+
+  // One decode over the joined bytes, not one per chunk: a character split
+  // across a chunk boundary would otherwise come out as two replacements.
+  const bytes = new Uint8Array(read)
+  let at = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, at)
+    at += chunk.length
+  }
+  return new TextDecoder().decode(bytes)
 }
 
 /** The answer for a type this app will not show, and for one it could not. */
