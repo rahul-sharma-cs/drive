@@ -204,8 +204,10 @@ func asciiFallbackName(name string) string {
 }
 
 // percentEncodeName encodes a name into RFC 5987's value-chars: attr-char stays
-// literal, every other byte of the UTF-8 encoding becomes %XX. Note that '%',
-// '\'' and '*' are deliberately not attr-char and so are always escaped.
+// literal, every other byte of the UTF-8 encoding becomes %XX. Note that the
+// percent sign, the apostrophe and the asterisk are deliberately not attr-char
+// and so are always escaped. (Spelled out rather than quoted: gofmt rewrites a
+// doubled apostrophe in a comment into a closing quotation mark.)
 func percentEncodeName(name string) string {
 	const attrChar = "!#$&+-.^_`|~"
 	var b strings.Builder
