@@ -49,8 +49,18 @@ func TestPreviewContentTypeAllowsOnlyTheMapAndReturnsItsOwnConstant(t *testing.T
 		{"csv becomes plain text", "text/csv", "text/plain", true},
 		{"json becomes plain text", "application/json", "text/plain", true},
 		{"javascript becomes plain text", "application/javascript", "text/plain", true},
+		{"the canonical javascript type becomes plain text", "text/javascript", "text/plain", true},
+		{"yaml becomes plain text", "application/x-yaml", "text/plain", true},
+		{"the other yaml spelling becomes plain text", "text/yaml", "text/plain", true},
+		{"toml becomes plain text", "application/toml", "text/plain", true},
 		{"a source type becomes plain text", "text/x-go", "text/plain", true},
 		{"any text/x- subtype becomes plain text", "text/x-python", "text/plain", true},
+
+		// The text/x- branch returns a constant, not a map lookup: even the two
+		// subtypes named after the formats that are refused above come back as
+		// inert plain text rather than as an empty content type.
+		{"text/x-html is plain text, not markup", "text/x-html", "text/plain", true},
+		{"text/x-svg is plain text, not an image", "text/x-svg", "text/plain", true},
 
 		// Normalization: the answer is the constant, never the input.
 		{"case is ignored", "IMAGE/PNG", "image/png", true},
@@ -63,7 +73,15 @@ func TestPreviewContentTypeAllowsOnlyTheMapAndReturnsItsOwnConstant(t *testing.T
 		{"html is refused", "text/html", "", false},
 		{"svg is refused", "image/svg+xml", "", false},
 		{"svg with parameters is still refused", "image/svg+xml; charset=utf-8", "", false},
+
+		// XML is refused rather than collapsed to text/plain. xhtml renders as a
+		// document, and an xml document can carry a stylesheet instruction --
+		// neither is something to hand a browser off the store's origin, and
+		// "text/x" is not a prefix of "text/xml", which is the thing to keep true.
 		{"xhtml is refused", "application/xhtml+xml", "", false},
+		{"application/xml is refused", "application/xml", "", false},
+		{"text/xml is refused", "text/xml", "", false},
+		{"text/xml with parameters is still refused", "text/xml; charset=utf-8", "", false},
 		{"an empty mime is refused", "", "", false},
 		{"whitespace is refused", "   ", "", false},
 		{"the upload default is refused", "application/octet-stream", "", false},

@@ -391,29 +391,46 @@ func TestDownloadFormatJSONSignsTheSameURLAsTheRedirect(t *testing.T) {
 // An unknown format is refused before anything is looked up or signed. The
 // empty value is the one exception: ?format= is read as "not asked for", which
 // is what an absent parameter and an empty one mean to the same Get() call.
+//
+// The preview refuses every format there is, json included: it has exactly one
+// representation, so a parameter naming another one was misunderstood by
+// whoever sent it. Ignoring it would be the one place across the two routes
+// where a query parameter is read and then quietly dropped.
 func TestDownloadRefusesAFormatItDoesNotKnow(t *testing.T) {
 	h, pool := downloadTestServer(t)
 	owner := nodeNewUser(t, pool)
 	id := previewMkFile(t, pool, owner, "report.pdf", previewMime("application/pdf"))
 
-	for _, format := range []string{"xml", "JSON", "json2", "302", "html"} {
-		t.Run(format, func(t *testing.T) {
-			rec := authDo(t, h, http.MethodGet,
-				"/api/files/"+id.String()+"/download?format="+url.QueryEscape(format), nil, owner.Cookie)
-			nodeWant(t, rec, http.StatusUnprocessableEntity, CodeInvalid)
-			if loc := rec.Header().Get("Location"); loc != "" {
-				t.Errorf("a refused format still leaked a URL: %q", loc)
-			}
-			if body := rec.Body.String(); strings.Contains(body, "X-Amz-Signature") {
-				t.Errorf("a refused format still handed out a signed URL: %s", body)
-			}
-		})
+	for _, c := range []struct {
+		route   string
+		formats []string
+	}{
+		{"download", []string{"xml", "JSON", "json2", "302", "html"}},
+		{"preview", []string{"xml", "json", "JSON", "302", "html"}},
+	} {
+		for _, format := range c.formats {
+			t.Run(c.route+" "+format, func(t *testing.T) {
+				rec := authDo(t, h, http.MethodGet,
+					"/api/files/"+id.String()+"/"+c.route+"?format="+url.QueryEscape(format), nil, owner.Cookie)
+				nodeWant(t, rec, http.StatusUnprocessableEntity, CodeInvalid)
+				if loc := rec.Header().Get("Location"); loc != "" {
+					t.Errorf("a refused format still leaked a URL: %q", loc)
+				}
+				if body := rec.Body.String(); strings.Contains(body, "X-Amz-Signature") {
+					t.Errorf("a refused format still handed out a signed URL: %s", body)
+				}
+			})
+		}
 	}
 
 	t.Run("an empty format is the same as no format", func(t *testing.T) {
 		rec := authDo(t, h, http.MethodGet, "/api/files/"+id.String()+"/download?format=", nil, owner.Cookie)
 		if rec.Code != http.StatusFound {
-			t.Fatalf("status = %d, want 302 (body %s)", rec.Code, rec.Body.String())
+			t.Fatalf("download status = %d, want 302 (body %s)", rec.Code, rec.Body.String())
+		}
+		rec = authDo(t, h, http.MethodGet, "/api/files/"+id.String()+"/preview?format=", nil, owner.Cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("preview status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 		}
 	})
 }

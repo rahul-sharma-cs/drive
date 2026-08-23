@@ -100,7 +100,18 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 // to get in order to pick an element for it, and a 302 would leave it sniffing.
 // The URL is the same kind of short-lived credential the download hands out and
 // is marked no-store for the same reason.
+//
+// That one representation is also why ?format is refused outright rather than
+// ignored: the download route 422s a format it does not know, and a preview
+// that quietly accepted ?format=xml would be telling a client its parameter had
+// been understood.
 func (s *Server) previewFile(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("format") != "" {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid,
+			"preview has one representation and takes no format")
+		return
+	}
+
 	id, ok := pathID(w, r)
 	if !ok {
 		return

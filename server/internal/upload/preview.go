@@ -22,8 +22,19 @@ package upload
 //     inert but browsers download them instead of showing them; source types
 //     (text/x-*, application/javascript) are inert as text and dangerous as
 //     anything else. text/plain renders, and no browser sniffs it up to HTML.
+//
+// XML is refused rather than collapsed, and that is the one refusal worth
+// spelling out: application/xhtml+xml is markup a browser renders as a document,
+// and text/xml with a stylesheet processing instruction is close enough. Since
+// nothing here wants an XML preview, no key gets near the question.
 
 import "strings"
+
+// previewTextPlain is what every text-ish and source type is served as. It is a
+// constant rather than a repeated literal because the prefix branch below
+// returns it too: reaching into the map for previewTypes["text/plain"] would
+// sign an empty content type the day somebody renames that key.
+const previewTextPlain = "text/plain"
 
 // previewTypes is the allowlist. Keys are normalized client-declared types;
 // values are what the presign emits -- which is not always the key.
@@ -44,11 +55,20 @@ var previewTypes = map[string]string{
 
 	"application/pdf": "application/pdf",
 
-	"text/plain":             "text/plain",
-	"text/markdown":          "text/plain",
-	"text/csv":               "text/plain",
-	"application/json":       "text/plain",
-	"application/javascript": "text/plain",
+	"text/plain":    previewTextPlain,
+	"text/markdown": previewTextPlain,
+	"text/csv":      previewTextPlain,
+
+	// Source and config types. text/javascript is the canonical one RFC 9239
+	// settled on and the one a browser attaches to a .js upload, so refusing it
+	// while previewing text/x-javascript was backwards. None of this widens the
+	// posture: whatever the key, the value is the same inert constant.
+	"application/json":       previewTextPlain,
+	"application/javascript": previewTextPlain,
+	"text/javascript":        previewTextPlain,
+	"application/x-yaml":     previewTextPlain,
+	"text/yaml":              previewTextPlain,
+	"application/toml":       previewTextPlain,
 }
 
 // textSourcePrefix covers the text/x-* family -- text/x-go, text/x-python and
@@ -71,7 +91,7 @@ func PreviewContentType(raw string) (string, bool) {
 		return ct, true
 	}
 	if strings.HasPrefix(essence, textSourcePrefix) {
-		return previewTypes["text/plain"], true
+		return previewTextPlain, true
 	}
 	return "", false
 }
