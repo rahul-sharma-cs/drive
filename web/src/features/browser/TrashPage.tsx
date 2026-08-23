@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { ArchiveRestore, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -27,15 +27,28 @@ import { useEmptyTrash, usePurgeNodes, useRestoreNodes, type BulkOutcome } from 
  * The commands act on whole selections through the bulk routes, one row
  * included — a single Restore is a selection of one, so there is one code path
  * and one way for a conflict to be reported.
+ *
+ * The listing pages, like a folder's. Before it did not, and the two things
+ * that follow from that were both wrong quietly: "Select all N loaded" covered
+ * whatever one answer happened to hold, and the empty-trash confirmation
+ * offered to delete "all N items" while N was only the first page of them.
  */
 export function TrashPage() {
-  const trash = useQuery({ queryKey: ['trash'], queryFn: listTrash })
+  // Same key as before — every mutation below and in `queries.ts` invalidates
+  // `['trash']`, and an infinite query answers to it just as the single-page
+  // one did.
+  const trash = useInfiniteQuery({
+    queryKey: ['trash'],
+    queryFn: ({ pageParam }) => listTrash(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  })
   const restore = useRestoreNodes()
   const purge = usePurgeNodes()
   const empty = useEmptyTrash()
   const [confirming, setConfirming] = useState(false)
 
-  const items = trash.data?.items ?? []
+  const items = trash.data?.pages.flatMap((page) => page.items) ?? []
   const busy = restore.isPending || purge.isPending || empty.isPending
 
   // Toasted rather than shown above the list: a message that appears in the
@@ -132,12 +145,19 @@ export function TrashPage() {
         actions={rowActions}
         linkNames={false}
         time={{ label: 'Trashed', of: (node) => node.deleted_at }}
+        more={{
+          has: trash.hasNextPage,
+          loading: trash.isFetchingNextPage,
+          load: () => void trash.fetchNextPage(),
+        }}
       />
 
       {confirming && (
         <EmptyTrashDialog
           count={items.length}
-          exact={trash.data?.next_cursor == null}
+          // Only the whole trash can be counted out loud, and the whole trash
+          // is loaded exactly when there is no page left to fetch.
+          exact={!trash.hasNextPage}
           busy={busy}
           onCancel={() => setConfirming(false)}
           onConfirm={() => {

@@ -189,7 +189,14 @@ export const updateNode = (
 export const copyNode = (id: string, parentId: string, conflictPolicy?: 'rename' | 'replace') =>
   request<DriveNode>('POST', `/nodes/${id}/copy`, { parent_id: parentId, conflict_policy: conflictPolicy })
 
-export const listTrash = () => request<Page<DriveNode>>('GET', '/trash')
+/**
+ * One page of the trash, newest deletion first. Paged like the folder listing
+ * and for the same reason: a trash nobody has emptied in a while is long, and
+ * a screen that shows only what fits in one answer lets a select-all quietly
+ * mean "some".
+ */
+export const listTrash = (cursor?: string) =>
+  request<Page<DriveNode>>('GET', `/trash${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`)
 
 /** Quota and max_file_size are null when the deployment sets no cap at all. */
 export interface Usage {

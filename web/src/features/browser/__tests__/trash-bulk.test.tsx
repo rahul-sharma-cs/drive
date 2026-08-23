@@ -77,6 +77,42 @@ afterEach(() => {
 })
 
 describe('the trash in bulk', () => {
+  it('pages, and a select-all covers both pages rather than the first one', async () => {
+    const calls = stubFetch([
+      // Exact string, so the second page's `?cursor=` cannot match this route.
+      { path: '/api/trash', body: { items: two, next_cursor: 'c1' } },
+      { path: /^\/api\/trash\?cursor=c1$/, body: { items: [three[2]], next_cursor: null } },
+      {
+        method: 'POST',
+        path: '/api/trash/purge',
+        body: { results: three.map((n) => ok(n.id)), remaining: false },
+      },
+    ])
+    renderApp(<TrashPage />)
+    await screen.findByText('old.txt')
+
+    // With a page still unfetched the confirmation must not put a number on it.
+    await userEvent.click(screen.getByRole('button', { name: 'Empty trash' }))
+    expect(screen.getByRole('heading', { name: 'Delete everything in the trash forever?' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await screen.findByText('oldest.txt')
+    expect(calls.filter((c) => c.url.startsWith('/api/trash?')).map((c) => c.url)).toEqual([
+      '/api/trash?cursor=c1',
+    ])
+
+    // Both pages are loaded, so both are what "select all" means and what the
+    // confirmation is allowed to count.
+    await selectAll()
+    await waitFor(() => expect(screen.getByText('3 selected')).toBeTruthy())
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete forever' }))
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/trash/purge')).toBe(true))
+    const purge = calls.find((c) => c.url === '/api/trash/purge')!
+    expect((purge.body as { ids: string[] }).ids).toEqual(['t1', 't2', 't3'])
+  })
+
   it('restores the whole selection in one request, and re-reads what that changed', async () => {
     const calls = stubFetch([
       { path: '/api/trash', body: { items: two, next_cursor: null } },
