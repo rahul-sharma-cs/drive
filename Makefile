@@ -17,7 +17,7 @@ DEV_STACK  := docker compose -p drive --env-file .env
 TEST_STACK := docker compose -p drive-test --env-file .env.test
 
 .PHONY: doctor infra-init infra-init-test dev seed seed-test test test-big test-50g e2e \
-	build token verify-public spike up down up-test down-test
+	e2e-typecheck build token verify-public spike up down up-test down-test
 
 ## -- stack lifecycle --------------------------------------------------------
 
@@ -79,7 +79,16 @@ build:
 test: infra-init-test
 	@set -a; . ./.env.test; set +a; go test -p 1 -count=1 ./server/...
 
-e2e: infra-init-test build
+# Playwright transpiles the specs with esbuild and never type-checks them: a
+# call that does not exist, or an option a version removed, compiles fine and
+# fails at the line that runs it -- thirty specs into a run that had to bring a
+# stack up first. This is the same check the tsconfig in e2e/ exists for, and it
+# is a prerequisite of `e2e` rather than a step inside it so that it fails
+# before docker and the web build are asked for anything.
+e2e-typecheck:
+	cd e2e && npx tsc --noEmit -p .
+
+e2e: e2e-typecheck infra-init-test build
 	$(TEST_STACK) exec -T postgres \
 		psql -U drive -d drive -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'
 	$(MAKE) seed-test

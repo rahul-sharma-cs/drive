@@ -21,6 +21,9 @@ import tailwindcss from '@tailwindcss/vite'
  */
 const LATIN_FACES = /^assets\/(instrument-sans-latin-wght-normal|ibm-plex-mono-latin-400-normal)-[\w-]+\.woff2$/
 
+/** One per face: the variable sans and the mono. */
+const EXPECTED_FACES = 2
+
 function preloadLatinFaces(): Plugin {
   return {
     name: 'drive-preload-latin-faces',
@@ -29,16 +32,32 @@ function preloadLatinFaces(): Plugin {
       // After the bundle exists; there is nothing to read from before it does.
       order: 'post',
       handler(_html, ctx) {
-        return Object.keys(ctx.bundle ?? {})
-          .filter((file) => LATIN_FACES.test(file))
-          .map((file) => ({
-            tag: 'link',
-            // `crossorigin` is not optional even same-origin: a font is always
-            // fetched in CORS mode, and a preload without it is a second,
-            // separate fetch rather than a warm cache entry.
-            attrs: { rel: 'preload', as: 'font', type: 'font/woff2', crossorigin: '', href: `/${file}` },
-            injectTo: 'head-prepend' as const,
-          }))
+        const faces = Object.keys(ctx.bundle ?? {}).filter((file) => LATIN_FACES.test(file))
+        // A silent zero is the failure this plugin is built to have: rename a
+        // font package, change its file naming, drop an import, and the regex
+        // matches nothing, no preload is written, and the build is green. The
+        // pages then render in the fallback stack for one round trip and
+        // reflow — which looks like a slow network rather than a bug, so it
+        // survives. Anything but exactly the two faces stops the build.
+        if (faces.length !== EXPECTED_FACES) {
+          throw new Error(
+            `preload: expected ${EXPECTED_FACES} latin font files in the bundle, found ${faces.length}` +
+              (faces.length > 0 ? `: ${faces.join(', ')}` : ''),
+          )
+        }
+        return faces.map((file) => ({
+          tag: 'link',
+          // `crossorigin` is not optional even same-origin: a font is always
+          // fetched in CORS mode, and a preload without it is a second,
+          // separate fetch rather than a warm cache entry.
+          attrs: { rel: 'preload', as: 'font', type: 'font/woff2', crossorigin: '', href: `/${file}` },
+          // `head`, not `head-prepend`. The charset declaration has to be
+          // inside the document's first 1024 bytes, and prepending anything —
+          // let alone two absolute URLs carrying build hashes — is spending
+          // that budget on links the parser cannot act on any sooner for
+          // being first.
+          injectTo: 'head' as const,
+        }))
       },
     },
   }

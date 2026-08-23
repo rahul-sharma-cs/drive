@@ -1,8 +1,8 @@
 {
   "//": [
     "Playwright transpiles the specs with esbuild and never type-checks them, so",
-    "this file only ever serves an editor or a hand-run `npx tsc --noEmit -p .`",
-    "from this directory.",
+    "this file is what an editor reads and what `make e2e-typecheck` runs --",
+    "which `make e2e` requires before it starts a stack.",
     "",
     "DOM is in lib because a spec is two languages in one file: the outer half is",
     "Node, and everything inside page.evaluate() is browser code. window, URL,",
