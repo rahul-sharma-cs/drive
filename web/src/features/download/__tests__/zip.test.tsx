@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Outlet, Route, Routes, useParams } from 'react-router'
@@ -10,8 +10,9 @@ import { renderApp, stubFetch, type StubRoute } from '../../../test/render'
 import { CurrentFolderProvider } from '../../../app/CurrentFolder'
 import { meKey } from '../../auth/session'
 import { FolderPage } from '../../browser/FolderPage'
-import { collectSubtree, MEMORY_LIMIT, type ZipDeps } from '../zip'
+import { collectSubtree, liveDeps, MEMORY_LIMIT, type ZipDeps } from '../zip'
 import { resetZipDownload, startZipDownload } from '../useZipDownload'
+import { ZipDock } from '../ZipDock'
 
 /**
  * The zip download: the walk, the guard, the cancel, and the click that has to
@@ -76,6 +77,28 @@ function deps(pages: Record<string, Page<DriveNode>>, over: Partial<ZipDeps> = {
   }
 }
 
+/** A save-file handle whose writer is a spy, so the abort is observable. */
+function stubPicker() {
+  const writer = {
+    write: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    abort: vi.fn(async () => {}),
+  }
+  const picker = vi.fn(async () => ({
+    createWritable: async () => ({ getWriter: () => writer }),
+  }))
+  window.showSaveFilePicker = picker as unknown as typeof window.showSaveFilePicker
+  return { writer, picker }
+}
+
+/** Starts an archive and lets everything it kicked off settle, inside one `act`. */
+async function start(roots: readonly DriveNode[], stub: ZipDeps): Promise<void> {
+  await act(async () => {
+    startZipDownload(roots, { deps: stub })
+    await settle()
+  })
+}
+
 beforeEach(() => {
   toasts.length = 0
   resetZipDownload()
@@ -119,6 +142,25 @@ describe('collectSubtree', () => {
     ])
   })
 
+  it('renames a collision that is only a difference in case', async () => {
+    // Two roots, not two siblings: the server's sibling index is on lower(name)
+    // so these two cannot share a folder, but a selection made in search puts
+    // them in one archive folder anyway. A zip may hold both — macOS and
+    // Windows extract them onto one case-insensitive filesystem, where the
+    // second overwrites the first and one of the two files is simply gone.
+    const entries = await collectSubtree(
+      [file('r1', 'Report.txt', 10), file('r2', 'report.txt', 20)],
+      new AbortController().signal,
+      deps({}),
+    )
+
+    // The rename keeps the casing it was given; only the collision test folds.
+    expect(entries).toEqual([
+      { path: 'Report.txt', id: 'r1', size: 10 },
+      { path: 'report (1).txt', id: 'r2', size: 20 },
+    ])
+  })
+
   it('rejects when a cancel lands between two pages, and asks for nothing more', async () => {
     const ac = new AbortController()
     const pages: Record<string, Page<DriveNode>> = {
@@ -156,28 +198,76 @@ describe('collectSubtree', () => {
 
 /* ------------------------------------------------------------ the guard */
 
-describe('the size guard, on a browser with no File System Access', () => {
-  it('stops above the limit and offers the files one at a time', async () => {
-    const getDownloadLink = vi.fn(async (id: string) => linkFor(id))
-    startZipDownload([node({ id: 'f1', name: 'Huge' })], {
-      deps: deps({ 'f1|': page([file('a1', 'big.bin', MEMORY_LIMIT + 1)]) }, { getDownloadLink }),
-    })
-    await settle()
+describe('the size guard', () => {
+  /** The walk that trips it: one huge file, a small one, and one a folder down. */
+  const tooBig = {
+    'f1|': page([
+      file('a1', 'big.bin', MEMORY_LIMIT + 1),
+      file('a2', 'notes.txt', 12),
+      node({ id: 's1', name: 'Sub' }),
+    ]),
+    's1|': page([file('a3', 'deep.bin', 7)]),
+  }
 
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].action).toBe('Download files individually')
-    // And it really stopped: nothing was asked for, so nothing was held.
+  it('offers every walked file as its own link when there is nowhere to stream to', async () => {
+    const getDownloadLink = vi.fn(async (id: string) => linkFor(id))
+    renderApp(<ZipDock />)
+
+    await start([node({ id: 'f1', name: 'Huge' })], deps(tooBig, { getDownloadLink }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Too large to zip in this browser' })
+    // Every file the walk found, in walk order, each pointing at the app's own
+    // 302 — one link, one click, one download. Not a timed loop of clicks: the
+    // browsers this path exists for spend the click's activation on the first
+    // one and block the rest as a popup storm, which delivered one file out of
+    // however many and said nothing about the others.
+    expect(within(dialog).getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
+      '/api/files/a1/download',
+      '/api/files/a2/download',
+      '/api/files/a3/download',
+    ])
+    // The folder the file sat in is the only thing telling two same-named files
+    // apart once the archive is gone, so the row shows the whole path.
+    expect(within(dialog).getByRole('link', { name: /Sub\/deep\.bin/ })).toBeTruthy()
+
+    // Nothing was fetched and nothing was said: the offer *is* the message.
     expect(getDownloadLink).not.toHaveBeenCalled()
+    expect(toasts).toEqual([])
+
+    // A link is a link. Clicking one downloads that file and leaves the rest of
+    // the list standing — it does not start the archive that was just refused.
+    fireEvent.click(within(dialog).getByRole('link', { name: /notes\.txt/ }))
+    await settle()
+    expect(getDownloadLink).not.toHaveBeenCalled()
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('zips above the limit when there is somewhere to stream it', async () => {
+    // The limit is about holding an archive in memory, not about size: with the
+    // picker there, the bytes go to disk as they arrive and nothing is held.
+    stubPicker()
+    const getDownloadLink = vi.fn(async (id: string) => linkFor(id))
+    renderApp(<ZipDock />)
+
+    await start([node({ id: 'f1', name: 'Huge' })], deps(tooBig, { getDownloadLink }))
+
+    expect(getDownloadLink).toHaveBeenCalledWith('a1')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(toasts).toEqual([])
   })
 
   it('zips as normal below the limit', async () => {
     const getDownloadLink = vi.fn(async (id: string) => linkFor(id))
-    startZipDownload([node({ id: 'f1', name: 'Fine' })], {
-      deps: deps({ 'f1|': page([file('a1', 'small.bin', 900_000_000)]) }, { getDownloadLink }),
-    })
-    await settle()
+    renderApp(<ZipDock />)
+
+    await start([node({ id: 'f1', name: 'Fine' })], deps({ 'f1|': page([file('a1', 'small.bin', 900_000_000)]) }, { getDownloadLink }))
 
     expect(toasts).toEqual([])
+    expect(screen.queryByRole('dialog')).toBeNull()
     expect(getDownloadLink).toHaveBeenCalledWith('a1')
   })
 })
@@ -185,20 +275,6 @@ describe('the size guard, on a browser with no File System Access', () => {
 /* ------------------------------------------------------- a refused file */
 
 describe('a file the store will not hand over', () => {
-  /** A save-file handle whose writer is a spy, so the abort is observable. */
-  function stubPicker() {
-    const writer = {
-      write: vi.fn(async () => {}),
-      close: vi.fn(async () => {}),
-      abort: vi.fn(async () => {}),
-    }
-    const picker = vi.fn(async () => ({
-      createWritable: async () => ({ getWriter: () => writer }),
-    }))
-    window.showSaveFilePicker = picker as unknown as typeof window.showSaveFilePicker
-    return { writer, picker }
-  }
-
   it('aborts the writer, names the file, and says the archive was not saved', async () => {
     const { writer } = stubPicker()
 
@@ -228,6 +304,30 @@ describe('a file the store will not hand over', () => {
 
     expect(toasts).toEqual([])
     expect(writer.abort).not.toHaveBeenCalled()
+  })
+})
+
+/* --------------------------------------------------------- the byte fetch */
+
+describe('the fetch that reads the store', () => {
+  it('carries the abort signal and nothing else', async () => {
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) => Promise.resolve(new Response('bytes')))
+    vi.stubGlobal('fetch', fetchMock)
+    const { signal } = new AbortController()
+    const url = `${linkFor('a1').url}`
+
+    await liveDeps.fetchBytes(url, signal)
+
+    // The signal is what a cancelled archive pulls to stop bytes mid-flight.
+    // Everything else is what must *not* be there: a header of any kind turns
+    // this cross-origin GET into a preflight, and the store's CORS rule answers
+    // a preflight it did not enumerate with a 403 — the download fails, having
+    // never reached the object.
+    expect(fetchMock).toHaveBeenCalledWith(url, { signal })
+    // Spelled out separately because `toHaveBeenCalledWith` ignores keys whose
+    // value is `undefined`, and `{ signal, credentials: undefined }` is still a
+    // second init key someone added.
+    expect(Object.keys(fetchMock.mock.calls[0][1] ?? {})).toEqual(['signal'])
   })
 })
 

@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 
-import { downloadHref, type DriveNode } from '../../lib/api'
+import { type DriveNode } from '../../lib/api'
 import {
   archiveBytes,
   archiveName,
@@ -36,13 +36,36 @@ export interface ZipJob {
   total: number
 }
 
+/** One file out of an archive that will not be built, offered on its own. */
+export interface OfferedFile {
+  id: string
+  /** Its place in the archive that was not built — two same-named files differ only here. */
+  path: string
+  size: number
+}
+
+/**
+ * The degraded offer: everything the archive would have held, and what it would
+ * have weighed. Held next to the job rather than inside it because it outlives
+ * the job — the dock is gone by the time this is on screen.
+ */
+export interface ZipOffer {
+  files: OfferedFile[]
+  total: number
+}
+
 let job: ZipJob | null = null
+let offer: ZipOffer | null = null
 let controller: AbortController | null = null
 const listeners = new Set<() => void>()
 
+function announce(): void {
+  for (const listener of listeners) listener()
+}
+
 function publish(next: ZipJob | null): void {
   job = next
-  for (const listener of listeners) listener()
+  announce()
 }
 
 const subscribe = (listener: () => void) => {
@@ -57,6 +80,20 @@ export const useZipJob = (): ZipJob | null =>
     () => job,
     () => null,
   )
+
+/** The per-file offer standing on screen, or null. */
+export const useZipOffer = (): ZipOffer | null =>
+  useSyncExternalStore(
+    subscribe,
+    () => offer,
+    () => null,
+  )
+
+/** Closing the offer. Nothing is in flight behind it — it is a list of links. */
+export function dismissZipOffer(): void {
+  offer = null
+  announce()
+}
 
 /** The dock's button. Stops the walk, the fetches and the writer together. */
 export function cancelZipDownload(): void {
@@ -82,18 +119,22 @@ export function startZipDownload(
   }
 
   const name = archiveName(roots, now)
-  const handle = canStreamToDisk()
-    ? window.showSaveFilePicker?.({
-        suggestedName: name,
-        types: [{ description: 'Zip archive', accept: { 'application/zip': ['.zip'] } }],
-      })
-    : undefined
+  const handle = openSaveDialog(name)
 
   controller = new AbortController()
   publish({ name, current: '', written: 0, total: 0 })
   // `run` awaits `handle` before it yields, so a cancelled save dialog is never
   // an unhandled rejection.
   void run(roots, name, handle, controller, deps)
+}
+
+/** The save dialog, opened inside the click. */
+function openSaveDialog(name: string): Promise<FileSystemFileHandle> | undefined {
+  if (!canStreamToDisk()) return undefined
+  return window.showSaveFilePicker?.({
+    suggestedName: name,
+    types: [{ description: 'Zip archive', accept: { 'application/zip': ['.zip'] } }],
+  })
 }
 
 async function run(
@@ -112,7 +153,7 @@ async function run(
     // memory first. Past a point that is not a slow download, it is a dead tab —
     // so the offer changes rather than the size limit being ignored.
     if (file === null && total > MEMORY_LIMIT) {
-      offerIndividually(entries)
+      offerIndividually(entries, total)
       return
     }
 
@@ -131,33 +172,26 @@ async function run(
 }
 
 /**
- * The degraded path: one download per file, in order. Accepted as the answer
- * for large archives outside Chromium — the folder structure is lost, which is
- * why it is offered rather than done silently.
+ * The degraded path: the files, offered one at a time, as links.
+ *
+ * Not a toast with a button that downloads them in a loop — a browser grants
+ * one navigation per click and treats the rest as a popup storm, so a loop
+ * delivers the first file and silently drops the other ninety-nine. Every link
+ * in the dialog is its own click, which is the one thing every browser on this
+ * path honours. The folder structure is lost, which is why this is an offer on
+ * screen rather than something done quietly.
  */
-function offerIndividually(entries: readonly ZipEntry[]): void {
-  const ids = entries.flatMap((entry) => (entry.id === undefined ? [] : [entry.id]))
-  toast.error(`That is too large for this browser to zip (${ids.length} files)`, {
-    duration: 15_000,
-    action: { label: 'Download files individually', onClick: () => void downloadEach(ids) },
-  })
-}
-
-async function downloadEach(ids: readonly string[]): Promise<void> {
-  for (const id of ids) {
-    const anchor = document.createElement('a')
-    anchor.href = downloadHref(id)
-    anchor.target = '_blank'
-    anchor.rel = 'noopener'
-    anchor.click()
-    // Staggered: a browser handed a hundred navigations in one tick drops most
-    // of them, and the ones it keeps it treats as a popup storm.
-    await new Promise((resolve) => setTimeout(resolve, 300))
-  }
+function offerIndividually(entries: readonly ZipEntry[], total: number): void {
+  const files = entries.flatMap((entry) =>
+    entry.id === undefined ? [] : [{ id: entry.id, path: entry.path, size: entry.size }],
+  )
+  offer = { files, total }
+  announce()
 }
 
 /** Tests only: the singleton outlives a test file otherwise. */
 export function resetZipDownload(): void {
   controller = null
   job = null
+  offer = null
 }

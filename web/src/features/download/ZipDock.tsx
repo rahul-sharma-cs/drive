@@ -1,6 +1,28 @@
 import { dangerButtonClass } from '../../ui/controls'
 import { formatBytes } from '../../ui/format'
-import { cancelZipDownload, useZipJob } from './useZipDownload'
+import { IndividualDownloads } from './IndividualDownloads'
+import { cancelZipDownload, useZipJob, type ZipJob } from './useZipDownload'
+
+/**
+ * The archive's two possible screens: the dock while one is being built, and
+ * the per-file offer when this browser cannot build it at all.
+ *
+ * They ship together because they are mounted together — the layout puts this
+ * one component in the corner, and the offer (a dialog, portalled to the body
+ * from wherever it is rendered) has no separate home in the tree. Only one of
+ * the two is ever up: the offer replaces the archive rather than reporting on
+ * it.
+ */
+export function ZipDock() {
+  const job = useZipJob()
+
+  return (
+    <>
+      {job !== null && <ArchivePanel job={job} />}
+      <IndividualDownloads />
+    </>
+  )
+}
 
 /**
  * What the app is doing while it builds an archive.
@@ -14,10 +36,7 @@ import { cancelZipDownload, useZipJob } from './useZipDownload'
  * running the total is not known yet, and a bar that sat at 0% through a long
  * paginated walk would look stuck rather than busy.
  */
-export function ZipDock() {
-  const job = useZipJob()
-  if (job === null) return null
-
+function ArchivePanel({ job }: { job: ZipJob }) {
   const walking = job.total === 0
   const pct = walking ? 0 : Math.min(100, Math.round((job.written / job.total) * 100))
 

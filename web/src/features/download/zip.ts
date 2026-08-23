@@ -120,7 +120,8 @@ async function walk(
   deps: ZipDeps,
 ): Promise<void> {
   // One set per directory: names only have to be unique among their siblings,
-  // and a name taken in one folder must not rename anything in another.
+  // and a name taken in one folder must not rename anything in another. Held
+  // lower-cased — see `uniqueName`.
   const taken = new Set<string>()
 
   for (const node of nodes) {
@@ -167,6 +168,14 @@ async function listAll(id: string, signal: AbortSignal, deps: ZipDeps): Promise<
  * is renamed. The suffix goes before the extension, where every file manager
  * puts it, so `notes.txt` becomes `notes (1).txt` and still opens as text.
  *
+ * Collisions are judged case-insensitively, exactly as the server's
+ * `NextFreeName` judges siblings: `Report.txt` and `report.txt` are two
+ * distinct entries in a zip, but macOS and Windows extract them onto one
+ * case-insensitive filesystem and the second silently replaces the first. Two
+ * roots that differ only in case cannot be siblings on the server, but they
+ * reach here together out of a search selection. The name that goes into the
+ * archive keeps its own casing; only the bookkeeping is folded.
+ *
  * Names cannot contain `/` or `\` — the server rejects both — so a name is
  * always exactly one path segment here.
  */
@@ -176,8 +185,8 @@ function uniqueName(name: string, taken: Set<string>): string {
   const ext = dot > 0 ? name.slice(dot) : ''
 
   let candidate = name
-  for (let n = 1; taken.has(candidate); n++) candidate = `${stem} (${n})${ext}`
-  taken.add(candidate)
+  for (let n = 1; taken.has(candidate.toLowerCase()); n++) candidate = `${stem} (${n})${ext}`
+  taken.add(candidate.toLowerCase())
   return candidate
 }
 
