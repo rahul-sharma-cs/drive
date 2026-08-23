@@ -68,6 +68,46 @@ describe('the button appears only where the deployment offers it', () => {
   })
 })
 
+/**
+ * Every failure reads as "not configured". The only thing this answer decides
+ * is whether to draw one extra button, and a screen that reported the failure
+ * would be telling somebody about a button they were never going to be offered
+ * — on the one screen in the product where nobody has proved anything yet.
+ */
+describe('an answer that never comes', () => {
+  it('draws the sign-in screen with no button and no error when the route 500s', async () => {
+    const calls = stubFetch([
+      { path: '/api/auth/providers', status: 500, body: { code: 'internal', message: 'something fell over' } },
+    ])
+    const { client } = renderApp(<LoginPage />, { route: '/login' })
+
+    await waitFor(() => expect(calls.filter((c) => c.url === '/api/auth/providers')).toHaveLength(1))
+    await waitFor(() => expect(client.isFetching()).toBe(0))
+
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Continue with Google' })).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByText(/something fell over/)).toBeNull()
+  })
+
+  it('does the same when the request does not complete at all', async () => {
+    // Offline, or a clone whose server predates the route: `request()` rejects
+    // rather than answering, and `retry: false` means that is the final word.
+    const offline = vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    })
+    vi.stubGlobal('fetch', offline)
+    const { client } = renderApp(<LoginPage />, { route: '/login' })
+
+    await waitFor(() => expect(offline).toHaveBeenCalled())
+    await waitFor(() => expect(client.isFetching()).toBe(0))
+
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Continue with Google' })).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
 describe('pressing it is a navigation, not a request', () => {
   it('is an anchor to the server route and fetches nothing when clicked', async () => {
     const calls = stubFetch([configured])

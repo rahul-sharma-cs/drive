@@ -95,6 +95,34 @@ describe('the linked methods', () => {
   })
 })
 
+describe('when the list does not load', () => {
+  it('says so, and Try again asks for it again', async () => {
+    renderAccount({
+      routes: [
+        {
+          path: '/api/auth/identities',
+          status: 500,
+          body: { code: 'internal', message: 'something fell over' },
+        },
+      ],
+    })
+
+    expect(await within(methods()).findByText('The sign-in methods didn’t load.')).toBeTruthy()
+    // The server's own words are for a form the person filled in; a list that
+    // did not arrive is the screen's own problem to describe.
+    expect(screen.queryByText(/something fell over/)).toBeNull()
+
+    // The same route, answered this time: a retry that only redrew the error
+    // would pass a test that stopped at counting requests.
+    const calls = stubFetch([linked])
+    await userEvent.click(within(methods()).getByRole('button', { name: 'Try again' }))
+
+    const row = await within(methods()).findByRole('listitem')
+    expect(within(row).getByText(/Google · ada@example\.test/)).toBeTruthy()
+    expect(calls.filter((c) => c.url === '/api/auth/identities')).toHaveLength(1)
+  })
+})
+
 describe('a deployment with no provider configured', () => {
   it('goes back to the account screen it had before this feature existed', async () => {
     renderAccount({ google: false })
