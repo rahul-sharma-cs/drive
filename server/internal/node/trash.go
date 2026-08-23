@@ -63,17 +63,12 @@ type TrashCursor struct {
 // the thing the user actually deleted.
 func (s *Store) ListTrash(ctx context.Context, ownerID uuid.UUID, cur *TrashCursor, limit int) ([]Node, *TrashCursor, error) {
 	args := []any{ownerID}
-	where := `owner_id = $1 AND trashed_root AND deleted_at IS NOT NULL`
 	if cur != nil {
 		args = append(args, cur.DeletedAt, cur.ID)
-		where += fmt.Sprintf(` AND (deleted_at, id) < ($%d::timestamptz, $%d::uuid)`, len(args)-1, len(args))
 	}
 	args = append(args, limit+1)
 
-	sql := `SELECT ` + nodeCols + ` FROM nodes WHERE ` + where +
-		fmt.Sprintf(` ORDER BY deleted_at DESC, id DESC LIMIT $%d`, len(args))
-
-	rows, err := s.db.Query(ctx, sql, args...)
+	rows, err := s.db.Query(ctx, trashListQuery(cur != nil), args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("listing the trash: %w", err)
 	}
@@ -99,6 +94,33 @@ func (s *Store) ListTrash(ctx context.Context, ownerID uuid.UUID, cur *TrashCurs
 	return items, &TrashCursor{DeletedAt: *last.DeletedAt, ID: last.ID}, nil
 }
 
+// trashPredicate is what "in the trash, and shown there" means. Both trash
+// reads filter on it, and migration 0004's partial index repeats it verbatim --
+// the planner only uses a partial index when it can prove the query implies the
+// index's own predicate, so the two texts have to stay identical.
+const trashPredicate = `owner_id = $1 AND trashed_root AND deleted_at IS NOT NULL`
+
+// trashListQuery renders the listing's SQL for a page with or without a cursor.
+//
+// It is a function, like childrenQuery, so the plan test can EXPLAIN the query
+// the store actually runs instead of a copy that drifts away from it.
+func trashListQuery(withCursor bool) string {
+	where := trashPredicate
+	limit := 2
+	if withCursor {
+		where += ` AND (deleted_at, id) < ($2::timestamptz, $3::uuid)`
+		limit = 4
+	}
+	return `SELECT ` + nodeCols + ` FROM nodes WHERE ` + where +
+		fmt.Sprintf(` ORDER BY deleted_at DESC, id DESC LIMIT $%d`, limit)
+}
+
+// trashRootIDsQuery is emptying's page: the same predicate, oldest first.
+const trashRootIDsQuery = `SELECT id FROM nodes
+		 WHERE ` + trashPredicate + `
+		 ORDER BY deleted_at, id
+		 LIMIT $2`
+
 // TrashRootIDs returns up to limit of the caller's trashed roots, oldest
 // deletion first. It is what emptying the trash pages over: each purge removes
 // the rows it returned, so the next call reads the next batch without a cursor,
@@ -107,12 +129,7 @@ func (s *Store) ListTrash(ctx context.Context, ownerID uuid.UUID, cur *TrashCurs
 // The predicate is ListTrash's, exactly: the ids handed back are the ones the
 // trash listing shows, and nothing else.
 func (s *Store) TrashRootIDs(ctx context.Context, ownerID uuid.UUID, limit int) ([]uuid.UUID, error) {
-	const q = `SELECT id FROM nodes
-		 WHERE owner_id = $1 AND trashed_root AND deleted_at IS NOT NULL
-		 ORDER BY deleted_at, id
-		 LIMIT $2`
-
-	rows, err := s.db.Query(ctx, q, ownerID, limit)
+	rows, err := s.db.Query(ctx, trashRootIDsQuery, ownerID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing the trash: %w", err)
 	}

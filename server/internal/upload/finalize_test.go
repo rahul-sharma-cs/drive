@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rahul-sharma-cs/drive/server/internal/blob"
@@ -718,5 +719,68 @@ func TestVerifyLedger(t *testing.T) {
 func TestEscapeLike(t *testing.T) {
 	if got := escapeLike(`100%_of\it`); got != `100\%\_of\\it` {
 		t.Errorf("escapeLike = %q", got)
+	}
+}
+
+// ------------------------------------------------------------- the ledger --
+
+// One object key belongs to one session, and the database says so.
+//
+// The GC's orphan-multipart claim asks only "does an active or completing
+// session own this key?", never which upload id, because R2 re-mints the
+// UploadId on every response and a claim comparing ids could never match there.
+// That narrower predicate is sound only while a key is unique: a second session
+// on the same key would let a dead one vouch for a live one's multipart. Nothing
+// can produce a duplicate today -- one call site, a fresh uuid, and no path
+// rewrites a key -- and migration 0004 is what keeps it that way, failing at the
+// INSERT instead of quietly at the next sweep.
+func TestObjectKeyIsUniquePerSession(t *testing.T) {
+	f := newFixture(t)
+	parent := f.folder("keys")
+
+	// Each session gets its own fingerprint, or the active-fingerprint index
+	// fires first and the answer is a resume rather than a refusal.
+	session := func(key string) *Session {
+		return &Session{
+			ID:          uuid.New(),
+			UserID:      f.user,
+			ParentID:    &parent,
+			FileName:    "same-key.bin",
+			FileSize:    1024,
+			Fingerprint: "fp-" + uuid.NewString(),
+			ObjectKey:   key,
+			PartSize:    finTestPartSize,
+			PartsTotal:  1,
+			Mode:        ModeDirect,
+		}
+	}
+
+	key := NewObjectKey()
+	if err := f.store.Insert(f.ctx, session(key)); err != nil {
+		t.Fatalf("inserting the first session: %v", err)
+	}
+
+	err := f.store.Insert(f.ctx, session(key))
+	if err == nil {
+		t.Fatal("a second session took an object key another session already owns; the GC's claim can no longer tell them apart")
+	}
+	// And it is not the create race, which is a resume and names a different
+	// index entirely -- reporting one as the other would turn a bug into a
+	// handshake the client retries forever.
+	if errors.Is(err, ErrRace) {
+		t.Fatalf("a duplicate object key was reported as the create race: %v", err)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		t.Fatalf("err = %v, want a unique violation", err)
+	}
+	if pgErr.ConstraintName != "upload_sessions_object_key_key" {
+		t.Errorf("violated constraint = %q, want the object-key one", pgErr.ConstraintName)
+	}
+
+	// A key of its own is still accepted: the constraint pins reuse, not
+	// creation.
+	if err := f.store.Insert(f.ctx, session(NewObjectKey())); err != nil {
+		t.Fatalf("a session with its own key was refused: %v", err)
 	}
 }

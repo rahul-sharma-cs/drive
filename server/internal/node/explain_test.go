@@ -80,6 +80,165 @@ func TestExplainChildrenSortPlans(t *testing.T) {
 	}
 }
 
+// The index evidence for the trash.
+//
+// ListTrash and TrashRootIDs share one predicate and order by (deleted_at, id)
+// in opposite directions; migration 0004 claims one btree serves both. Until it
+// landed, only nodes_owner_id_idx helped, so emptying a trash re-read every
+// node the owner had ever trashed and top-N-sorted it once per 200-root page.
+//
+// Both plans are printed twice: once as they run, and once inside a transaction
+// that drops the index and rolls back, which is the "before" the migration
+// changed. Seeding 2 000 roots in the shared drive-test database is not
+// something a gate run should keep doing, so it is opt-in:
+//
+//	set -a; . ./.env.test; set +a
+//	DRIVE_EXPLAIN=1 go test -count=1 -v -run TestExplainTrashPlans ./server/internal/node/
+func TestExplainTrashPlans(t *testing.T) {
+	if os.Getenv("DRIVE_EXPLAIN") == "" {
+		t.Skip("set DRIVE_EXPLAIN=1 to seed a 2 000-root trash and print the plans")
+	}
+
+	f := newFixture(t)
+	seedTrashRoots(f, 2000)
+
+	if _, err := f.pool.Exec(f.ctx, `ANALYZE nodes`); err != nil {
+		t.Fatalf("ANALYZE: %v", err)
+	}
+
+	// A real cursor, so the listing plan is the second page's -- the one that
+	// exercises the keyset rather than a bare first page.
+	_, next, err := f.store.ListTrash(f.ctx, f.owner, nil, 200)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if next == nil {
+		t.Fatal("no cursor after 200 of 2 000 trashed roots")
+	}
+
+	queries := []struct {
+		what string
+		sql  string
+		args []any
+	}{
+		{"ListTrash, second page of 200", trashListQuery(true),
+			[]any{f.owner, next.DeletedAt, next.ID, 201}},
+		{"TrashRootIDs, one 200-root page of emptying", trashRootIDsQuery,
+			[]any{f.owner, 200}},
+	}
+
+	for _, q := range queries {
+		t.Logf("=== %s, with nodes_trash_roots_idx ===\n%s",
+			q.what, strings.Join(explain(f, q.sql, q.args, false), "\n"))
+		t.Logf("=== %s, without it (index dropped inside a rolled-back tx) ===\n%s",
+			q.what, strings.Join(explain(f, q.sql, q.args, true), "\n"))
+	}
+}
+
+// explain runs EXPLAIN (ANALYZE, BUFFERS) over one query, optionally with the
+// trash index dropped for the duration of a transaction that is then rolled
+// back -- so the "before" plan costs the shared database nothing permanent.
+func explain(f *fixture, sql string, args []any, withoutIndex bool) []string {
+	f.t.Helper()
+
+	tx, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		f.t.Fatalf("EXPLAIN: begin: %v", err)
+	}
+	defer tx.Rollback(f.ctx) //nolint:errcheck // the rollback is the point
+
+	if withoutIndex {
+		if _, err := tx.Exec(f.ctx, `DROP INDEX nodes_trash_roots_idx`); err != nil {
+			f.t.Fatalf("EXPLAIN: dropping the trash index: %v", err)
+		}
+	}
+
+	rows, err := tx.Query(f.ctx, `EXPLAIN (ANALYZE, BUFFERS) `+sql, args...)
+	if err != nil {
+		f.t.Fatalf("EXPLAIN: %v", err)
+	}
+	defer rows.Close()
+
+	var plan []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			f.t.Fatalf("EXPLAIN: reading the plan: %v", err)
+		}
+		plan = append(plan, line)
+	}
+	if err := rows.Err(); err != nil {
+		f.t.Fatalf("EXPLAIN: reading the plan: %v", err)
+	}
+	return plan
+}
+
+// seedTrashRoots fills the owner's trash with n roots, each its own trashed
+// root at its own timestamp, and removes them when the test ends.
+func seedTrashRoots(f *fixture, n int) {
+	f.t.Helper()
+	if _, err := f.pool.Exec(f.ctx, `
+		INSERT INTO nodes (id, owner_id, parent_id, kind, name, deleted_at, trashed_root)
+		SELECT gen_random_uuid(), $1, $2, 'file',
+		       'trashed-' || lpad(i::text, 5, '0') || '.bin',
+		       now() - make_interval(secs => i), true
+		  FROM generate_series(1, $3) AS i`, f.owner, f.root, n); err != nil {
+		f.t.Fatalf("seeding %d trashed roots: %v", n, err)
+	}
+	f.t.Cleanup(func() {
+		if _, err := f.pool.Exec(f.ctx,
+			`DELETE FROM nodes WHERE owner_id = $1 AND trashed_root`, f.owner); err != nil {
+			f.t.Errorf("cleaning up the seeded trash: %v", err)
+		}
+	})
+}
+
+// The trash's partial index only applies while its predicate is written the way
+// the two queries write it: the planner has to prove the query implies it.
+// Nothing fails loudly when they drift -- the plan just starts sorting the
+// owner's whole trash again -- so the texts are compared here. No database
+// needed.
+func TestTrashPredicateMatchesTheMigration(t *testing.T) {
+	raw, err := os.ReadFile("../../migrations/0004_upload_key_and_trash_index.sql")
+	if err != nil {
+		t.Fatalf("reading the migration: %v", err)
+	}
+	migration := string(raw)
+
+	// The predicate without its owner parameter: the index is not per-owner in
+	// its WHERE, it carries owner_id as the leading column instead.
+	const partial = `WHERE trashed_root AND deleted_at IS NOT NULL`
+	if !strings.Contains(migration, partial) {
+		t.Errorf("migration 0004 does not restrict the trash index to %q", partial)
+	}
+	if !strings.Contains(migration, `(owner_id, deleted_at, id)`) {
+		t.Error("migration 0004's trash index is not on (owner_id, deleted_at, id)")
+	}
+
+	// Both readers, against the one predicate.
+	for _, q := range []string{trashListQuery(false), trashListQuery(true), trashRootIDsQuery} {
+		if !strings.Contains(q, trashPredicate) {
+			t.Errorf("a trash query no longer filters on %q:\n%s", trashPredicate, q)
+		}
+	}
+	if want := strings.TrimPrefix(trashPredicate, `owner_id = $1 AND `); !strings.Contains(migration, want) {
+		t.Errorf("the index predicate %q is not the queries' own", want)
+	}
+
+	// Ascending for emptying, descending for the listing -- one btree, read
+	// both ways. An index that carried its own ASC/DESC would serve one of
+	// them and silently sort for the other.
+	if !strings.Contains(trashRootIDsQuery, `ORDER BY deleted_at, id`) {
+		t.Error("emptying no longer pages oldest-deletion-first")
+	}
+	if !strings.Contains(trashListQuery(true), `ORDER BY deleted_at DESC, id DESC`) {
+		t.Error("the listing no longer pages most-recent-first")
+	}
+	if strings.Contains(migration, `deleted_at DESC`) {
+		t.Error("migration 0004's index pins a direction; a btree serves both without one")
+	}
+}
+
 // An index on an expression only serves a query that writes the expression the
 // same way. Nothing fails loudly when they drift -- the plan just quietly
 // starts sorting 5 000 rows -- so the two texts are compared here, where a
