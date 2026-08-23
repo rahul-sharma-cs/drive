@@ -359,6 +359,12 @@ func TestUnknownAssetIs404NotTheSPA(t *testing.T) {
 		"/assets/does-not-exist.js",
 		"/assets/index-0123456789.css",
 		"/assets/nested/deep.woff2",
+		// A second leading slash is the same URL to a browser resolving a
+		// relative src against a directory, and chi hands the path through
+		// uncleaned. Trimming only one of them left the name as
+		// "/assets/..." -- outside the prefix, so the miss fell through to
+		// the document this test exists to prevent.
+		"//assets/does-not-exist.js",
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -366,8 +372,8 @@ func TestUnknownAssetIs404NotTheSPA(t *testing.T) {
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404 (body %s)", path, rec.Code, rec.Body.String())
 		}
-		if cc := rec.Header().Get("Cache-Control"); strings.Contains(cc, "immutable") {
-			t.Errorf("GET %s Cache-Control = %q, want no immutable on a miss", path, cc)
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("GET %s Cache-Control = %q, want no-store on a miss", path, cc)
 		}
 		if body := rec.Body.String(); strings.Contains(body, "<html") {
 			t.Errorf("GET %s served the SPA document: %s", path, body)

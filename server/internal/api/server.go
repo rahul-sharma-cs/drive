@@ -224,7 +224,11 @@ func (s *Server) spaHandler() http.HandlerFunc {
 			WriteErr(w, r, http.StatusNotFound, CodeNotFound, "not found")
 			return
 		}
-		name := strings.TrimPrefix(r.URL.Path, "/")
+		// TrimLeft, not TrimPrefix: chi does not clean the path, so
+		// "//assets/x.js" arrives with both slashes and trimming one would
+		// leave a name that no longer starts with the prefix -- which is the
+		// check the fallback below turns on.
+		name := strings.TrimLeft(r.URL.Path, "/")
 		if name == "" {
 			name = "index.html"
 		}
