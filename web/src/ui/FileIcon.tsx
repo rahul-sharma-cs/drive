@@ -1,18 +1,37 @@
 /**
- * A coloured glyph plus a short extension tag — folders read amber and
- * filled, files read by type (a red "PDF" tag, a photo glyph tagged "PNG",
- * and so on) rather than as one undifferentiated file icon. Rows, the viewer
- * title, the upload dock, and the destination picker all render off the one
- * `FILE_ICON_TABLE` below, so a new file type or a future retint is one row
- * changed in one place, not a resolver edited in four.
+ * What kind of thing a row holds, in one glyph: an amber filled folder, or a
+ * page carrying the mark of its type in that type's colour. Rows, the viewer
+ * title and the destination picker all render off the one `FILE_ICON_TABLE`
+ * below, so a new file type or a future retint is one row changed in one
+ * place, not a resolver edited in four.
  *
- * Purely decorative: a row already renders the file's name as text next to
- * this, so the glyph — and its tag — carry no information a screen reader
- * needs.
+ * Every file glyph is page-shaped and every folder is not, so the silhouette
+ * answers "is this somewhere I can go into?" before any colour is read. The
+ * mark inside the page and its hue answer "what is it?" — which is how Drive
+ * and OneDrive both do it, and it is the only thing that stays legible at the
+ * 22px a dense list can spend.
+ *
+ * There is deliberately no extension tag drawn inside the glyph. It was tried:
+ * three bold letters over the ruled lines of a 22px page is a smudge, not a
+ * label, and the name beside it already ends in `.pdf`.
+ *
+ * Purely decorative: a row renders the file's name as text next to this, so
+ * the glyph carries no information a screen reader needs.
  */
 
 import type { LucideIcon } from 'lucide-react'
-import { File, FileArchive, FileAudio, FileCode, FileSpreadsheet, FileText, Folder, Image, Presentation, Video } from 'lucide-react'
+import {
+  File,
+  FileArchive,
+  FileAudio,
+  FileCode,
+  FileImage,
+  FileSpreadsheet,
+  FileText,
+  FileVideo,
+  Folder,
+  Presentation,
+} from 'lucide-react'
 
 export type FileCategory =
   | 'folder'
@@ -42,7 +61,7 @@ interface CategorySpec {
   filled?: boolean
   extensions: string[]
   mimeExact?: string[]
-  /** Checked with `startsWith`, e.g. `'image/'`. Also the categories whose mime subtype doubles as a sensible tag (see `tagFor`). */
+  /** Checked with `startsWith`, e.g. `'image/'`. */
   mimePrefixes?: string[]
 }
 
@@ -63,14 +82,14 @@ export const FILE_ICON_TABLE: CategorySpec[] = [
   },
   {
     category: 'image',
-    icon: Image,
+    icon: FileImage,
     colorClass: 'text-type-image',
     extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'heic'],
     mimePrefixes: ['image/'],
   },
   {
     category: 'video',
-    icon: Video,
+    icon: FileVideo,
     colorClass: 'text-type-video',
     extensions: ['mp4', 'webm', 'mov', 'mkv'],
     mimePrefixes: ['video/'],
@@ -151,7 +170,7 @@ export const FILE_ICON_TABLE: CategorySpec[] = [
 const FOLDER_SPEC: CategorySpec = {
   category: 'folder',
   icon: Folder,
-  colorClass: 'text-warn',
+  colorClass: 'text-type-folder',
   filled: true,
   extensions: [],
 }
@@ -161,12 +180,6 @@ const GENERIC_SPEC: CategorySpec = {
   icon: File,
   colorClass: 'text-ink-3',
   extensions: [],
-}
-
-/** Extensions whose sensible tag isn't just their own uppercased text. */
-const TAG_OVERRIDES: Record<string, string> = {
-  jpeg: 'JPG',
-  'tar.gz': 'TGZ',
 }
 
 const EXTENSION_TO_SPEC = new Map<string, CategorySpec>()
@@ -203,32 +216,26 @@ function extractExtension(name: string): string | null {
   return lower.slice(dot + 1)
 }
 
-interface Classification {
-  spec: CategorySpec
-  ext: string | null
-  mime: string | null
-}
-
 /** Resolution order: folder beats everything; mime beats the extension; the extension beats generic. */
-function classify(kind: 'file' | 'folder', name: string, mime?: string | null): Classification {
-  if (kind === 'folder') return { spec: FOLDER_SPEC, ext: null, mime: null }
+function classify(kind: 'file' | 'folder', name: string, mime?: string | null): CategorySpec {
+  if (kind === 'folder') return FOLDER_SPEC
 
   const normalizedMime = normalizeMime(mime)
   const ext = extractExtension(name)
 
   if (normalizedMime) {
     const exact = MIME_EXACT_TO_SPEC.get(normalizedMime)
-    if (exact) return { spec: exact, ext, mime: normalizedMime }
+    if (exact) return exact
     const prefixed = MIME_PREFIX_TO_SPEC.find(([prefix]) => normalizedMime.startsWith(prefix))
-    if (prefixed) return { spec: prefixed[1], ext, mime: normalizedMime }
+    if (prefixed) return prefixed[1]
   }
 
   if (ext) {
     const bySpec = EXTENSION_TO_SPEC.get(ext)
-    if (bySpec) return { spec: bySpec, ext, mime: normalizedMime }
+    if (bySpec) return bySpec
   }
 
-  return { spec: GENERIC_SPEC, ext, mime: normalizedMime }
+  return GENERIC_SPEC
 }
 
 /**
@@ -236,60 +243,28 @@ function classify(kind: 'file' | 'folder', name: string, mime?: string | null): 
  * grouping, the destination picker's folder-only filter.
  */
 export function fileCategory(kind: 'file' | 'folder', name: string, mime?: string | null): FileCategory {
-  return classify(kind, name, mime).spec.category
-}
-
-function tagFor({ spec, ext, mime }: Classification): string | undefined {
-  if (spec.category === 'folder') return undefined
-  if (spec.category === 'pdf') return 'PDF'
-
-  if (ext && EXTENSION_TO_SPEC.get(ext) === spec) return TAG_OVERRIDES[ext] ?? ext.toUpperCase()
-
-  // No extension matched this spec (mime-only resolution, or no filename
-  // extension at all) — image/video/audio mime subtypes double as sensible
-  // tags ('image/png' -> 'PNG'); office mimes' subtypes don't, so this is
-  // gated on `mimePrefixes` rather than applied to every category.
-  if (mime && spec.mimePrefixes) {
-    const subtype = mime.split('/')[1]?.split(/[+;]/)[0]
-    if (subtype) return (TAG_OVERRIDES[subtype] ?? subtype).toUpperCase()
-  }
-
-  if (spec.category === 'generic' && ext && ext.length <= 3) return ext.toUpperCase()
-
-  return undefined
+  return classify(kind, name, mime).category
 }
 
 export interface FileIconProps {
   kind: 'file' | 'folder'
   name: string
   mime?: string | null
-  /** Pixels. Rows want 20-24; the viewer title and dock pass a larger value. */
+  /** Pixels. Rows want 20-24; the viewer title passes a larger value. */
   size?: number
   className?: string
 }
 
 export function FileIcon({ kind, name, mime, size = 20, className = '' }: FileIconProps) {
-  const classification = classify(kind, name, mime)
-  const { spec } = classification
-  const tag = tagFor(classification)
+  const spec = classify(kind, name, mime)
   const Icon = spec.icon
-  const tagSize = Math.max(6, Math.round(size * 0.32))
 
   return (
-    <span
+    <Icon
       aria-hidden="true"
-      className={`relative inline-flex shrink-0 items-center justify-center ${className}`}
-      style={{ width: size, height: size }}
-    >
-      <Icon aria-hidden="true" size={size} className={spec.colorClass} {...(spec.filled ? { fill: 'currentColor' } : {})} />
-      {tag && (
-        <span
-          className={`absolute inset-x-0 bottom-[6%] text-center font-bold leading-none ${spec.colorClass}`}
-          style={{ fontSize: tagSize }}
-        >
-          {tag}
-        </span>
-      )}
-    </span>
+      size={size}
+      className={`shrink-0 ${spec.colorClass} ${className}`}
+      {...(spec.filled ? { fill: 'currentColor' } : {})}
+    />
   )
 }

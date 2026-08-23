@@ -45,7 +45,7 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
   const nodes = children.data?.pages.flatMap((page) => page.items) ?? []
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-6 sm:px-6 sm:py-8">
+    <main className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-4 py-5 sm:px-6 sm:py-6">
       <Breadcrumbs crumbs={crumbs.data ?? []} rootId={rootId} onDropInto={(id, ids) => void moveTo(id, ids)} />
 
       <DropZone>

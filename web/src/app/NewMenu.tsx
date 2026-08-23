@@ -52,7 +52,7 @@ export function NewMenu() {
           <Button
             variant="outline"
             size="lg"
-            className="h-12 gap-3 self-start rounded-full border-line-strong bg-surface px-6 text-[14px] text-ink shadow-card hover:border-line-strong hover:bg-surface-muted hover:text-ink active:bg-line/50 active:shadow-none"
+            className="h-12 gap-3 self-start rounded-full border-line-strong px-6 text-[14px] text-ink shadow-card hover:border-line-strong hover:text-ink active:bg-line/50 active:shadow-none"
           >
             <Plus className="size-5 text-ink-2" />
             New

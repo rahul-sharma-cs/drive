@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest'
 
 import { FILE_ICON_TABLE, FileIcon, fileCategory } from '../FileIcon'
 
+const svgOf = (container: HTMLElement) => container.querySelector('svg')!
+
 describe('fileCategory', () => {
   it('ignores mime on a folder', () => {
     expect(fileCategory('folder', 'anything.pdf', 'application/pdf')).toBe('folder')
@@ -13,35 +15,79 @@ describe('fileCategory', () => {
   it('lets mime win over a misleading extension', () => {
     expect(fileCategory('file', 'resume.txt', 'application/pdf')).toBe('pdf')
   })
+
+  it('reads a type off the mime with no filename extension to help', () => {
+    expect(fileCategory('file', 'scan', 'image/png')).toBe('image')
+  })
+
+  it('classifies a compound .tar.gz as an archive', () => {
+    expect(fileCategory('file', 'backup.tar.gz', null)).toBe('archive')
+  })
+
+  it('falls back to generic for an unrecognised type', () => {
+    expect(fileCategory('file', 'mystery.xyz123', null)).toBe('generic')
+  })
 })
 
 describe('FileIcon', () => {
-  it('renders application/pdf and a bare .pdf extension as the same "PDF" glyph, decoratively', () => {
+  it('draws application/pdf and a bare .pdf as the same glyph in the same hue, decoratively', () => {
     const byMime = render(<FileIcon kind="file" name="report" mime="application/pdf" />)
-    expect(screen.getByText('PDF')).toBeTruthy()
-    expect(byMime.container.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+    const first = svgOf(byMime.container)
+    expect(first.getAttribute('aria-hidden')).toBe('true')
+    expect(screen.queryByRole('img')).toBeNull()
     byMime.unmount()
 
     const byExtension = render(<FileIcon kind="file" name="report.pdf" mime="" />)
-    expect(screen.getByText('PDF')).toBeTruthy()
-    byExtension.unmount()
+    const second = svgOf(byExtension.container)
+
+    // Same drawing, same colour, whichever of the two said so.
+    expect(second.getAttribute('class')).toBe(first.getAttribute('class'))
+    expect(first.getAttribute('class')).toContain('text-danger')
   })
 
-  it('tags image/png "PNG" even without a matching filename extension', () => {
-    render(<FileIcon kind="file" name="scan" mime="image/png" />)
-    expect(screen.getByText('PNG')).toBeTruthy()
+  it('gives each type its own hue out of the product’s own tokens', () => {
+    // The point of the tokens: a list of mixed types is one palette. A stock
+    // shade slipping back into the table would show up here as a class that is
+    // not one of ours.
+    const hues = [
+      ['scan.png', 'image/png', 'text-type-image'],
+      ['clip.mp4', 'video/mp4', 'text-type-video'],
+      ['take.mp3', 'audio/mpeg', 'text-type-audio'],
+      ['backup.tar.gz', null, 'text-type-archive'],
+      ['books.xlsx', null, 'text-type-sheet'],
+      ['deal.docx', null, 'text-type-doc'],
+      ['server.go', null, 'text-type-code'],
+      ['notes.txt', 'text/plain', 'text-type-text'],
+    ] as const
+
+    for (const [name, mime, expected] of hues) {
+      const { container, unmount } = render(<FileIcon kind="file" name={name} mime={mime} />)
+      expect(svgOf(container).getAttribute('class')).toContain(expected)
+      unmount()
+    }
   })
 
-  it('classifies and tags a compound .tar.gz as an archive', () => {
-    expect(fileCategory('file', 'backup.tar.gz', null)).toBe('archive')
-    render(<FileIcon kind="file" name="backup.tar.gz" mime={null} />)
-    expect(screen.getByText('TGZ')).toBeTruthy()
+  it('fills a folder and outlines a file, so the two never depend on colour alone', () => {
+    const folder = render(<FileIcon kind="folder" name="Invoices" />)
+    expect(svgOf(folder.container).getAttribute('fill')).toBe('currentColor')
+    expect(svgOf(folder.container).getAttribute('class')).toContain('text-type-folder')
+    folder.unmount()
+
+    const file = render(<FileIcon kind="file" name="notes.txt" mime="text/plain" />)
+    expect(svgOf(file.container).getAttribute('fill')).not.toBe('currentColor')
   })
 
-  it('falls back to a generic glyph with no accessible role for an unrecognised type', () => {
-    expect(fileCategory('file', 'mystery.xyz123', null)).toBe('generic')
-    render(<FileIcon kind="file" name="mystery.xyz123" mime={null} />)
-    expect(screen.queryByRole('img')).toBeNull()
+  it('draws no lettering inside the glyph at any size', () => {
+    // Three bold letters over the ruled lines of a small page is a smudge, not
+    // a label — and the row already spells the extension out in the name. The
+    // glyph and its hue carry the type on their own.
+    for (const size of [20, 22, 24, 40]) {
+      const { container, unmount } = render(
+        <FileIcon kind="file" name="lease-signed.pdf" mime="application/pdf" size={size} />,
+      )
+      expect(container.textContent).toBe('')
+      unmount()
+    }
   })
 })
 
@@ -53,6 +99,12 @@ describe('FILE_ICON_TABLE', () => {
         expect(seen.has(ext)).toBe(false)
         seen.add(ext)
       }
+    }
+  })
+
+  it('never reaches outside the product’s own colour tokens', () => {
+    for (const spec of FILE_ICON_TABLE) {
+      expect(spec.colorClass).toMatch(/^text-(type-[a-z]+|danger|warn|ink-3)$/)
     }
   })
 })
