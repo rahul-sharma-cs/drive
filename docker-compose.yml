@@ -14,7 +14,23 @@ services:
       - garage-meta:/var/lib/garage/meta
       - garage-data:/var/lib/garage/data
     healthcheck:
-      test: ["CMD", "/garage", "status"]
+      # This reads /etc/garage.toml — the file bind-mounted just above — for the
+      # RPC address and secret, and -c says so at the call site rather than
+      # leaving it to the default (which GARAGE_CONFIG_FILE could move).
+      #
+      # There is no config-free probe to switch to. The image is FROM scratch
+      # with only /garage in it, so there is no shell and no HTTP client for the
+      # S3 or admin endpoints; `-s <secret>` alone is still refused; and `-h`
+      # wants `<full-node-id>@host:port`, an id generated on the node's first
+      # boot that nothing here can know in advance.
+      #
+      # So when this reports "Unable to read configuration file /etc/garage.toml"
+      # while the store is plainly serving, the mount is what broke and not the
+      # store: the container was created from a directory that has since been
+      # deleted — a git worktree that ran `make infra-init-test` and was then
+      # removed. `docker compose -p <project> --env-file <env> up -d` from a live
+      # checkout recreates the container against a path that exists.
+      test: ["CMD", "/garage", "-c", "/etc/garage.toml", "status"]
       interval: 5s
       timeout: 5s
       retries: 10
