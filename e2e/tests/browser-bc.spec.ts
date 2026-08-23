@@ -546,7 +546,10 @@ test('a selection goes to the trash and comes back out of it whole', async () =>
   // A plain label, not a sort control: the trash listing has no sort, so
   // `FileList` renders its column headings as text.
   await expect(page.getByText('Trashed', { exact: true })).toBeVisible();
-  const when = await trashRow('Box A').locator('span.numeric').first().getAttribute('title');
+  // Found by its `title`, which is the full timestamp behind the relative
+  // wording. The cell is no longer `.numeric` — "6 days ago" is a phrase, not a
+  // quantity — and `.numeric` in a row now means the size.
+  const when = await trashRow('Box A').locator('span[title]').first().getAttribute('title');
   expect(when, 'the Trashed column is populated').toBeTruthy();
   expect(Number.isFinite(new Date(when!).getTime()), `"${when}" is a time`).toBe(true);
 
