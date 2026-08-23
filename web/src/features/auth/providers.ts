@@ -15,13 +15,19 @@ import { getProviders } from '../../lib/api'
 
 const providersKey = ['auth', 'providers'] as const
 
-export function useProviders(): { google: boolean } {
-  const { data } = useQuery({
+/**
+ * `settled` is whether the answer has actually arrived — a failure counts, since
+ * that is an answer of "not configured". Without it `google: false` reads the
+ * same before the question has been asked as after it came back no, and a screen
+ * that hides something on the strength of it flickers on every cold load.
+ */
+export function useProviders(): { google: boolean; settled: boolean } {
+  const { data, isPending } = useQuery({
     queryKey: providersKey,
     queryFn: getProviders,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     retry: false,
   })
-  return { google: data?.google === true }
+  return { google: data?.google === true, settled: !isPending }
 }

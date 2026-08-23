@@ -142,6 +142,25 @@ describe('a deployment with no provider configured', () => {
     const row = await within(methods()).findByRole('listitem')
     expect(within(row).getByText(/Google · ada@example\.test/)).toBeTruthy()
   })
+
+  it('stays put while the answer is still on its way', async () => {
+    let answer!: () => void
+    const held = new Promise<void>((resolve) => {
+      answer = resolve
+    })
+    renderAccount({ routes: [{ path: '/api/auth/providers', body: { google: false }, hold: held }] })
+
+    // The identities list answers first on a cold load, and answers empty. An
+    // unanswered providers question reads as `google: false`, so a guard that
+    // did not wait for it would take the whole section away right here — a
+    // blink on every load of /account, including the deployments where the
+    // provider is configured and the section is about to come back.
+    expect(await within(methods()).findByText(/Nothing linked\./)).toBeTruthy()
+
+    // And once the answer is in, the guard does what it is for.
+    answer()
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Sign-in methods' })).toBeNull())
+  })
 })
 
 describe('unlinking', () => {
@@ -209,6 +228,24 @@ describe('unlinking', () => {
     expect(sent?.headers.get('X-Drive-Client')).toBe('web')
   })
 
+  it('leaves focus somewhere, now that the button holding it has gone', async () => {
+    renderAccount({
+      routes: [linked, { method: 'DELETE', path: '/api/auth/identities/id-1', status: 204 }],
+    })
+
+    await userEvent.click(await within(methods()).findByRole('button', { name: 'Unlink' }))
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Unlink' }))
+    await waitFor(() => expect(within(methods()).queryByRole('listitem')).toBeNull())
+
+    // The dialog hands focus back to whatever opened it, and that was the row's
+    // own Unlink — which the same success took away. Restoring to a detached
+    // node puts focus on <body>, which for a keyboard user is being silently
+    // returned to the top of the document.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Sign-in methods' })),
+    )
+  })
+
   it('drops a row the server no longer has a link for', async () => {
     renderAccount({
       routes: [
@@ -229,6 +266,11 @@ describe('unlinking', () => {
     // tab, another device. The row describes something that is already gone,
     // and leaving it on screen with a live Unlink is the one outcome that is
     // wrong whichever way it is read.
+    //
+    // By role, and so only resolvable once the dialog has closed: the page
+    // behind an open modal is `aria-hidden`, which takes the section and its
+    // rows out of the tree these queries search. The wait is what makes that
+    // safe rather than accidental.
     await waitFor(() => expect(within(methods()).queryByRole('listitem')).toBeNull())
     expect(await screen.findByText('That sign-in method was already removed')).toBeTruthy()
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -250,8 +292,13 @@ describe('unlinking', () => {
     await userEvent.click(await within(methods()).findByRole('button', { name: 'Unlink' }))
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Unlink' }))
 
+    // In the dialog, not merely on the page: the refusal is the answer to the
+    // question the dialog is asking, and a toast for it would land under the
+    // modal it belongs to. Found through the dialog, so a version that showed
+    // it anywhere else fails here.
+    const asking = await screen.findByRole('dialog')
     expect(
-      await screen.findByText('That is the only way to sign in to this account.'),
+      await within(asking).findByText('That is the only way to sign in to this account.'),
     ).toBeTruthy()
     // By role the page is hidden behind the open dialog, so the row is looked
     // for by its text: it is still there, which is the half of the refusal the

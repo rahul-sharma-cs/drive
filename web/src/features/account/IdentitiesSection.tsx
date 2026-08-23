@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -38,11 +38,20 @@ const providerName: Record<Identity['provider'], string> = { google: 'Google' }
  */
 export function IdentitiesSection() {
   const me = useSession()
-  const { google } = useProviders()
+  const { google, settled } = useProviders()
   const client = useQueryClient()
   // The row being asked about, not its id: the question outlives the row on the
   // paths that drop it, and the dialog still has to name what it removed.
   const [confirming, setConfirming] = useState<Identity | null>(null)
+
+  const heading = useRef<HTMLHeadingElement>(null)
+  // Set on the two paths that take the row away. The dialog restores focus to
+  // whatever opened it, and that is the row's own Unlink button, which has just
+  // gone with its row — so the restore lands on <body> and a keyboard user is
+  // put back at the top of the document with no idea the row went. Cancel is
+  // not one of those paths: the button is still there and is the right place to
+  // come back to.
+  const toHeading = useRef(false)
 
   const identities = useQuery({ queryKey: identitiesKey, queryFn: listIdentities })
 
@@ -57,6 +66,7 @@ export function IdentitiesSection() {
     mutationFn: unlinkIdentity,
     onSuccess: (_result, id) => {
       dropRow(id)
+      toHeading.current = true
       setConfirming(null)
       toast.success('Sign-in method removed')
     },
@@ -69,6 +79,7 @@ export function IdentitiesSection() {
       // person reads it.
       if (err instanceof ApiError && err.code === 'not_found') {
         dropRow(id)
+        toHeading.current = true
         setConfirming(null)
         toast.success('That sign-in method was already removed')
         return
@@ -87,11 +98,17 @@ export function IdentitiesSection() {
   // sign-in screens follow, which otherwise stops at the front door and leaves
   // a heading, a rule and a permanently dead line here. Anything already linked
   // still gets its row, so a link outlives the provider being unconfigured.
-  if (!google && identities.isSuccess && items.length === 0) return null
+  // `settled` and not just `!google`: the providers answer reads as `false`
+  // while it is still in flight, so without it a cold load where the identities
+  // list comes back empty first takes the whole section away and puts it back a
+  // moment later.
+  if (settled && !google && identities.isSuccess && items.length === 0) return null
 
   return (
     <section aria-labelledby="identities-heading" className="flex flex-col gap-1.5">
-      <h2 id="identities-heading" className="text-[15px] font-semibold text-ink">
+      {/* tabIndex -1 so focus can be put here after an unlink takes away the
+          button that was holding it. */}
+      <h2 ref={heading} tabIndex={-1} id="identities-heading" className="text-[15px] font-semibold text-ink">
         Sign-in methods
       </h2>
       <p className="text-[13px] text-ink-3">
@@ -165,7 +182,15 @@ export function IdentitiesSection() {
           if (!open) setConfirming(null)
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent
+          className="sm:max-w-md"
+          onCloseAutoFocus={(e) => {
+            if (!toHeading.current) return
+            toHeading.current = false
+            e.preventDefault()
+            heading.current?.focus()
+          }}
+        >
           {confirming && (
             <>
               <DialogHeader>
@@ -183,11 +208,7 @@ export function IdentitiesSection() {
                 <Button variant="outline" onClick={() => setConfirming(null)}>
                   Cancel
                 </Button>
-                <Button
-                  variant="destructive"
-                  disabled={unlink.isPending}
-                  onClick={() => unlink.mutate(confirming.id)}
-                >
+                <Button variant="destructive" disabled={unlink.isPending} onClick={() => unlink.mutate(confirming.id)}>
                   {unlink.isPending ? 'Unlinking…' : 'Unlink'}
                 </Button>
               </DialogFooter>

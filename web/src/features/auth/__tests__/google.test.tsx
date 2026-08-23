@@ -126,14 +126,18 @@ describe('pressing it is a navigation, not a request', () => {
     // the real navigation ("Not implemented: navigation to another Document"),
     // which is what a click that left the document looks like from in here.
     let prevented: boolean | undefined
-    document.addEventListener(
-      'click',
-      (e) => {
-        prevented = e.defaultPrevented
-      },
-      { once: true },
-    )
-    await userEvent.click(link)
+    const watch = (e: Event) => {
+      prevented = e.defaultPrevented
+    }
+    // Taken off again rather than left to `{ once: true }`: a click that never
+    // reached the document would leave the listener on it for every test after
+    // this one, in a jsdom the whole file shares.
+    document.addEventListener('click', watch)
+    try {
+      await userEvent.click(link)
+    } finally {
+      document.removeEventListener('click', watch)
+    }
 
     expect(prevented).toBe(false)
     expect(calls.filter((c) => c.url.includes('/auth/google'))).toEqual([])

@@ -57,6 +57,13 @@ export interface StubRoute {
   path: string | RegExp
   status?: number
   body?: unknown
+  /**
+   * Held until this settles, for a case about what a screen draws while a
+   * request is still outstanding. Without it every stubbed answer lands on the
+   * next microtask, and the in-flight state no screen is ever seen in from a
+   * test is exactly where a hide-on-`false` guard flickers.
+   */
+  hold?: Promise<unknown>
 }
 
 /**
@@ -105,6 +112,7 @@ export function stubFetch(routes: StubRoute[]) {
     }
     const route = asked ?? fallback
     if (!route) throw new Error(`unstubbed request: ${method} ${url}`)
+    if (route.hold) await route.hold
     // A 204 may carry no body at all — the Response constructor throws on one.
     const payload = route.body === undefined ? null : JSON.stringify(route.body)
     return new Response(payload, {
