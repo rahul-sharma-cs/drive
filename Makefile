@@ -92,6 +92,17 @@ e2e-typecheck:
 # binary a deployment runs, and a fixture that signs an identity token for any
 # subject it is asked about has no business being produced by that target. It is
 # e2e's, so e2e builds it.
+#
+# Its -addr is DRIVE_GOOGLE_ISSUER with the scheme cut off, rather than a second
+# copy of the port: the stub publishes the address it listens on as its issuer,
+# and go-oidc refuses a discovery document whose issuer differs from the string
+# it was asked to discover by a byte. One value, so the two cannot drift.
+#
+# And the readiness loop asks whether the stub is still running before it asks
+# whether anything answers. A stub left over from an interrupted run still holds
+# the port, the new one's net.Listen fails in the background where nobody sees
+# it, and the discovery probe passes -- against the stale process, whose idea of
+# who is signing in comes from the run before this one.
 e2e: e2e-typecheck infra-init-test build
 	go build -o server/oidcstub ./server/cmd/oidcstub
 	$(TEST_STACK) exec -T postgres \
@@ -99,13 +110,18 @@ e2e: e2e-typecheck infra-init-test build
 	$(MAKE) seed-test
 	@set -a; . ./.env.test; set +a; \
 	base="http://localhost$${DRIVE_ADDR}"; \
-	./server/oidcstub -client-id "$$DRIVE_GOOGLE_CLIENT_ID" -client-secret "$$DRIVE_GOOGLE_CLIENT_SECRET" & \
+	./server/oidcstub -addr "$${DRIVE_GOOGLE_ISSUER#http://}" \
+		-client-id "$$DRIVE_GOOGLE_CLIENT_ID" -client-secret "$$DRIVE_GOOGLE_CLIENT_SECRET" & \
 	STUB_PID=$$!; \
 	trap 'kill $$STUB_PID 2>/dev/null || true' EXIT; \
 	discovered=0; \
 	for i in $$(seq 1 30); do \
-		if curl -sf "$$DRIVE_GOOGLE_ISSUER/.well-known/openid-configuration" >/dev/null; then discovered=1; break; fi; \
 		sleep 1; \
+		if ! kill -0 $$STUB_PID 2>/dev/null; then \
+			echo "e2e: the OIDC stub exited at once — something is already listening on $${DRIVE_GOOGLE_ISSUER#http://}, and this run would have signed in against it" >&2; \
+			exit 1; \
+		fi; \
+		if curl -sf "$$DRIVE_GOOGLE_ISSUER/.well-known/openid-configuration" >/dev/null; then discovered=1; break; fi; \
 	done; \
 	if [ "$$discovered" -ne 1 ]; then echo "e2e: the OIDC stub did not answer at $$DRIVE_GOOGLE_ISSUER within 30s" >&2; exit 1; fi; \
 	DRIVE_PART_SIZE=10MiB ./server/drive & \

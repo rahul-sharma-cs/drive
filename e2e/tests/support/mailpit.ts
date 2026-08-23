@@ -79,7 +79,9 @@ export function mailbox(context: () => APIRequestContext, base: string) {
     return `${base}${pathQuery}${found![1]}`;
   }
 
-  return { inboxTo, waitForMailCount, waitForMailTo, linkFrom };
+  // inboxTo stays in here: it is how the two waits are written, not something a
+  // spec has ever needed to ask for.
+  return { waitForMailCount, waitForMailTo, linkFrom };
 }
 
 /** Mailpit's inbox shapes, cut down to what these files read. */

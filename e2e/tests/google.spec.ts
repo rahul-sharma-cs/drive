@@ -7,6 +7,7 @@ import {
   type BrowserContext,
   type Locator,
   type Page,
+  type Request,
 } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -42,8 +43,13 @@ const REPO = join(HERE, '..', '..');
 const env = readEnvFile(join(REPO, '.env.test'));
 const BASE = process.env.E2E_BASE_URL ?? `http://localhost${env.DRIVE_ADDR}`;
 const MAILPIT = process.env.E2E_MAILPIT_API ?? env.DRIVE_MAILPIT_API;
-/** The fake provider, at exactly the string the server was configured to discover. */
-const ISSUER = process.env.E2E_OIDC_ISSUER ?? env.DRIVE_GOOGLE_ISSUER;
+/**
+ * The fake provider, at exactly the string the server was configured to
+ * discover — read from the same file the server and `make e2e` read, with no
+ * override, because a second source for it is a second thing that can disagree
+ * with the issuer the stub publishes.
+ */
+const ISSUER = env.DRIVE_GOOGLE_ISSUER;
 
 const RUN = randomUUID().slice(0, 8);
 
@@ -222,9 +228,38 @@ test('a password through Forgot password makes Unlink work, and outlives it', as
 
   await page.goto(`${BASE}/account`);
   await expect(unlink()).toBeEnabled();
-  await unlink().click();
-  await expect(page.getByText('Sign-in method removed')).toBeVisible();
-  await expect(identityRows()).toHaveCount(0);
+
+  // Unlink asks first, and the question is the whole point: there is no undo,
+  // and getting the link back means signing out and going round Google again.
+  let deletes = 0;
+  const countDeletes = (req: Request) => {
+    if (req.method() === 'DELETE' && req.url().includes('/api/auth/identities/')) deletes += 1;
+  };
+  page.on('request', countDeletes);
+  try {
+    await unlink().click();
+    const asking = page.getByRole('dialog', { name: 'Unlink Google?' });
+    await expect(asking).toBeVisible();
+
+    // Cancel is a no-op all the way down, not just on screen: a dialog that
+    // fired the DELETE and then drew the row back would look identical here
+    // without the request count.
+    await asking.getByRole('button', { name: 'Cancel' }).click();
+    await expect(asking).toBeHidden();
+    expect(deletes, 'Cancel asked the server for nothing').toBe(0);
+    await expect(identityRows(), 'and the row it was asked about is still there').toHaveCount(1);
+
+    // And then the same question, answered.
+    await unlink().click();
+    await expect(asking).toBeVisible();
+    await asking.getByRole('button', { name: 'Unlink' }).click();
+    await expect(page.getByText('Sign-in method removed')).toBeVisible();
+    await expect(asking).toBeHidden();
+    await expect(identityRows()).toHaveCount(0);
+    expect(deletes, 'exactly one DELETE, from the dialog').toBe(1);
+  } finally {
+    page.off('request', countDeletes);
+  }
 
   // The password is the way in now, and it works on its own.
   await signOut();

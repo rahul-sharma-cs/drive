@@ -26,6 +26,7 @@ docs/
 server/web/dist/
 server/drive
 server/drive-mcp
+server/oidcstub
 
 # the Go workspace: the image builds the server module directly, and
 # go.work.sum is untracked, so resolving the workspace would behave differently
