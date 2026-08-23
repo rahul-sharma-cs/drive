@@ -451,6 +451,31 @@ describe('the rail and the account menu', () => {
     expect(document.activeElement).not.toBe(hamburger)
   })
 
+  it('still hands focus to the hamburger after a widen that closed nothing', async () => {
+    const viewport = stubBreakpoint()
+    renderShell([], { route: '/folders/f9' })
+    const hamburger = screen.getByRole('button', { name: 'Open navigation' })
+
+    // A window resized around all day with the drawer shut. None of these
+    // closes anything, so none of them is a close the focus rule has to bend
+    // for — but each one used to arm the rule anyway.
+    viewport.cross(false)
+    viewport.cross(true)
+    viewport.cross(false)
+
+    await userEvent.click(hamburger)
+    await screen.findByRole('dialog')
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    // An ordinary Escape at a narrow width: the hamburger is right there on
+    // the screen and it is where the person came from. Armed by a stale widen,
+    // the close instead aims at the desktop rail — which `md:` is hiding at
+    // this width — and a keyboard user is left on whatever that turns out to
+    // be.
+    await waitFor(() => expect(document.activeElement).toBe(hamburger))
+  })
+
   it('signs out from the account menu, which is where it lives now', async () => {
     const { calls, client } = renderShell([{ method: 'POST', path: '/api/auth/logout', body: { status: 'ok' } }])
     // Something this account fetched, still in the cache when it leaves.

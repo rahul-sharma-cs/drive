@@ -43,12 +43,21 @@ export function AppLayout() {
   // the close came from the viewport rather than from a person, and
   // `onCloseAutoFocus` below spends the flag.
   const widened = useRef(false)
+  // The listener is registered once and closes over the first render's state,
+  // so what it needs to know about the drawer it reads through a ref.
+  const open = useRef(drawer)
+  open.current = drawer
   useEffect(() => {
     // The width Tailwind compiles `md:` from. jsdom defines no `matchMedia`.
     const wide = window.matchMedia?.('(min-width: 48rem)')
     if (!wide) return
     const onChange = (e: MediaQueryListEvent) => {
-      if (!e.matches) return
+      // Only while the drawer is actually open. A widen with it closed closes
+      // nothing, so it has no close to describe — and a flag set there is a
+      // flag still set the next time somebody opens the drawer at a narrow
+      // width and presses Escape, which then sends their focus to a rail that
+      // `md:` is hiding instead of back to the hamburger they pressed.
+      if (!e.matches || !open.current) return
       widened.current = true
       setDrawer(false)
     }
@@ -63,7 +72,16 @@ export function AppLayout() {
             hamburger up there is its trigger. A trigger outside the root is not
             registered, and an unregistered trigger is one Radix has nothing to
             hand focus back to when the panel closes — it goes to <body>. */}
-        <Sheet open={drawer} onOpenChange={setDrawer}>
+        <Sheet
+          open={drawer}
+          onOpenChange={(next) => {
+            // The flag describes *this* close. Anything left over from a
+            // previous one — a close `onCloseAutoFocus` never ran for — is
+            // stale by the time a new drawer is on screen.
+            if (next) widened.current = false
+            setDrawer(next)
+          }}
+        >
           <div className="min-h-screen bg-canvas text-ink">
             <TopBar />
 
