@@ -65,15 +65,21 @@
      They are Drive's own rather than a stock palette's: every one is pitched
      into the same register as the three hues above — deep, half-saturated,
      around a third lightness — so a folder of mixed types reads as one system
-     and no single row shouts. Hues sit in the arcs the three UI colours leave
-     free, which is why there is no orange or crimson here: those are the
-     folder and the failure.
+     and no single row shouts. What they stay clear of is orange and crimson,
+     because those two already mean something here: the folder and the
+     failure.
+
+     They are not evenly spread around the wheel, and they are not trying to
+     be. Four of the eight are neighbours — image, text, code and document sit
+     inside a 26° arc — so inside that family it is the *glyph* that says which
+     of them a row is, and the hue only says they are related. Colour is the
+     coarse sort; the drawing is the fine one.
 
      Folder is `warn` and PDF is `danger`, because those two *are* the
      conventions everybody already reads. Presentations share the document
-     hue: they are the same family, the glyph and the extension tag separate
-     them, and a ninth colour in a product that states a three-hue rule is
-     inflation. */
+     hue: they are the same family, and the glyph is what separates them —
+     a lectern rather than a page. A ninth colour in a product that states a
+     three-hue rule is inflation. */
   --color-type-image: #1b6b90;
   --color-type-video: #6b4796;
   --color-type-audio: #8f3a6d;
@@ -81,8 +87,12 @@
   --color-type-sheet: #1f6a4a;
   --color-type-doc: #3a539b;
   --color-type-code: #44607f;
-  /* Plain text has no type to announce, so it takes the metadata grey. */
-  --color-type-text: #626b74;
+  /* Plain text has no type to announce, so it takes the metadata grey — one
+     step darker than `--color-ink-3`, which is the same grey tuned for the
+     canvas and white only. This one also has to carry a row that is selected,
+     and on that tint the metadata value lands at 4.9:1. Here: 6.03:1 on white,
+     5.71:1 on the hovered row, 5.16:1 on the selected one. */
+  --color-type-text: #5b646c;
   /* The one type colour that is a fill rather than an outline, and so the one
      that cannot be `warn`: `--color-warn` is tuned to carry 12px text on white
      at 4.5:1, and a whole shape painted that dark reads as brown rather than

@@ -28,6 +28,7 @@ import {
   FileImage,
   FileSpreadsheet,
   FileText,
+  FileType,
   FileVideo,
   Folder,
   Presentation,
@@ -130,8 +131,14 @@ export const FILE_ICON_TABLE: CategorySpec[] = [
     ],
   },
   {
+    // A letterform inside the page, not the ruled lines `FileText` draws. PDFs,
+    // Word documents and plain text all had the same drawing, which left the
+    // hue carrying the whole difference between three of the commonest things
+    // in a folder — and two of those hues are a blue and a grey that a small
+    // glyph does not hold apart at 20px. The page silhouette is intact, the way
+    // every file glyph's is; what changed is the mark inside it.
     category: 'document',
-    icon: FileText,
+    icon: FileType,
     colorClass: 'text-type-doc',
     extensions: ['docx', 'doc', 'odt', 'rtf'],
     mimeExact: [

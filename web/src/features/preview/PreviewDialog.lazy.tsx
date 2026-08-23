@@ -1,3 +1,4 @@
+import { LoaderCircle } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState } from 'react'
 
 import type { PreviewDialogProps } from './PreviewDialog'
@@ -22,6 +23,12 @@ import { usePreviewParam } from './usePreview'
  *    smaller first paint; it must not buy it by making the first click on a file
  *    name wait for a network round trip. By the time anyone has read a row and
  *    aimed at it, the chunk is already there.
+ *
+ * The warming is a strong bet, not a guarantee — a click inside the first
+ * second, a cold cache, a bad connection — so the fallback below is what the
+ * click gets in the meantime, and it is not nothing. Nothing is the one answer
+ * a click must never get: the page sits there unchanged, and the honest reading
+ * of that is "it did not register", which is what makes a person click again.
  */
 const Viewer = lazy(() => import('./PreviewDialog'))
 
@@ -51,8 +58,29 @@ export function PreviewDialog(props: PreviewDialogProps) {
 
   if (!live) return null
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<Opening />}>
       <Viewer {...props} />
     </Suspense>
+  )
+}
+
+/**
+ * The viewer's own scrim, drawn before the viewer exists.
+ *
+ * It is the same `.scrim` the real dialog dims the page with, so what a person
+ * sees is the viewer opening — the page goes back, the panel arrives a moment
+ * later — rather than two separate events. On a warm chunk it is never painted
+ * at all.
+ *
+ * `aria-hidden`, and deliberately: the dialog that lands a frame later
+ * announces itself, and a status message for something that is usually gone
+ * inside 50 ms is noise. Nobody can interact with it either — there is nothing
+ * here to interact with yet, and the click that opened it is already spent.
+ */
+function Opening() {
+  return (
+    <div aria-hidden="true" className="scrim fixed inset-0 z-50 grid place-items-center">
+      <LoaderCircle className="size-5 animate-spin text-ink-2" />
+    </div>
   )
 }

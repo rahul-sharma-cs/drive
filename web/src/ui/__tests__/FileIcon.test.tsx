@@ -67,6 +67,27 @@ describe('FileIcon', () => {
     }
   })
 
+  it('does not draw the PDF, the document and the text file with one glyph', () => {
+    // All three used to be the same page of ruled lines, which left the hue
+    // carrying the entire difference between three of the commonest things in
+    // a folder — and two of the three hues are a blue and a grey. Whatever the
+    // drawings are, they cannot be one drawing.
+    const drawing = (name: string, mime: string) => {
+      const { container, unmount } = render(<FileIcon kind="file" name={name} mime={mime} />)
+      // The paths only. The colour class already differs and is not the point.
+      const paths = svgOf(container).innerHTML
+      unmount()
+      return paths
+    }
+
+    const drawings = new Set([
+      drawing('lease.pdf', 'application/pdf'),
+      drawing('deal.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+      drawing('notes.txt', 'text/plain'),
+    ])
+    expect(drawings.size).toBeGreaterThanOrEqual(2)
+  })
+
   it('fills a folder and outlines a file, so the two never depend on colour alone', () => {
     const folder = render(<FileIcon kind="folder" name="Invoices" />)
     expect(svgOf(folder.container).getAttribute('fill')).toBe('currentColor')
