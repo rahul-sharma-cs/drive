@@ -91,6 +91,17 @@ func (s *Server) mountAuth(r chi.Router) {
 			r.Post("/resend-verification", s.authResendVerification)
 		})
 
+		// The two browser navigations. Same bucket as the group above, but
+		// refused with a redirect rather than the JSON envelope -- and mounted
+		// whether or not a Google client is configured, because an unmounted
+		// route drops a browser that followed a link onto /api's JSON 404.
+		r.Group(func(r chi.Router) {
+			r.Use(s.rateLimitBrowser)
+
+			r.Get("/google/start", s.authGoogleStart)
+			r.Get("/google/callback", s.authGoogleCallback)
+		})
+
 		r.Group(func(r chi.Router) {
 			r.Use(s.RequireAuth)
 
@@ -100,6 +111,8 @@ func (s *Server) mountAuth(r chi.Router) {
 			r.Patch("/me", s.authUpdateMe)
 			r.Get("/sessions", s.authListSessions)
 			r.Delete("/sessions/{id}", s.authDeleteSession)
+			r.Get("/identities", s.authListIdentities)
+			r.Delete("/identities/{id}", s.authDeleteIdentity)
 			r.Post("/logout-all", s.authLogoutAll)
 			r.With(s.RateLimitAuth).Post("/password", s.authChangePassword)
 		})

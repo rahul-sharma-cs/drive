@@ -31,6 +31,7 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 	"github.com/rahul-sharma-cs/drive/server/internal/mail"
 	"github.com/rahul-sharma-cs/drive/server/internal/node"
+	"github.com/rahul-sharma-cs/drive/server/internal/oidcauth"
 	"github.com/rahul-sharma-cs/drive/server/web"
 )
 
@@ -93,6 +94,11 @@ type Server struct {
 	// address the caller does not have to own: password-reset and
 	// resend-verification.
 	MailRate *ipLimiter
+	// Google is the OIDC client, or nil when no Google client is configured --
+	// which is a deployment that offers password sign-in only. Building it
+	// makes no network request: discovery happens on the first sign-in, so a
+	// provider that is unreachable cannot stop the server booting.
+	Google *oidcauth.Provider
 	// BulkBudget is the wall clock one bulk trash request spends before it
 	// stops and reports what it has not reached yet. Zero means
 	// DefaultBulkBudget; a test that wants the budget to run out sets it small.
@@ -116,8 +122,23 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, sender mail.S
 	if mailRate < 1 {
 		mailRate = DefaultMailRatePerHour
 	}
+	// The redirect URI is derived from the deployment's own base URL and
+	// nothing else -- never from r.Host, which a caller controls. One source of
+	// truth cannot drift out of step with itself, which is why there is no
+	// variable for it.
+	var google *oidcauth.Provider
+	if cfg.UseGoogle() {
+		google = oidcauth.New(oidcauth.Config{
+			ClientID:     cfg.GoogleClientID,
+			ClientSecret: cfg.GoogleClientSecret,
+			Issuer:       cfg.GoogleIssuer,
+			RedirectURL:  strings.TrimSuffix(cfg.BaseURL, "/") + "/api/auth/google/callback",
+		})
+	}
+
 	return &Server{
 		Cfg: cfg, DB: pool, Log: log, Mail: sender, S3: s3c, Presign: presign,
+		Google:   google,
 		Argon2:   auth.NewLimiter(argon2Limit),
 		AuthRate: newIPLimiter(float64(authRate), burstFor(float64(authRate))),
 		// The mail bucket's burst is the allowance itself, not twice it: this
