@@ -4,9 +4,9 @@ A self-hosted file store built around one hard problem: **uploading a very large
 
 One Go binary serves the API and the React app. File bytes never pass through it — the browser talks straight to S3-compatible object storage over presigned URLs, and the server authorizes, presigns, and keeps the ledger. An interrupted upload resumes from the last part the server confirmed, whether it was interrupted by a dropped connection, a closed tab, or the server process being killed mid-transfer.
 
-**Live:** <https://drive.rahulsharma-cs.site> — a deployment I run and use. Sign-ups are open; verification email arrives in a few seconds. Accounts get 3 GB, single files up to 2 GB.
+**Live:** <https://drive.rahulsharma-cs.site> — a deployment I run and use. **Try it:** sign-up takes thirty seconds, and the verification mail arrives in a few seconds. Accounts get 3 GB, single files up to 2 GB.
 
-![The file browser with a 420 MiB upload in flight. The upload manager draws one segment per multipart part, lit as the server confirms it.](.github/media/drive.png)
+![The file browser with a 209 MB upload in flight. The manager draws one segment per multipart part and lights it when the server confirms that part — eight of twenty here, with the rest still to send.](.github/media/drive.png)
 
 ## What it does
 
@@ -52,6 +52,10 @@ The interesting part is the failure path, so here is the sequence the browser te
 6. On complete, the server checks its ledger against what the store actually holds — every part present, every ETag matching — confirms the assembled object's size, and publishes it. The downloaded bytes hash equal to the source.
 
 Step 5 is why the fingerprint matters: a different file — or the same bytes rewritten, which changes mtime — misses the match and correctly starts a fresh upload rather than silently stitching two files together.
+
+![A 126 MB upload interrupted by a page reload, which destroys the file handle. The manager offers the session back — eight of thirteen parts already stored — and re-picking the same file sends only the remaining five.](.github/media/drive-resume.gif)
+
+Nothing in that recording is staged: it is a real upload against a real object store, interrupted by a real reload.
 
 ## Measured
 
