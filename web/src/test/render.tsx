@@ -68,20 +68,42 @@ export interface StubRoute {
  * Screens talk to the real `lib/api` client, so the recorded calls cover the
  * wire shape — the header the CSRF gate requires included.
  */
+/**
+ * Answers every screen needs and almost no test is about: whether the
+ * deployment offers a third-party sign-in, and what is linked to the account.
+ * Both are asked by chrome that sits on screens whose tests are about something
+ * else entirely, so they are answered here rather than in a dozen route lists.
+ *
+ * They come last, so a case that says otherwise wins the match, and they are
+ * the only defaults: an unstubbed request still throws, which is what keeps a
+ * missing stub from passing as an empty answer.
+ */
+const DEFAULTS: StubRoute[] = [
+  { path: '/api/auth/providers', body: { google: false } },
+  { path: '/api/auth/identities', body: { items: [], next_cursor: null } },
+]
+
 export function stubFetch(routes: StubRoute[]) {
   const calls: StubbedCall[] = []
   const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
     const method = init.method ?? 'GET'
-    calls.push({
-      method,
-      url,
-      headers: new Headers(init.headers as HeadersInit | undefined),
-      body: init.body === undefined ? undefined : JSON.parse(init.body as string),
-    })
-    const route = routes.find(
-      (r) =>
-        (r.method ?? 'GET') === method && (typeof r.path === 'string' ? r.path === url : r.path.test(url)),
-    )
+    const matches = (r: StubRoute) =>
+      (r.method ?? 'GET') === method && (typeof r.path === 'string' ? r.path === url : r.path.test(url))
+    const asked = routes.find(matches)
+    const fallback = asked ? undefined : DEFAULTS.find(matches)
+    // A call the harness answered on its own is not traffic the screen under
+    // test made a choice about, and recording it would make every "and sends
+    // nothing" assertion count it. A case that wants to assert on one of those
+    // routes stubs it itself, which puts it back in the record.
+    if (!fallback) {
+      calls.push({
+        method,
+        url,
+        headers: new Headers(init.headers as HeadersInit | undefined),
+        body: init.body === undefined ? undefined : JSON.parse(init.body as string),
+      })
+    }
+    const route = asked ?? fallback
     if (!route) throw new Error(`unstubbed request: ${method} ${url}`)
     // A 204 may carry no body at all — the Response constructor throws on one.
     const payload = route.body === undefined ? null : JSON.stringify(route.body)

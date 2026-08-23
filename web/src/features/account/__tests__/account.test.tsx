@@ -20,6 +20,7 @@ const user: Me = {
   display_name: 'Ada Lovelace',
   root_id: 'root-1',
   email_verified_at: '2026-08-17T00:00:00Z',
+  has_password: true,
 }
 
 /** Two live sign-ins: the one reading this page, and one somewhere else. */

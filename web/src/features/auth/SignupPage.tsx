@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { signup } from '../../lib/api'
 import { AuthCard, fieldClass, FormError } from '../../ui/controls'
 import { emailHint, isPlausibleEmail } from './email'
+import { GoogleSignIn, GoogleSignInError } from './GoogleButton'
 import { isAcceptablePassword, passwordHint } from './password'
 
 export function SignupPage() {
@@ -43,6 +44,11 @@ export function SignupPage() {
 
   return (
     <AuthCard title="Create a Drive account">
+      {/* Same affordance, same words: signing in with Google on an address
+          that has no account here makes one, so this is the create-account
+          path as much as the sign-in one. */}
+      <GoogleSignInError />
+      <GoogleSignIn />
       <form
         className="flex flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-card"
         // The browser's own bubble is off: it appears over the field, says its

@@ -29,6 +29,7 @@ const user: Me = {
   display_name: 'Someone',
   root_id: 'root-1',
   email_verified_at: '2026-08-17T00:00:00Z',
+  has_password: true,
 }
 
 const node = (over: Partial<DriveNode>): DriveNode => ({

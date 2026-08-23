@@ -56,6 +56,12 @@ export interface Me {
   display_name: string
   root_id: string
   email_verified_at: string | null
+  /**
+   * Whether this account can be signed in to with a password at all. False for
+   * an account whose only sign-in method is a linked identity — including one
+   * whose password was cleared when a Google sign-in activated it.
+   */
+  has_password: boolean
 }
 
 export interface DriveNode {
@@ -148,6 +154,38 @@ export const resendVerification = (email: string) =>
 
 export const confirmReset = (token: string, newPassword: string) =>
   request<void>('POST', '/auth/password-reset/confirm', { token, new_password: newPassword })
+
+/* ------------------------------------------------- other ways in */
+
+/**
+ * Which third-party sign-ins this deployment is configured for. Answered
+ * without a session and outside the auth bucket, because the signed-out screens
+ * have to ask it before anyone has proved anything.
+ */
+export interface Providers {
+  google: boolean
+}
+
+export const getProviders = () => request<Providers>('GET', '/auth/providers')
+
+/** One linked sign-in method. The provider's subject is never sent to us. */
+export interface Identity {
+  id: string
+  provider: 'google'
+  /** The address the provider asserted when the link was made. */
+  email_at_link: string
+  created_at: string
+  last_login_at: string | null
+}
+
+export const listIdentities = () => request<Page<Identity>>('GET', '/auth/identities')
+
+/**
+ * 204 when it is gone, 404 when it never was yours (unknown and not-yours are
+ * deliberately the same answer), and 409 `unsupported` when it is the account's
+ * last way in — that last one carries the server's own wording.
+ */
+export const unlinkIdentity = (id: string) => request<void>('DELETE', `/auth/identities/${id}`)
 
 /* ------------------------------------------------------------------ nodes */
 

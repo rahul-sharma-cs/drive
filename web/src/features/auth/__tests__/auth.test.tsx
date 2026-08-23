@@ -64,6 +64,7 @@ describe('/login', () => {
       display_name: 'Someone',
       root_id: 'r1',
       email_verified_at: '2026-08-17T00:00:00Z',
+      has_password: true,
     }
     const calls = stubFetch([{ method: 'POST', path: '/api/auth/login', body: user }])
     const { client } = renderApp(<LoginPage />)
@@ -452,6 +453,7 @@ describe('an address that cannot be an email', () => {
       display_name: 'Someone',
       root_id: 'r1',
       email_verified_at: '2026-08-17T00:00:00Z',
+      has_password: true,
     }
     const calls = stubFetch([{ method: 'POST', path: '/api/auth/login', body: user }])
     renderApp(<LoginPage />)

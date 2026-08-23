@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { ApiError, login, resendVerification } from '../../lib/api'
 import { AuthCard, fieldClass, FormError } from '../../ui/controls'
 import { emailHint, isPlausibleEmail } from './email'
+import { GoogleSignIn, GoogleSignInError } from './GoogleButton'
 import { useSetSession } from './session'
 
 export function LoginPage() {
@@ -56,6 +57,11 @@ export function LoginPage() {
 
   return (
     <AuthCard title="Sign in to Drive">
+      {/* Above the form, not below it: the fastest way in for somebody who has
+          used it before is the one they should not have to scroll past a form
+          to find. */}
+      <GoogleSignInError />
+      <GoogleSignIn />
       <form
         className="flex flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-card"
         // The browser's own bubble is off: it appears over the field, says its
