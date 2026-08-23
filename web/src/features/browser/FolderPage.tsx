@@ -40,7 +40,7 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
   const { sort, toggle } = useSort()
   const children = useChildren(folderId, sort)
   const crumbs = useBreadcrumbs(folderId)
-  const { handlers, commands, busy, moveTo, dialogs } = useNodeCommands(folderId)
+  const { handlers, commands, shareActions, busy, moveTo, dialogs } = useNodeCommands(folderId)
 
   const nodes = children.data?.pages.flatMap((page) => page.items) ?? []
 
@@ -64,7 +64,7 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
           selectable
           bandActions={(chosen) => nodeBandActions(chosen, commands, busy)}
           onDelete={commands.onTrash}
-          actions={(node) => rowActions(node, handlers)}
+          actions={(node) => rowActions(node, handlers, shareActions(node))}
           sort={{ active: sort, onToggle: toggle }}
           dnd={{ onMoveInto: (destination, ids) => void moveTo(destination, ids) }}
           more={{

@@ -334,3 +334,116 @@ export const purgeNodes = (ids: string[]) => request<BulkAnswer>('POST', '/trash
  * on screen. `remaining` says another call is needed.
  */
 export const emptyTrash = () => request<{ purged: number; remaining: boolean }>('DELETE', '/trash')
+
+/* ----------------------------------------------------------------- shares */
+
+/**
+ * What a share knows about its file. `parent_id` is what the shared-links
+ * list builds its row link from; a file always has one, but the column is
+ * nullable on the wire and the type says so.
+ */
+export interface ShareNode {
+  id: string
+  parent_id: string | null
+  name: string
+  size: number | null
+  mime: string | null
+}
+
+/**
+ * One active link, as the owner sees it. Never the token and never its hash:
+ * the URL is handed out exactly once, by `createShare` and `regenerateShare`,
+ * and the server cannot show it again.
+ */
+export interface Share {
+  id: string
+  node: ShareNode
+  /** False while the file sits in the trash — the link is inert until a restore. */
+  node_live: boolean
+  has_password: boolean
+  expires_at: string | null
+  max_downloads: number | null
+  download_count: number
+  created_at: string
+}
+
+/**
+ * The full triple, always. The server refuses a body with a key missing (422
+ * `invalid`) because its PATCH idiom cannot tell "absent" from "clear" — so
+ * `null` is the one way to clear a column, and a caller that wants to keep a
+ * password has to say what it is.
+ */
+export interface ShareSettings {
+  expires_at: string | null
+  password: string | null
+  max_downloads: number | null
+}
+
+/** What a recipient is told before anything is minted. Read without a session. */
+export interface ShareMeta {
+  name: string
+  size: number | null
+  mime: string | null
+  requires_password: boolean
+  expires_at: string | null
+  /** The cap is spent, and this browser is not the one that spent it. */
+  exhausted: boolean
+  /** The server will sign an inline link for this type — images, video, audio, text. */
+  preview: boolean
+}
+
+/** A share with the one copy of its URL anyone will ever be given. */
+export interface MintedShare {
+  share: Share
+  url: string
+}
+
+/**
+ * 201 with the URL, 409 `exists` when the file already has an active link,
+ * 422 for a folder, a past expiry, a short password or a cap out of range.
+ */
+export const createShare = (nodeId: string, settings: ShareSettings) =>
+  request<MintedShare>('POST', '/shares', { node_id: nodeId, ...settings })
+
+/** The caller's active shares, newest first. `nodeId` narrows it to one file. */
+export const listShares = (cursor?: string, nodeId?: string) => {
+  const query: string[] = []
+  if (nodeId) query.push(`node_id=${encodeURIComponent(nodeId)}`)
+  if (cursor) query.push(`cursor=${encodeURIComponent(cursor)}`)
+  return request<Page<Share>>('GET', `/shares${query.length > 0 ? `?${query.join('&')}` : ''}`)
+}
+
+/** A new token for the same file: the old URL stops, the count starts at zero. */
+export const regenerateShare = (id: string) =>
+  request<MintedShare>('PATCH', `/shares/${id}`, { action: 'regenerate' })
+
+/**
+ * The answer's shape is not relied on: every caller re-reads the share
+ * through the `['shares']` invalidation rather than trusting what came back.
+ */
+export const updateShareSettings = (id: string, settings: ShareSettings) =>
+  request<unknown>('PATCH', `/shares/${id}`, settings)
+
+/** 204. The row stays, for the access log; the link stops. */
+export const revokeShare = (id: string) => request<void>('DELETE', `/shares/${id}`)
+
+const sharePath = (token: string) => `/s/${encodeURIComponent(token)}`
+
+/** One 404 for unknown, revoked, expired and trashed alike — deliberately. */
+export const getShareMeta = (token: string) => request<ShareMeta>('GET', `${sharePath(token)}/meta`)
+
+/** Passwordless shares only. Idempotent per browser: a second call extends the session it has. */
+export const openShareSession = (token: string) => request<void>('POST', `${sharePath(token)}/session`)
+
+/** 401 for a wrong password, 429 when this address has guessed too often. */
+export const openShareWithPassword = (token: string, password: string) =>
+  request<void>('POST', `${sharePath(token)}/password`, { password })
+
+/** Needs a guest session (401 without one); 415 for a type not shown to strangers, PDF included. */
+export const getSharePreview = (token: string) => request<PreviewLink>('GET', `${sharePath(token)}/preview`)
+
+/**
+ * A navigation, like `downloadHref`: the server answers a 302 to the bytes, or
+ * a 302 back to the share page with `?reason=` when it refuses.
+ */
+export const shareDownloadHref = (token: string) => `/api${sharePath(token)}/download`

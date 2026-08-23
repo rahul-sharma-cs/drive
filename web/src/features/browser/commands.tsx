@@ -1,14 +1,15 @@
-import { Copy, Download, FolderInput, Pencil, Trash2 } from 'lucide-react'
+import { Copy, Download, FolderInput, Link2, Pencil, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 
 import { downloadHref, type DriveNode } from '../../lib/api'
 import { useSession } from '../auth/session'
 import { startZipDownload } from '../download/useZipDownload'
+import { ShareDialog } from '../share/ShareDialog'
 import type { BandAction } from './CommandBand'
 import { DestinationDialog } from './DestinationDialog'
 import { RenameDialog } from './RenameDialog'
-import type { RowHandlers } from './RowMenu'
+import type { Action, RowHandlers } from './RowMenu'
 import { useCopyNode, useTrashNode, useUpdateNode } from './queries'
 
 /**
@@ -29,6 +30,7 @@ type Dialog =
   | { kind: 'rename'; node: DriveNode }
   | { kind: 'move'; nodes: DriveNode[] }
   | { kind: 'copy'; nodes: DriveNode[] }
+  | { kind: 'share'; node: DriveNode }
   | null
 
 /** What the band's commands need from the screen holding the dialogs. */
@@ -39,6 +41,8 @@ export interface BandCommands {
   onTrash: (nodes: DriveNode[]) => void
   /** Anything that is not one file: build a zip of it, here in the browser. */
   onZip: (nodes: DriveNode[]) => void
+  /** One file: its share link. Folders have none. */
+  onShare: (node: DriveNode) => void
 }
 
 /**
@@ -69,6 +73,10 @@ export function nodeBandActions(
     ...(files.length > 0
       ? [{ label: 'Copy to', icon: Copy, disabled: busy, onSelect: () => commands.onCopy(files) } satisfies BandAction]
       : []),
+    // One file, and only a file: a link is to one thing, and folders have none.
+    ...(single?.kind === 'file'
+      ? [{ label: 'Share', icon: Link2, disabled: busy, onSelect: () => commands.onShare(single) } satisfies BandAction]
+      : []),
     { label: 'Trash', icon: Trash2, disabled: busy, danger: true, onSelect: () => commands.onTrash([...chosen]) },
   ]
 }
@@ -78,6 +86,8 @@ export interface NodeCommands {
   handlers: RowHandlers
   /** For the command band: each acts on the selection. */
   commands: BandCommands
+  /** The Share item for a file row — `rowActions`' extra slot. Nothing for a folder. */
+  shareActions: (node: DriveNode) => Action[]
   /** A mutation is in flight — commands that would start another are off. */
   busy: boolean
   /** Move `ids` into `destination`. What a drop onto a folder or a crumb lands in. */
@@ -125,16 +135,24 @@ export function useNodeCommands(parentId?: string): NodeCommands {
     onZip: (node) => startZipDownload([node]),
   }
 
+  const onShare = (node: DriveNode) => setDialog({ kind: 'share', node })
+
   const commands: BandCommands = {
     onRename: handlers.onRename,
     onMove: (nodes) => setDialog({ kind: 'move', nodes }),
     onCopy: (nodes) => setDialog({ kind: 'copy', nodes }),
     onTrash: (nodes) => nodes.forEach((n) => trash.mutate(n.id)),
     onZip: (nodes) => startZipDownload(nodes),
+    onShare,
   }
+
+  const shareActions = (node: DriveNode): Action[] =>
+    node.kind === 'file' ? [{ label: 'Share', icon: Link2, onSelect: () => onShare(node) }] : []
 
   const dialogs = (
     <>
+      {dialog?.kind === 'share' && <ShareDialog node={dialog.node} onClose={() => setDialog(null)} />}
+
       {dialog?.kind === 'rename' && (
         <RenameDialog
           currentName={dialog.node.name}
@@ -200,6 +218,7 @@ export function useNodeCommands(parentId?: string): NodeCommands {
   return {
     handlers,
     commands,
+    shareActions,
     busy: update.isPending || copy.isPending || trash.isPending,
     moveTo,
     dialogs,

@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 
 import { useSession, useSetSession } from '../features/auth/session'
+import { shareUrls } from '../features/share/shareUrls'
 import { logout } from '../lib/api'
 
 /**
@@ -48,6 +49,10 @@ export function AccountMenu() {
       void navigate('/login', { replace: true })
       setSession(null)
       client.clear()
+      // The share URLs this tab minted go with the cache: each one is a
+      // credential to a file, and the next account in this tab must not be
+      // handed a working link to the last one's.
+      shareUrls.clear()
     },
   })
 

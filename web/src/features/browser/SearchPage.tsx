@@ -36,7 +36,7 @@ export function SearchPage() {
 
   // No parent folder to name: a result can come from anywhere, so a mutation
   // here re-reads every folder listing rather than one.
-  const { handlers, commands, busy, dialogs } = useNodeCommands()
+  const { handlers, commands, shareActions, busy, dialogs } = useNodeCommands()
 
   const items = results.data?.items ?? []
 
@@ -71,7 +71,7 @@ export function SearchPage() {
           selectable
           bandActions={(chosen) => nodeBandActions(chosen, commands, busy)}
           onDelete={commands.onTrash}
-          actions={(node) => rowActions(node, handlers)}
+          actions={(node) => rowActions(node, handlers, shareActions(node))}
           rowExtra={(node) =>
             // A result is out of context by definition, so getting to the
             // folder it lives in is a real action here.
