@@ -400,6 +400,16 @@ function SettingsForm({ share, onDone }: { share: Share; onDone: () => void }) {
   // nothing — the field was never acted on.
   const [action, setAction] = useState<PasswordAction>(share.has_password ? 'keep' : 'set')
   const [judged, setJudged] = useState(false)
+  // Whether the expiry control itself was touched. The key is always sent, but
+  // an untouched expiry goes back byte-for-byte: re-deriving end-of-day from
+  // the prefilled date would quietly extend a link that expires mid-day, every
+  // time any other setting was saved.
+  const [expiryEdited, setExpiryEdited] = useState(false)
+
+  const change = (next: Fields) => {
+    if (next.expiry !== fields.expiry || next.date !== fields.date) setExpiryEdited(true)
+    setFields(next)
+  }
 
   const typing = action === 'set' && fields.password !== ''
   const bad = judged && typing && !isAcceptablePassword(fields.password)
@@ -412,6 +422,7 @@ function SettingsForm({ share, onDone }: { share: Share; onDone: () => void }) {
     // "keep", which is what lets an expiry change leave a password standing
     // that nobody can re-type.
     const settings: ShareSettingsPatch = toSettings(fields)
+    if (!expiryEdited) settings.expires_at = share.expires_at
     if (action === 'clear') settings.password = null
     else if (typing) settings.password = fields.password
     update.mutate({ id: share.id, settings }, { onSuccess: onDone })
@@ -457,7 +468,7 @@ function SettingsForm({ share, onDone }: { share: Share; onDone: () => void }) {
       <div className="flex flex-col gap-1.5">
         <PasswordField
           fields={fields}
-          onChange={setFields}
+          onChange={change}
           bad={bad}
           hint={
             share.has_password
@@ -471,7 +482,7 @@ function SettingsForm({ share, onDone }: { share: Share; onDone: () => void }) {
 
   return (
     <form noValidate onSubmit={onSubmit} className="flex flex-col gap-3">
-      <SettingsFields fields={fields} onChange={setFields} password={password} />
+      <SettingsFields fields={fields} onChange={change} password={password} />
       <FormError error={update.error} />
       <div className="flex justify-end gap-2 pt-1">
         <Button type="button" variant="outline" onClick={onDone}>

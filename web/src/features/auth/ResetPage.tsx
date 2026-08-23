@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 
 import { ApiError, confirmReset } from '../../lib/api'
 import { AuthCard, fieldClass, FormError } from '../../ui/controls'
+import { shareUrls } from '../share/shareUrls'
 import { isAcceptablePassword, passwordHint } from './password'
 
 /**
@@ -45,7 +46,12 @@ export function ResetPage() {
      * Google", still refusing to unlink — against a dead cookie. Everything
      * else in the cache belongs to that same session, so it goes too.
      */
-    onSuccess: () => client.clear(),
+    onSuccess: () => {
+      client.clear()
+      // The share URLs this tab minted go with it: a reset that signed this
+      // tab out must not leave working links to the account's files in memory.
+      shareUrls.clear()
+    },
   })
 
   // A spent or expired link is the ordinary failure here, and the way out is

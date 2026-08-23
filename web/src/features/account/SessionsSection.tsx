@@ -17,6 +17,7 @@ import { ApiError, listSessions, logoutAll, revokeSession, type AuthSession, typ
 import { SkeletonRows } from '../../ui/controls'
 import { formatWhen } from '../../ui/when'
 import { useSetSession } from '../auth/session'
+import { shareUrls } from '../share/shareUrls'
 
 /** Exported: the password form has to re-read this list after a change. */
 export const sessionsKey = ['auth', 'sessions'] as const
@@ -88,6 +89,10 @@ export function SessionsSection() {
       void navigate('/login', { replace: true })
       setSession(null)
       client.clear()
+      // And the share URLs this tab minted: each is a credential to a file,
+      // and it must not outlive the session that made it — here exactly as on
+      // the account menu's sign-out.
+      shareUrls.clear()
     },
     // Silence would be the worst answer here: nothing on this screen moves when
     // the call fails, so a person who pressed the button in the confirmation

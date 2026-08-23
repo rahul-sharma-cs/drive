@@ -22,7 +22,9 @@ import type { DriveNode, Me, Share } from '../../../lib/api'
 import { renderApp, stubFetch, type StubRoute } from '../../../test/render'
 import { AccountMenu } from '../../../app/AccountMenu'
 import { CurrentFolderProvider } from '../../../app/CurrentFolder'
+import { SessionsSection } from '../../account/SessionsSection'
 import { RequireAuth } from '../../auth/RequireAuth'
+import { ResetPage } from '../../auth/ResetPage'
 import { meKey } from '../../auth/session'
 import { FolderPage } from '../../browser/FolderPage'
 import { sharesKey } from '../queries'
@@ -326,6 +328,26 @@ describe('a link that exists', () => {
     const set = calls.filter((c) => c.method === 'PATCH')[1].body as Record<string, unknown>
     expect(set.password).toBe('a brand new secret')
   })
+
+  it('sends an untouched expiry back byte-for-byte', async () => {
+    const at = '2026-08-30T15:45:00.000Z'
+    const { calls } = renderFolder([
+      { path: FOR_NODE, body: { items: [share({ expires_at: at })], next_cursor: null } },
+      { method: 'PATCH', path: '/api/shares/s1', body: {} },
+    ])
+
+    const dialog = await openDialog()
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Settings' }))
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove password' }))
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }))
+
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1))
+    const body = calls.find((c) => c.method === 'PATCH')!.body as Record<string, unknown>
+    // The stored instant, not the end of that local day: removing a password
+    // must not quietly extend the link by up to a day.
+    expect(body.expires_at).toBe(at)
+    expect(body.password).toBeNull()
+  })
 })
 
 describe('Copy', () => {
@@ -448,6 +470,48 @@ describe('the URLs this tab holds', () => {
     await screen.findByText('login')
     // A share URL is a credential to a file. The next account in this tab must
     // not be handed one to the last account's.
+    expect(shareUrls.get('s1')).toBeUndefined()
+  })
+
+  it('are emptied by Sign out everywhere, the account page’s own sign-out', async () => {
+    shareUrls.set('s1', URL_1)
+    stubFetch([
+      { path: '/api/auth/sessions', body: { items: [], next_cursor: null } },
+      { method: 'POST', path: '/api/auth/logout-all', status: 204 },
+    ])
+    renderApp(
+      <Routes>
+        <Route element={<RequireAuth />}>
+          <Route path="/" element={<SessionsSection />} />
+        </Route>
+        <Route path="/login" element={<p>login</p>} />
+      </Routes>,
+      { seed: (client) => client.setQueryData(meKey, user) },
+    )
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign out everywhere' }))
+    const ask = await screen.findByRole('dialog', { name: 'Sign out everywhere?' })
+    await userEvent.click(within(ask).getByRole('button', { name: 'Sign out everywhere' }))
+
+    await screen.findByText('login')
+    expect(shareUrls.get('s1')).toBeUndefined()
+  })
+
+  it('are emptied by a password reset completed in a signed-in tab', async () => {
+    shareUrls.set('s1', URL_1)
+    stubFetch([{ method: 'POST', path: '/api/auth/password-reset/confirm', status: 204 }])
+    // The route is reachable signed in — the account screen sends people here
+    // to set a first password — and the server signs every session out.
+    renderApp(<ResetPage />, {
+      route: '/reset?token=0123456789abcdef',
+      seed: (client) => client.setQueryData(meKey, user),
+    })
+
+    await userEvent.type(screen.getByLabelText('New password'), 'a fresh password')
+    await userEvent.type(screen.getByLabelText('Confirm new password'), 'a fresh password')
+    await userEvent.click(screen.getByRole('button', { name: 'Set password' }))
+
+    expect(await screen.findByText('Password set')).toBeTruthy()
     expect(shareUrls.get('s1')).toBeUndefined()
   })
 })
