@@ -323,11 +323,6 @@ func TestSPACacheHeaders(t *testing.T) {
 	}{
 		{"index", "/", "no-cache"},
 		{"client-side route falls back to index", "/verify", "no-cache"},
-		// A hashed asset the current build no longer has falls back to the
-		// entry document, and must be labelled as the document it actually is
-		// -- labelling that HTML immutable is how a browser gets stuck on a
-		// release that no longer exists.
-		{"stale hashed asset falls back to index", "/assets/index-OLD.js", "no-cache"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -347,5 +342,43 @@ func TestSPACacheHeaders(t *testing.T) {
 	}
 	if got := spaCacheControl("index.html"); got != "no-cache" {
 		t.Fatalf("Cache-Control for the entry document = %q", got)
+	}
+}
+
+// A file under assets/ that the build did not write is a 404, not the SPA.
+//
+// Everything there is named by content hash, so a miss cannot be a client-side
+// route -- and the fallback answered it with the entry document: 200, HTML,
+// under a .js URL. A browser reports that as a MIME-type error and the release
+// looks broken for a reason the status code denies. The header matters as much
+// as the status: an immutable 404 is one a cache keeps for a year.
+func TestUnknownAssetIs404NotTheSPA(t *testing.T) {
+	h := newTestServer(t)
+
+	for _, path := range []string{
+		"/assets/does-not-exist.js",
+		"/assets/index-0123456789.css",
+		"/assets/nested/deep.woff2",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404 (body %s)", path, rec.Code, rec.Body.String())
+		}
+		if cc := rec.Header().Get("Cache-Control"); strings.Contains(cc, "immutable") {
+			t.Errorf("GET %s Cache-Control = %q, want no immutable on a miss", path, cc)
+		}
+		if body := rec.Body.String(); strings.Contains(body, "<html") {
+			t.Errorf("GET %s served the SPA document: %s", path, body)
+		}
+	}
+
+	// The fallback itself is untouched: a client-side route outside assets/
+	// still resolves on a hard refresh.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assetsomething", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("a route whose name merely starts with \"assets\" = %d, want the SPA", rec.Code)
 	}
 }

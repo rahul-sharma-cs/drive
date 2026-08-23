@@ -229,6 +229,18 @@ func (s *Server) spaHandler() http.HandlerFunc {
 			name = "index.html"
 		}
 		if _, err := fs.Stat(dist, name); err != nil {
+			// Under assets/ the fallback is wrong. Every name there is written
+			// by the build and carries a content hash, so a miss is a missing
+			// file and never a client-side route -- and answering it with the
+			// entry document means a <script src> gets 200 text/html, which
+			// surfaces as a MIME-type console error instead of the 404 it is.
+			if strings.HasPrefix(name, assetPrefix) {
+				// no-store because a 404 is heuristically cacheable: a rollback
+				// that brings the file back must not meet a stored miss.
+				w.Header().Set("Cache-Control", "no-store")
+				WriteErr(w, r, http.StatusNotFound, CodeNotFound, "not found")
+				return
+			}
 			r = r.Clone(r.Context())
 			r.URL.Path = "/"
 			name = "index.html"
@@ -237,6 +249,10 @@ func (s *Server) spaHandler() http.HandlerFunc {
 		files.ServeHTTP(w, r)
 	}
 }
+
+// assetPrefix is the build's fingerprinted output directory. Vite writes every
+// hashed file under it, and nothing else is served from there.
+const assetPrefix = "assets/"
 
 // spaCacheControl decides how long a served SPA file may be cached.
 //
@@ -247,7 +263,7 @@ func (s *Server) spaHandler() http.HandlerFunc {
 // name it actually serves, so a client-side route that falls back to index.html
 // is answered as the document, not as whatever the URL looked like.
 func spaCacheControl(name string) string {
-	if strings.HasPrefix(name, "assets/") {
+	if strings.HasPrefix(name, assetPrefix) {
 		return "public, max-age=31536000, immutable"
 	}
 	return "no-cache"
