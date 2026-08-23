@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 
 import { AppLayout } from './app/AppLayout'
@@ -13,6 +14,12 @@ import { SearchPage } from './features/browser/SearchPage'
 import { TrashPage } from './features/browser/TrashPage'
 import { SharedLinksPage } from './features/share/SharedLinksPage'
 
+/**
+ * A chunk of its own, like the viewer: the share page is the one screen an
+ * owner's session never visits, and a recipient's visit never needs the rest.
+ */
+const SharePage = lazy(() => import('./features/share/SharePage'))
+
 export default function App() {
   return (
     <Routes>
@@ -23,6 +30,16 @@ export default function App() {
           sign in, so they sit outside RequireAuth beside /login. */}
       <Route path="/forgot" element={<ForgotPage />} />
       <Route path="/reset" element={<ResetPage />} />
+      {/* A recipient: no session, no chrome, no `/api/auth/me`. Explicit,
+          because the catch-all below would otherwise send them to /login. */}
+      <Route
+        path="/s/:token"
+        element={
+          <Suspense fallback={<p className="p-6 text-sm text-ink-3">Loading…</p>}>
+            <SharePage />
+          </Suspense>
+        }
+      />
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>
           <Route index element={<FolderPage />} />

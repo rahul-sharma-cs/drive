@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, Download, X } from 'lucide-react'
-import { useRef, type ReactNode } from 'react'
+import { useRef } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -210,38 +210,43 @@ function PreviewBody({
   preview: Preview
   link: PreviewLink | undefined
 }) {
-  const card = <NoPreviewCard id={id} node={node} />
+  const name = node?.name ?? ''
+  const href = downloadHref(id)
 
   if (preview.pending && link === undefined) {
     return <p className="text-sm text-ink-3">Loading the preview…</p>
   }
-  if (link === undefined || preview.broken) return card
+  if (link === undefined || preview.broken) {
+    return <NoPreviewCard name={name} mime={node?.mime} downloadHref={href} />
+  }
 
-  const kind = previewKind(link.mime)
-  const name = node?.name ?? ''
+  return <MediaPreview url={link.url} mime={link.mime} name={name} downloadHref={href} onBroken={preview.onBroken} />
+}
 
-  switch (kind) {
+/**
+ * What the three bodies below need: a signed link, the server's own normalized
+ * type for it, the file's name, and where its download is. No node and no id —
+ * the share page renders the same bodies off a token and a `/meta` answer.
+ */
+export interface PreviewProps {
+  url: string
+  mime: string
+  name: string
+  /** The attachment route, for the card that offers it instead of a body. */
+  downloadHref: string
+}
+
+/** The body for a type, chosen by the link's own mime. */
+export function MediaPreview({ url, mime, name, downloadHref, onBroken }: PreviewProps & { onBroken?: () => void }) {
+  const card = <NoPreviewCard name={name} mime={mime} downloadHref={downloadHref} />
+
+  switch (previewKind(mime)) {
     case 'image':
-      return (
-        <img
-          src={link.url}
-          alt={name}
-          onError={preview.onBroken}
-          className="max-h-full max-w-full object-contain"
-        />
-      )
+      return <img src={url} alt={name} onError={onBroken} className="max-h-full max-w-full object-contain" />
     case 'video':
-      return (
-        <video
-          src={link.url}
-          controls
-          playsInline
-          onError={preview.onBroken}
-          className="max-h-full max-w-full"
-        />
-      )
+      return <video src={url} controls playsInline onError={onBroken} className="max-h-full max-w-full" />
     case 'audio':
-      return <audio src={link.url} controls onError={preview.onBroken} className="w-full max-w-xl" />
+      return <audio src={url} controls onError={onBroken} className="w-full max-w-xl" />
     case 'pdf':
       if (!framedPdfWorks()) return card
       // A plain cross-origin frame, deliberately not a sandboxed one: measured
@@ -257,13 +262,13 @@ function PreviewBody({
       return (
         <iframe
           title={name || 'PDF preview'}
-          src={link.url}
+          src={url}
           referrerPolicy="no-referrer"
           className="h-full w-full rounded-card border border-line bg-surface"
         />
       )
     case 'text':
-      return <TextBody url={link.url} card={card} />
+      return <TextPreview url={url} mime={mime} name={name} downloadHref={downloadHref} />
     case 'none':
       return card
   }
@@ -275,7 +280,8 @@ function PreviewBody({
  * Keyed on the URL, so the minute-before-expiry refresh re-reads through the
  * new link rather than holding text fetched with a dead one.
  */
-function TextBody({ url, card }: { url: string; card: ReactNode }) {
+export function TextPreview({ url, mime, name, downloadHref }: PreviewProps) {
+  const card = <NoPreviewCard name={name} mime={mime} downloadHref={downloadHref} />
   const text = useQuery({
     queryKey: ['preview-text', url],
     queryFn: async ({ signal }) => {
@@ -347,19 +353,23 @@ async function readCapped(res: Response): Promise<string | null> {
 }
 
 /** The answer for a type this app will not show, and for one it could not. */
-function NoPreviewCard({ id, node }: { id: string; node: DriveNode | undefined }) {
+export function NoPreviewCard({
+  name,
+  mime,
+  downloadHref,
+}: Pick<PreviewProps, 'name' | 'downloadHref'> & { mime?: string | null }) {
   return (
     <div
       data-testid="no-preview"
       className="flex flex-col items-center gap-3 rounded-card border border-line bg-surface px-8 py-10 text-center"
     >
-      <FileIcon kind="file" name={node?.name ?? ''} mime={node?.mime} size={44} />
+      <FileIcon kind="file" name={name} mime={mime} size={44} />
       <p className="text-sm font-medium text-ink">No preview for this type</p>
       <p className="max-w-xs text-[13px] text-ink-3">
         Download it to open it in whatever handles it best.
       </p>
       <Button asChild variant="outline" size="sm">
-        <a href={downloadHref(id)} target="_blank" rel="noopener" draggable={false}>
+        <a href={downloadHref} target="_blank" rel="noopener" draggable={false}>
           <Download />
           Download
         </a>

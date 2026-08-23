@@ -133,13 +133,17 @@ export interface Preview {
  * URL has expired fires no error at all — it just shows the store's 403. So the
  * link is replaced a minute before it dies, while the viewer is still open, and
  * every element reading `link.url` re-points at the new one.
+ *
+ * `id` is an opaque cache key handed to `fetch`: a node id against the owner's
+ * preview route by default, or a share token against the public one. The two
+ * cannot collide inside `['preview', x]`.
  */
-export function usePreview(id: string | null): Preview {
+export function usePreview(id: string | null, fetch: (id: string) => Promise<PreviewLink> = getPreview): Preview {
   const client = useQueryClient()
 
   const query = useQuery({
     queryKey: previewKey(id ?? ''),
-    queryFn: () => getPreview(id!),
+    queryFn: () => fetch(id!),
     enabled: id !== null,
     // A link outlives nothing: dropping it on close means the next open asks
     // for a fresh one rather than handing an element a URL that died in the
