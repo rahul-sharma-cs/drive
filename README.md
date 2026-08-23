@@ -21,7 +21,10 @@ One Go binary serves the API and the React app. File bytes never pass through it
 - **A storage meter** in the rail that counts the same bytes the upload path counts when it decides whether to refuse — a meter that disagreed with the refusal would be worse than none.
 - **Accounts** with email verification, Argon2id password hashing, durable rate limits and an Argon2 concurrency semaphore.
 - **An account screen that manages the account:** change the display name; change the password, which signs out every other browser and keeps the one that submitted the form; see every session the account has open, revoke the ones you don't recognise, or sign out everywhere. A forgotten password comes back by email — a link that works once, expires in an hour, and signs every session out when it is redeemed — and an account that never verified its address can ask for that mail again. Neither route says whether an address has an account: both answer the same way either way, behind the same per-IP limit as signup and the same five-an-hour budget per address, counted separately per purpose so a stranger asking for reset links can't suppress your verification mail. One more per-IP ceiling bounds how fast a single client can ask for mail to somebody else's address.
-- **Folders, trash with restore and purge, name search from the chrome** (the query lives in the URL, so a search is a location rather than a mode)**, downloads** through short-lived presigned GETs that force `Content-Disposition: attachment`, over objects deliberately stored with no content type — so even a partial response can't render as HTML.
+- **Folders, name search from the chrome** (the query lives in the URL, so a search is a location rather than a mode)**, downloads** through short-lived presigned GETs that force `Content-Disposition: attachment`, over objects deliberately stored with no content type — so even a partial response can't render as HTML.
+- **Sortable columns and folder counts.** Name, Modified or Size, either direction, with folders always ranked above files; the sort lives in the URL, so a sorted folder survives a reload and can be handed to somebody else. A folder row says how many things are in it rather than pretending to have a size.
+- **A trash that empties.** Select rows or take the whole page, then restore or delete forever in one command; a row that can't go back because something already holds its name says so and stays put. Empty trash takes everything, not just what's on screen, and names the count before it does it — it's the one action here that can't be walked back.
+- **Previews** for images, video, audio, text and PDF, opened by clicking a file's name — the viewer is a URL, so it's linkable, and Back closes it. Bytes come straight from the object store over a short-lived link that expires and is quietly replaced while the viewer is open. Which types may be shown inline is decided by an allowlist on the *server*, never by the type the browser declared at upload: SVG and HTML are refused outright and get an honest "no preview, here's the download" card instead of a script running on the store's origin. No thumbnails — the list shows type icons, not the file itself.
 - **Garbage collection** of unreferenced blobs and abandoned multipart uploads, on an in-process hourly ticker with a pass at startup.
 - **Storage limits** that actually bind: a per-file maximum, a per-user quota, and a service-wide stored-bytes cap checked before a session is created. On the deployment above those are 2 GB, 3 GB and 8 GB — the last one is the object store's spend control, since the store itself has none.
 
@@ -30,11 +33,11 @@ One Go binary serves the API and the React app. File bytes never pass through it
 Named plainly, because a portfolio project that overstates itself is worse than a small one:
 
 - **No sharing.** No share links, no public pages, no permissions beyond "the owner". The schema has tables for it; there are no endpoints and no UI.
-- **No previews or thumbnails.** Files go in and come out as bytes.
-- **No grid view, no folder item counts, no sortable columns.**
+- **No thumbnails.** The list shows a type icon; previews open the file itself.
+- **No grid view.**
 - **No mobile app, no CLI, no public API tokens.**
 
-Sharing, then previews, are the next things worth building. Nothing above is stubbed or half-wired — it is simply not there.
+Sharing, then zip downloads, are the next things worth building. Nothing above is stubbed or half-wired — it is simply not there.
 
 ## How the resume actually works
 
