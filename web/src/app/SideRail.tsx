@@ -1,4 +1,4 @@
-import { HardDrive, Trash2 } from 'lucide-react'
+import { HardDrive, Link2, Trash2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router'
 
@@ -31,6 +31,7 @@ export function SideRail() {
 
       <nav aria-label="Places" className="flex flex-col gap-0.5">
         <RailLink to="/" end icon={<HardDrive />} label="My Drive" />
+        <RailLink to="/shared" icon={<Link2 />} label="Shared links" />
         <RailLink to="/trash" icon={<Trash2 />} label="Trash" />
       </nav>
 

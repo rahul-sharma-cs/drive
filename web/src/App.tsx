@@ -11,6 +11,7 @@ import { VerifyPage } from './features/auth/VerifyPage'
 import { FolderPage } from './features/browser/FolderPage'
 import { SearchPage } from './features/browser/SearchPage'
 import { TrashPage } from './features/browser/TrashPage'
+import { SharedLinksPage } from './features/share/SharedLinksPage'
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route index element={<FolderPage />} />
           <Route path="/folders/:id" element={<FolderPage />} />
+          <Route path="/shared" element={<SharedLinksPage />} />
           <Route path="/trash" element={<TrashPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/account" element={<AccountPage />} />
