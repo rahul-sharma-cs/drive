@@ -88,15 +88,29 @@ test: infra-init-test
 e2e-typecheck:
 	cd e2e && npx tsc --noEmit -p .
 
+# The OIDC stub is built here and not in `build`: `build` is what produces the
+# binary a deployment runs, and a fixture that signs an identity token for any
+# subject it is asked about has no business being produced by that target. It is
+# e2e's, so e2e builds it.
 e2e: e2e-typecheck infra-init-test build
+	go build -o server/oidcstub ./server/cmd/oidcstub
 	$(TEST_STACK) exec -T postgres \
 		psql -U drive -d drive -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'
 	$(MAKE) seed-test
 	@set -a; . ./.env.test; set +a; \
 	base="http://localhost$${DRIVE_ADDR}"; \
+	./server/oidcstub -client-id "$$DRIVE_GOOGLE_CLIENT_ID" -client-secret "$$DRIVE_GOOGLE_CLIENT_SECRET" & \
+	STUB_PID=$$!; \
+	trap 'kill $$STUB_PID 2>/dev/null || true' EXIT; \
+	discovered=0; \
+	for i in $$(seq 1 30); do \
+		if curl -sf "$$DRIVE_GOOGLE_ISSUER/.well-known/openid-configuration" >/dev/null; then discovered=1; break; fi; \
+		sleep 1; \
+	done; \
+	if [ "$$discovered" -ne 1 ]; then echo "e2e: the OIDC stub did not answer at $$DRIVE_GOOGLE_ISSUER within 30s" >&2; exit 1; fi; \
 	DRIVE_PART_SIZE=10MiB ./server/drive & \
 	SERVER_PID=$$!; \
-	trap 'kill $$SERVER_PID 2>/dev/null || true' EXIT; \
+	trap 'kill $$SERVER_PID $$STUB_PID 2>/dev/null || true' EXIT; \
 	healthy=0; \
 	for i in $$(seq 1 60); do \
 		if curl -sf "$$base/healthz" >/dev/null; then healthy=1; break; fi; \
