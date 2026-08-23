@@ -21,6 +21,7 @@ server/web/dist/*
 !server/web/dist/index.html
 server/drive
 server/drive-mcp
+server/oidcstub
 node_modules/
 
 # day-0 spike fixtures (index.html is committed; the rest is generated)
