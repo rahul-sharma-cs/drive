@@ -57,7 +57,10 @@ export function HeaderSearch() {
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="Search your files"
-        className="h-10 w-full rounded-full border border-transparent bg-canvas pr-4 pl-10 text-[14px] text-ink outline-none transition duration-100 placeholder:text-ink-3 hover:border-line-strong focus:border-teal focus:bg-surface focus:ring-2 focus:ring-teal/20"
+        // No ring of its own: the one in `index.css` is the product's ring.
+        // What is left is the field's own state — it lifts off the canvas onto
+        // the surface as you type in it.
+        className="h-10 w-full rounded-full border border-transparent bg-canvas pr-4 pl-10 text-[14px] text-ink transition duration-100 placeholder:text-ink-3 hover:border-line-strong focus:border-teal focus:bg-surface"
       />
     </label>
   )

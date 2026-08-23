@@ -3,6 +3,7 @@ import { FolderOpen, Search } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 import { search } from '../../lib/api'
 import { Card, EmptyState } from '../../ui/controls'
@@ -75,11 +76,16 @@ export function SearchPage() {
             // A result is out of context by definition, so getting to the
             // folder it lives in is a real action here.
             node.parent_id && (
-              <Button variant="ghost" size="icon-sm" aria-label={`Open the folder ${node.name} is in`} asChild>
-                <Link to={`/folders/${node.parent_id}`} draggable={false}>
-                  <FolderOpen />
-                </Link>
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label={`Open the folder ${node.name} is in`} asChild>
+                    <Link to={`/folders/${node.parent_id}`} draggable={false}>
+                      <FolderOpen />
+                    </Link>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Open the folder it&rsquo;s in</TooltipContent>
+              </Tooltip>
             )
           }
         />

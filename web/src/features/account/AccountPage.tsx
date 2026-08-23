@@ -18,7 +18,7 @@ export function AccountPage() {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-col px-4 py-6 sm:px-6 sm:py-10">
       <header className="flex flex-col gap-1">
-        <h1 className="text-[1.375rem] font-semibold text-ink">Account</h1>
+        <h1 className="text-[17px] font-semibold tracking-tight text-ink">Account</h1>
         <p className="text-[13px] text-ink-3">Your details, your password, and the devices holding a session.</p>
       </header>
 

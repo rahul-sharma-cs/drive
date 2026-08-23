@@ -24,6 +24,10 @@ createRoot(document.getElementById('root')!).render(
         {/* Top-right: the upload manager occupies the bottom-right corner. */}
         <Toaster
           position="top-right"
+          // Clear of the 56px bar rather than on top of it: the default offset
+          // puts the first toast over the account avatar.
+          offset={{ top: '4.5rem', right: '1rem' }}
+          mobileOffset={{ top: '4.25rem', left: '0.75rem', right: '0.75rem' }}
           theme="light"
           toastOptions={{
             classNames: {
