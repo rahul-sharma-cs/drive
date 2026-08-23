@@ -15,6 +15,7 @@ import {
 import { ApiError, listIdentities, unlinkIdentity, type Identity, type Page } from '../../lib/api'
 import { FormError, SkeletonRows } from '../../ui/controls'
 import { formatWhen } from '../../ui/when'
+import { useProviders } from '../auth/providers'
 import { useSession } from '../auth/session'
 
 const identitiesKey = ['auth', 'identities'] as const
@@ -37,6 +38,7 @@ const providerName: Record<Identity['provider'], string> = { google: 'Google' }
  */
 export function IdentitiesSection() {
   const me = useSession()
+  const { google } = useProviders()
   const client = useQueryClient()
   // The row being asked about, not its id: the question outlives the row on the
   // paths that drop it, and the dialog still has to name what it removed.
@@ -79,6 +81,13 @@ export function IdentitiesSection() {
   })
 
   const items = identities.data?.items ?? []
+
+  // A deployment with no Google client configured keeps exactly the account
+  // screen it had before this feature existed — the same containment rule the
+  // sign-in screens follow, which otherwise stops at the front door and leaves
+  // a heading, a rule and a permanently dead line here. Anything already linked
+  // still gets its row, so a link outlives the provider being unconfigured.
+  if (!google && identities.isSuccess && items.length === 0) return null
 
   return (
     <section aria-labelledby="identities-heading" className="flex flex-col gap-1.5">
@@ -123,6 +132,12 @@ export function IdentitiesSection() {
                     variant="ghost"
                     size="sm"
                     disabled={!me.has_password || (unlink.isPending && unlink.variables === i.id)}
+                    // Native `disabled` takes the button out of the tab order,
+                    // so the reason under the card is the only thing left that
+                    // can say why — and a paragraph two elements away says it
+                    // to whoever happens to read on. Pointed at, it belongs to
+                    // the control.
+                    aria-describedby={me.has_password ? undefined : 'identities-only-way'}
                     onClick={() => {
                       // A refusal from a previous question is not an answer to
                       // this one.
@@ -139,7 +154,7 @@ export function IdentitiesSection() {
       </div>
 
       {items.length > 0 && !me.has_password && (
-        <p className="mt-2 text-[13px] text-ink-3">
+        <p id="identities-only-way" className="mt-2 text-[13px] text-ink-3">
           This is the only way into your account. Set a password first, and unlinking becomes available.
         </p>
       )}

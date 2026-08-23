@@ -95,6 +95,27 @@ describe('the linked methods', () => {
   })
 })
 
+describe('a deployment with no provider configured', () => {
+  it('goes back to the account screen it had before this feature existed', async () => {
+    renderAccount({ google: false })
+
+    // Drawn while the answer is outstanding: there may be something to show.
+    expect(methods()).toBeTruthy()
+    // And gone once there is not. A clone with no Google client would otherwise
+    // keep a heading, a rule and the permanently dead line under them.
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Sign-in methods' })).toBeNull())
+  })
+
+  it('keeps the section for anything already linked', async () => {
+    renderAccount({ google: false, routes: [linked] })
+
+    // Unconfiguring the provider does not unlink what it linked, and a row the
+    // person cannot see is a row they cannot take away.
+    const row = await within(methods()).findByRole('listitem')
+    expect(within(row).getByText(/Google · ada@example\.test/)).toBeTruthy()
+  })
+})
+
 describe('unlinking', () => {
   it('is live for an account that also has a password', async () => {
     renderAccount({ routes: [linked] })
@@ -110,12 +131,17 @@ describe('unlinking', () => {
   it('is disabled with the reason when it is the only way in', async () => {
     renderAccount({ me: { ...user, has_password: false }, routes: [linked] })
 
-    await waitFor(() =>
-      expect((within(methods()).getByRole('button', { name: 'Unlink' }) as HTMLButtonElement).disabled).toBe(true),
-    )
-    expect(
-      within(methods()).getByText(/This is the only way into your account\./),
-    ).toBeTruthy()
+    const button = await waitFor(() => {
+      const found = within(methods()).getByRole('button', { name: 'Unlink' }) as HTMLButtonElement
+      expect(found.disabled).toBe(true)
+      return found
+    })
+    const reason = within(methods()).getByText(/This is the only way into your account\./)
+    // `disabled` takes the button out of the tab order, so a keyboard user
+    // never lands on it and never hears why. The reason has to belong to the
+    // control, not merely sit near it.
+    expect(button.getAttribute('aria-describedby')).toBe(reason.id)
+    expect(reason.id).not.toBe('')
   })
 
   it('asks first, and asks the server nothing until the answer is yes', async () => {
