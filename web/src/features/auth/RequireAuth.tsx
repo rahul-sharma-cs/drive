@@ -7,11 +7,11 @@ export function RequireAuth() {
   const { data, isPending, error } = useMe()
 
   if (isPending) {
-    return <p className="p-6 text-sm text-neutral-500">Loading…</p>
+    return <p className="p-6 text-sm text-ink-3">Loading…</p>
   }
   if (error) {
     return (
-      <p role="alert" className="p-6 text-sm text-red-700">
+      <p role="alert" className="p-6 text-sm text-danger">
         Drive is unreachable right now. Reload to try again.
       </p>
     )

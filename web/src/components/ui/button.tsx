@@ -5,15 +5,19 @@ import { Slot } from "radix-ui"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  // `duration-100 active:scale-[0.98]` is Drive's: a control answers on the
-  // press, not on the release, and 100ms is under the threshold where a
-  // response reads as a delay. The reduced-motion block in `index.css` cuts
-  // the duration, which leaves the state change and drops the movement.
+  // `duration-100 motion-safe:active:scale-[0.98]` is Drive's: a control answers
+  // on the press, not on the release, and 100ms is under the threshold where a
+  // response reads as a delay.
+  // The `motion-safe:` is the whole of the reduced-motion handling for it. The
+  // block in `index.css` only cuts durations, and a duration of nothing applied
+  // to a scale is still a scale — the button jumps 2% smaller instead of easing
+  // there, which is movement, just abrupt movement. Gating the utility is what
+  // actually leaves the press alone.
   // No `outline-none` and no ring of its own: `index.css` draws one focus ring
   // for the whole product, on `:focus-visible`, and a control that suppresses
   // the outline to paint its own gives a keyboard user two different rings
   // depending on what they happen to have tabbed onto.
-  "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-all duration-100 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-all duration-100 motion-safe:active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {

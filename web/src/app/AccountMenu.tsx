@@ -55,7 +55,11 @@ export function AccountMenu() {
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger
         aria-label="Your account"
-        className="rounded-full transition duration-100 hover:opacity-85 active:scale-[0.97]"
+        // 0.98 and `motion-safe:`, the same press every `Button` answers with —
+        // this trigger is not a `Button` (it wraps an avatar, not a label) but
+        // it is a control, and a second press depth is a difference with no
+        // meaning behind it.
+        className="rounded-full transition duration-100 hover:opacity-85 motion-safe:active:scale-[0.98]"
       >
         <Avatar>
           <AvatarFallback className="bg-ink text-[12px] font-semibold text-canvas">

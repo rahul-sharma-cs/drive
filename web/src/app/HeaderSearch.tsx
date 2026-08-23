@@ -52,6 +52,14 @@ export function HeaderSearch() {
       <span aria-hidden className="pointer-events-none absolute left-3.5 text-ink-3">
         <Search className="size-4" />
       </span>
+      {/* Not `<Input>`, on purpose. The primitive is the product's *field*: a
+          9px-radius rectangle on the surface with a hairline edge, which is
+          what every form on every screen wears. This is the search pill — a
+          full-round box that sits on the canvas and lifts onto the surface as
+          you type — and it is the one control in the chrome whose shape is the
+          point. Dressing the primitive up to look like this would override its
+          radius, its background, its border and its padding, which is a
+          different control wearing a shared name. */}
       <input
         type="search"
         value={text}

@@ -13,7 +13,13 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
         // left here is the field's own state: a teal edge while it has focus,
         // and a red one when it is announced invalid.
         "focus-visible:border-ring",
-        "aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40",
+        // The width is not decoration: upstream declares it once on the focus
+        // ring and lets the invalid state reuse it, and this file replaced that
+        // focus ring with the product's own outline. Without it the invalid
+        // state names a ring colour and draws a ring of no width at all — the
+        // red edge is the border alone, which is also what a plain field wears
+        // when its edge happens to be dark.
+        "aria-invalid:border-destructive aria-invalid:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40",
         className
       )}
       {...props}

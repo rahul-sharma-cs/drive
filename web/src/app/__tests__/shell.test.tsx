@@ -359,6 +359,17 @@ describe('the rail and the account menu', () => {
     expect(screen.getAllByRole('navigation', { hidden: true })).toHaveLength(1)
   })
 
+  it('dims the page behind the drawer with the same scrim as every dialog', async () => {
+    renderShell([], { route: '/folders/f9' })
+    await userEvent.click(screen.getByRole('button', { name: 'Open navigation' }))
+    await screen.findByRole('dialog')
+
+    const overlay = document.querySelector('[data-slot="sheet-overlay"]')
+    expect(overlay).toBeTruthy()
+    expect(overlay!.classList.contains('scrim')).toBe(true)
+    expect(overlay!.className).not.toContain('bg-black')
+  })
+
   it('hands focus back to the hamburger when the drawer closes', async () => {
     renderShell([], { route: '/folders/f9' })
     const hamburger = screen.getByRole('button', { name: 'Open navigation' })

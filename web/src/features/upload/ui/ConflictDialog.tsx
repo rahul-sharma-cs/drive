@@ -3,6 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 
 import type { ConflictPolicy, UploadSnapshot } from '../engine/types'
 
@@ -57,12 +58,14 @@ export function ConflictDialog({
 
           {others > 0 && (
             <label className="mt-3 flex items-center gap-2 rounded-control bg-surface-muted px-3 py-2 text-[13px] text-ink-2">
-              <input
-                type="checkbox"
-                className="accent-teal"
-                checked={all}
-                onChange={(e) => setAll(e.target.checked)}
-              />
+              {/* The product's checkbox, the same one the file rows are
+                  selected with — a bare `<input type="checkbox">` wearing an
+                  `accent-` colour is the browser's box in Drive's teal, which
+                  is a different shape and a different focus ring from every
+                  other box on the screen. Still inside the <label>, so the
+                  sentence beside it is the control's name and clicking the
+                  words still toggles it. */}
+              <Checkbox checked={all} onCheckedChange={(next) => setAll(next === true)} />
               Do this for the other {others} {others === 1 ? 'file' : 'files'} too
             </label>
           )}

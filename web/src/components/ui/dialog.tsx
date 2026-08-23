@@ -37,7 +37,12 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 bg-black/50 duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        // `scrim` rather than the generated `bg-black/50`: the five hand-rolled
+        // dialogs in this app already dim the page that way — a tinted wash
+        // with a 2px blur behind it — and two different scrims in one product
+        // is a difference a person notices without being able to name it. The
+        // animation utilities stay; the class only supplies the surface.
+        "scrim fixed inset-0 z-50 duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
         className
       )}
       {...props}

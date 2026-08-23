@@ -6,9 +6,24 @@
  *
  * There used to be four button class strings and an input class string here
  * too, which meant the auth screens and the dialogs said "primary button" one
- * way while the file browser said it another. They are gone; every button in
- * the product is now `<Button variant=…>` and every field `<Input>`, both
- * pointed at the tokens below by the variable block in `index.css`.
+ * way while the file browser said it another. They are gone: every *button*
+ * in the product — anything that reads as a button — is now `<Button
+ * variant=…>`, pointed at the tokens below by the variable block in
+ * `index.css`.
+ *
+ * Three controls are deliberately not primitives, and it is worth naming them
+ * so the next sweep does not spend an afternoon rediscovering why:
+ *
+ *  - The **column headers** in `FileList` (`ColumnLabel`). They are `<button>`
+ *    because they are clickable, but they are laid out as table headings —
+ *    `flex-1`, a fixed 8rem column, `justify-end` — at the header row's own
+ *    type scale. `Button` would impose a centred 36px pill with its own
+ *    padding and a background on hover, and overriding all of that leaves
+ *    nothing of the variant behind.
+ *  - The **folder rows** in `DestinationDialog`. Same shape of answer: a
+ *    full-width left-aligned list row, not a control sitting in a row.
+ *  - `HeaderSearch`'s **pill field**, which is a shape of its own and says so
+ *    where it is written.
  */
 
 import { CircleAlert } from 'lucide-react'

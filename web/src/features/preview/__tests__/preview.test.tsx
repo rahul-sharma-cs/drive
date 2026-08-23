@@ -167,6 +167,22 @@ describe('opening a preview', () => {
     expect(image.getAttribute('src')).toBe(`${STORE}/shot.png`)
   })
 
+  it('dims the page with the one scrim the rest of the product dims with', async () => {
+    renderFolder([...listing([reports, shot]), signed('f2', 'shot.png', 'image/png')])
+    await screen.findByText('shot.png')
+    await userEvent.click(screen.getByRole('link', { name: 'shot.png' }))
+    await screen.findByRole('img', { name: 'shot.png' })
+
+    // The generated primitive arrives with a flat black wash of its own, which
+    // is a visibly different thing from the tinted, faintly blurred one the
+    // five hand-rolled dialogs draw. A person cannot name the difference; they
+    // can see it.
+    const overlay = document.querySelector('[data-slot="dialog-overlay"]')
+    expect(overlay).toBeTruthy()
+    expect(overlay!.classList.contains('scrim')).toBe(true)
+    expect(overlay!.className).not.toContain('bg-black')
+  })
+
   it('walks into a folder from its name and never opens a viewer for one', async () => {
     const { calls } = renderFolder([
       ...listing([reports, shot]),

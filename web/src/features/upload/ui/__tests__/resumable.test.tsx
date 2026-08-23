@@ -126,6 +126,21 @@ describe('conflict prompt', () => {
     expect(onResolve).toHaveBeenCalledWith(['a', 'b', 'c'], 'replace')
   })
 
+  it('offers the product’s own checkbox, and the sentence beside it still toggles it', async () => {
+    render(<ConflictDialog conflicts={conflicted} onResolve={vi.fn()} onSkip={vi.fn()} />)
+
+    // A bare `<input type="checkbox">` also answers to this role, so the role
+    // alone proves nothing: the slot is what says this is the same control the
+    // file rows are selected with, rather than the browser's own box tinted to
+    // look close.
+    const box = screen.getByRole('checkbox')
+    expect(box.getAttribute('data-slot')).toBe('checkbox')
+    expect(box.getAttribute('aria-checked')).toBe('false')
+
+    await userEvent.click(screen.getByText(/other 2 files too/i))
+    expect(box.getAttribute('aria-checked')).toBe('true')
+  })
+
   it('stays open until a choice is made', async () => {
     render(<ConflictDialog conflicts={conflicted} onResolve={vi.fn()} onSkip={vi.fn()} />)
 
