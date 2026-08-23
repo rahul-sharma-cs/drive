@@ -91,8 +91,13 @@ const IN_ARCHIVE: Record<string, string> = {
 
 const EMPTY_IN_ARCHIVE = `${FIXTURE}/${EMPTY}/`;
 
-/** `FileFetchError`'s wording, typographic punctuation and all. */
-const REFUSED_TOAST = 'Couldn’t download “inner.txt” — the archive was not saved';
+/**
+ * `failureMessage`'s wording in `useZipDownload`, typographic punctuation and
+ * all. It names the archive as well as the file that sank it: on the streaming
+ * path the browser created that file the moment the save dialog was answered,
+ * so a person has to be able to tell which file on their disk is the dud.
+ */
+const REFUSED_TOAST = `Couldn’t download “inner.txt” — “${FIXTURE}.zip” was not saved`;
 
 /** One signed-in page for the whole file: signing in once per case proves nothing extra. */
 let page: Page;
@@ -370,10 +375,11 @@ test('a file the store will not hand over aborts the whole archive', async () =>
     await expectNoArchive(async () => {
       await band().getByRole('button', { name: 'Download' }).click();
       // Names the file, because "something went wrong" would leave a person
-      // with a folder of hundreds and no idea which one to look at.
+      // with a folder of hundreds and no idea which one to look at — and names
+      // the archive it sank, which is the file that is not on their disk.
       await expect(
         toasts().filter({ hasText: REFUSED_TOAST }).first(),
-        'the toast names the file that could not be fetched',
+        'the toast names the file that could not be fetched, and the archive it sank',
       ).toBeVisible();
       await expect(dock()).toBeHidden();
     });
