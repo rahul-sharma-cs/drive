@@ -1,5 +1,6 @@
 import { Separator } from '@/components/ui/separator'
 
+import { IdentitiesSection } from './IdentitiesSection'
 import { PasswordSection } from './PasswordSection'
 import { ProfileSection } from './ProfileSection'
 import { SessionsSection } from './SessionsSection'
@@ -26,6 +27,8 @@ export function AccountPage() {
       <ProfileSection />
       <Separator className="my-8" />
       <PasswordSection />
+      <Separator className="my-8" />
+      <IdentitiesSection />
       <Separator className="my-8" />
       <SessionsSection />
     </main>

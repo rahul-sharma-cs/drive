@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { changePassword } from '../../lib/api'
 import { FormError } from '../../ui/controls'
 import { isAcceptablePassword, passwordHint } from '../auth/password'
+import { useSession } from '../auth/session'
 import { sessionsKey } from './SessionsSection'
 
 /**
@@ -19,6 +20,7 @@ import { sessionsKey } from './SessionsSection'
  * a request that could never have succeeded.
  */
 export function PasswordSection() {
+  const me = useSession()
   const client = useQueryClient()
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -43,6 +45,25 @@ export function PasswordSection() {
       toast.success('Password changed')
     },
   })
+
+  // An account with no password has nothing to change, and the form would ask
+  // for a current password that does not exist. Setting one is the reset flow's
+  // job, not a second endpoint's: it already proves control of the mailbox
+  // before it writes a hash, which is the whole reason that flow is safe to
+  // offer to somebody who cannot currently sign in with a password at all.
+  if (!me.has_password) {
+    return (
+      <section aria-labelledby="password-heading" className="flex flex-col gap-1.5">
+        <h2 id="password-heading" className="text-[15px] font-semibold text-ink">
+          Password
+        </h2>
+        <p className="text-[13px] text-ink-3">
+          You sign in with Google. To add a password, use <span className="font-medium text-ink-2">Forgot
+          password</span> from the sign-in screen — it sends a link to your address.
+        </p>
+      </section>
+    )
+  }
 
   return (
     <section aria-labelledby="password-heading" className="flex flex-col gap-1.5">
