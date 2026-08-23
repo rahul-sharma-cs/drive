@@ -201,6 +201,7 @@ func (s *Server) Routes() http.Handler {
 		s.mountDownload(r)
 		s.mountUploads(r)
 		s.mountUploadComplete(r)
+		s.mountShares(r)
 		s.mountShare(r)
 
 		// Unmatched /api paths answer with the JSON envelope, never the SPA.
