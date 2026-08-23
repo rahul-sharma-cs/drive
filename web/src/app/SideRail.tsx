@@ -1,6 +1,6 @@
 import { HardDrive, Trash2 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { NavLink, useLocation } from 'react-router'
+import { NavLink } from 'react-router'
 
 import { NewMenu } from './NewMenu'
 import { StorageMeter } from './StorageMeter'
@@ -19,14 +19,15 @@ import { StorageMeter } from './StorageMeter'
  * they don't — Back, a redirect, a link on the screen behind.
  */
 export function SideRail() {
-  const { pathname } = useLocation()
-
   return (
     <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-4">
-      {/* Nothing is created in the trash or in the account settings, and
-          nothing is uploaded into either, so the command that would have to
-          land somewhere else entirely is not offered on them. */}
-      {pathname !== '/trash' && pathname !== '/account' && <NewMenu />}
+      {/* On every screen, the trash and the account settings included. A screen
+          that nothing lands in does not take the command away, it renames it:
+          the menu reads "to My Drive" there and puts things exactly there.
+          Hiding it instead pulled the destinations below it up by the height of
+          a button, so walking into the trash and back out moved the link the
+          person was aiming at. */}
+      <NewMenu />
 
       <nav aria-label="Places" className="flex flex-col gap-0.5">
         <RailLink to="/" end icon={<HardDrive />} label="My Drive" />

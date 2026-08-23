@@ -200,23 +200,45 @@ describe('the New menu and the upload seam', () => {
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['children', 'root-1'] })
   })
 
-  it('offers New wherever something can be created, and never in the trash', async () => {
+  it('keeps New in the rail on the way into the trash, renamed rather than removed', async () => {
     renderShell([], { route: '/folders/f9' })
     expect(screen.getByRole('button', { name: 'New' })).toBeTruthy()
 
     await userEvent.click(screen.getByRole('link', { name: 'Trash' }))
     await screen.findByText('trash')
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'New' })).toBeNull())
+
+    // Nothing is created in the trash, but taking the button away on the way in
+    // pulls the two destinations under it up by a button's height — so the link
+    // a person is walking towards moves out from under the pointer between one
+    // screen and the next. It stays, and says where things will actually land.
+    expect(screen.getByRole('button', { name: 'New' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'New' }))
+    expect(await screen.findByRole('menuitem', { name: 'Upload files to My Drive' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: 'Upload files' })).toBeNull()
   })
 
-  it('offers no New on the account screen, where there is nothing to put anything into', async () => {
-    renderShell([], { route: '/account' })
+  it('keeps New on the account screen, and creates in My Drive from it', async () => {
+    const { calls } = renderShell(
+      [{ method: 'POST', path: '/api/folders', body: { ...root, id: 'new-1', name: 'Invoices' } }],
+      { route: '/account' },
+    )
     await screen.findByText('account')
 
-    // Every item behind it lands in a folder, and this screen is not in one:
-    // "Upload files" would mean My Drive without saying so, and New folder
-    // would create one the person cannot see from where they are standing.
-    expect(screen.queryByRole('button', { name: 'New' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'New' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'New' }))
+    expect(await screen.findByRole('menuitem', { name: 'Upload folder to My Drive' })).toBeTruthy()
+
+    // The two upload items say where they are going. New folder has nowhere to
+    // say it, so the only place its destination is visible is the request.
+    await userEvent.click(screen.getByRole('menuitem', { name: 'New folder' }))
+    await userEvent.type(await screen.findByLabelText('Name'), 'Invoices')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => {
+      const post = calls.find((c) => c.method === 'POST')
+      expect(post?.url).toBe('/api/folders')
+      expect(post?.body).toEqual({ parent_id: 'root-1', name: 'Invoices' })
+    })
   })
 
   it('names the destination on any screen that is not a folder, not just on search', async () => {
