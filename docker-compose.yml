@@ -14,9 +14,19 @@ services:
       - garage-meta:/var/lib/garage/meta
       - garage-data:/var/lib/garage/data
     healthcheck:
-      # This reads /etc/garage.toml — the file bind-mounted just above — for the
-      # RPC address and secret, and -c says so at the call site rather than
-      # leaving it to the default (which GARAGE_CONFIG_FILE could move).
+      # Unhealthy here means the ./garage.toml bind mount is dangling, not that
+      # the store is down. The container was created from a checkout that has
+      # since moved or been deleted — a git worktree that ran
+      # `make infra-init-test` and was then removed — so the mount resolves to
+      # nothing, the probe reports "Unable to read configuration file
+      # /etc/garage.toml", and S3 goes on serving throughout. Recreate the
+      # container from the checkout you actually mean:
+      #
+      #   docker compose -p <project> --env-file <env> up -d
+      #
+      # -c names the file the probe reads instead of leaning on the default,
+      # which is that same path: a note at the call site, not a fix. Passing it
+      # changed no behaviour.
       #
       # There is no config-free probe to switch to. The image is FROM scratch
       # with only /garage in it, so there is no shell and no HTTP client for the
@@ -24,12 +34,9 @@ services:
       # wants `<full-node-id>@host:port`, an id generated on the node's first
       # boot that nothing here can know in advance.
       #
-      # So when this reports "Unable to read configuration file /etc/garage.toml"
-      # while the store is plainly serving, the mount is what broke and not the
-      # store: the container was created from a directory that has since been
-      # deleted — a git worktree that ran `make infra-init-test` and was then
-      # removed. `docker compose -p <project> --env-file <env> up -d` from a live
-      # checkout recreates the container against a path that exists.
+      # Nothing in the stack gates on this check — no depends_on names it, and
+      # infra-init waits on the S3 API itself — so a red dot in `docker ps` next
+      # to a working store is cosmetic until the mount is repaired.
       test: ["CMD", "/garage", "-c", "/etc/garage.toml", "status"]
       interval: 5s
       timeout: 5s

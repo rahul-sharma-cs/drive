@@ -27,7 +27,7 @@ const healthPoll = 50 * time.Millisecond
 // same port with the same state, because all of the state is in Postgres. An
 // in-process server can be stopped but never killed.
 type Child struct {
-	// URL is the child's origin, e.g. http://localhost:53312.
+	// URL is the child's origin, e.g. http://127.0.0.1:53312.
 	URL  string
 	Port int
 
@@ -78,14 +78,21 @@ func freePort() (int, error) {
 // environment -- which LoadTestEnv has already pointed at the drive-test stack
 // -- with the address and base URL overridden so several servers can run at
 // once against the one database.
+//
+// The origin names 127.0.0.1 and not localhost, which resolves to both ::1 and
+// 127.0.0.1 here. The server listens on every family, so which one a dial picks
+// is up to the resolver and to Happy Eyeballs -- and the per-IP bucket keys on
+// the peer address, so a redialled connection that landed on the other family
+// would be spending a second bucket's tokens. A test that counts requests into
+// one bucket has to be sure they all arrive as one caller.
 func newChild(bin string, port int) *Child {
 	return &Child{
-		URL:  fmt.Sprintf("http://localhost:%d", port),
+		URL:  fmt.Sprintf("http://127.0.0.1:%d", port),
 		Port: port,
 		bin:  bin,
 		env: append(os.Environ(),
 			fmt.Sprintf("DRIVE_ADDR=:%d", port),
-			fmt.Sprintf("DRIVE_BASE_URL=http://localhost:%d", port),
+			fmt.Sprintf("DRIVE_BASE_URL=http://127.0.0.1:%d", port),
 		),
 		logs: &syncBuffer{},
 	}

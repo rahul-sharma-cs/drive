@@ -15,6 +15,8 @@ package api
 // is the only property these cases depend on.
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -93,6 +95,54 @@ func TestClientIPIgnoresXRealIP(t *testing.T) {
 	if got := ClientIP(r); got != "203.0.113.9" {
 		t.Errorf("ClientIP = %q, want the peer address -- X-Real-IP must not be read", got)
 	}
+}
+
+// The memo, from both sides.
+//
+// ClientIP answers from the context when requestLogger has seeded it, and
+// resolves on the spot when nothing has. The first half is what keeps a flood
+// from writing the untrusted-header line once per layer; the second is what
+// makes the function safe to call from a unit test -- but it also means a
+// request SYNTHESISED from an inherited context inherits that request's answer,
+// which is the trap the doc comment names and this pins down.
+func TestClientIPMemoIsScopedToTheContextThatSeededIt(t *testing.T) {
+	// A header the rule will not believe, so every resolution is loud and can
+	// be counted.
+	fresh := func(remoteAddr string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+		r.RemoteAddr = remoteAddr
+		r.Header.Set("X-Forwarded-For", "10.1.2.3")
+		return r
+	}
+	const complaint = "untrustworthy X-Forwarded-For; keying on the peer address instead"
+
+	t.Run("no memo: resolved on the spot, and it says so once", func(t *testing.T) {
+		rec := &recordingLog{}
+		r := fresh("203.0.113.9:41234")
+		r = r.WithContext(context.WithValue(r.Context(), loggerKey{}, slog.New(rec)))
+
+		if got := ClientIP(r); got != "203.0.113.9" {
+			t.Errorf("ClientIP = %q, want the peer address", got)
+		}
+		if n := rec.count(slog.LevelError, complaint); n != 1 {
+			t.Errorf("%d %q lines for one resolution, want 1 -- a fallback that resolves in silence is one nobody can see", n, complaint)
+		}
+	})
+
+	t.Run("a memo answers for a request that never wrote it", func(t *testing.T) {
+		seeded := withResolvedClientIP(fresh("203.0.113.9:41234"))
+
+		// The shape that matters: a second request built on the first one's
+		// context. Its own peer is a different address entirely.
+		inherited := fresh("198.51.100.22:41234").WithContext(seeded.Context())
+
+		if got := ClientIP(inherited); got != "203.0.113.9" {
+			t.Errorf("ClientIP = %q, want %q -- the memo travels with the context", got, "203.0.113.9")
+		}
+		if got := resolveClientIP(inherited); got != "198.51.100.22" {
+			t.Errorf("resolveClientIP = %q, want %q -- it must read this request, not the memo", got, "198.51.100.22")
+		}
+	})
 }
 
 // ------------------------------------------------------------------ bucket --

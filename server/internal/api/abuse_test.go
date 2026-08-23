@@ -35,7 +35,12 @@ func abuseServer(t *testing.T) (*Server, http.Handler, *authRecordingSender, *pg
 }
 
 // abuseDo issues a request from a chosen address. The forwarded header is the
-// deployed shape; RemoteAddr is the direct one.
+// deployed shape -- the caller names the leftmost entry, an edge hop is
+// appended after it -- and RemoteAddr is the direct one.
+//
+// The peer address is this test's own, for the same reason authDo's is: it is
+// what the bucket keys on whenever the header is absent or not believed, so a
+// constant here would put every caller that hits that path into one bucket.
 func abuseDo(t *testing.T, h http.Handler, method, path string, body any, forwarded string) *httptest.ResponseRecorder {
 	t.Helper()
 	raw := ""
@@ -49,7 +54,7 @@ func abuseDo(t *testing.T, h http.Handler, method, path string, body any, forwar
 	req := httptest.NewRequest(method, path, strings.NewReader(raw))
 	req.Header.Set(ClientHeader, "web")
 	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = "10.0.0.9:41234" // the edge, as it looks from inside
+	req.RemoteAddr = testClientAddr(t)
 	if forwarded != "" {
 		req.Header.Set("X-Forwarded-For", forwarded+", 203.0.113.100")
 	}

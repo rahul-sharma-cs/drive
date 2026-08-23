@@ -243,17 +243,22 @@ func authDo(t *testing.T, h http.Handler, method, path string, body any, cookie 
 	return rec
 }
 
-// testClientAddr is a peer address no other test in this package shares, and
+// testClientAddr is a peer address no other test that asks for one shares, and
 // the same one every time within a test.
 //
 // httptest.NewRequest stamps every request it builds with 192.0.2.1:1234, so
-// without this the whole package speaks from a single address -- and a single
+// without this every caller would speak from a single address -- and a single
 // address is exactly one per-IP bucket. Nothing bleeds today, because the
 // limiters live on the Server and every test here builds its own; the moment
 // two tests share a handler (a package-level server, a t.Parallel group) the
 // first one to spend a burst starts refusing the second, and the failure lands
 // in whichever test happened to run after the limiter test rather than in the
 // limiter test itself.
+//
+// It covers the two helpers that reach the bucketed surface -- authDo and
+// abuseDo -- and not every request the package builds. The tests that hand-build
+// their own knock on routes with no per-IP bucket in front of them (nodes,
+// trash, uploads, the SPA), where httptest's default address costs nothing.
 //
 // Stable within a test, because the tests that measure a bucket depend on their
 // own requests sharing one: TestMeIsNotInThePerIPBucket spends twenty tokens

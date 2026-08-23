@@ -1,4 +1,5 @@
--- Two things the code already relies on, written down where they hold.
+-- Two things the code already relies on, written down where they hold -- and
+-- what writing them down costs on a live database.
 --
 -- 1. upload_sessions.object_key is unique.
 --
@@ -29,6 +30,26 @@
 -- The partial predicate is written exactly as node/trash.go writes it. The
 -- planner only uses a partial index when it can prove the query implies the
 -- index predicate, so a rewrite of either text has to move both.
+--
+-- Applying it: the locks, and the one way it can fail.
+--
+-- Migrations run at boot, before the process listens, so both statements land
+-- in the window where nothing is being served by this instance -- but an older
+-- instance may still be. ADD CONSTRAINT ... UNIQUE builds its index under
+-- ACCESS EXCLUSIVE on upload_sessions: neither reads nor writes get through for
+-- the length of the build. The CREATE INDEX is not CONCURRENTLY, so it holds
+-- SHARE on nodes: reads continue, writes wait. At the sizes these tables run at
+-- today both are milliseconds. At a size where they are not, the pair wants
+-- CONCURRENTLY, which cannot run inside the transaction goose wraps a migration
+-- in.
+--
+-- The failure to check for first is a duplicate object_key already in the
+-- table: the constraint would be rejected and the boot with it. Nothing in the
+-- code can produce one, as above, but that is an argument about the code and
+-- not an observation about the data, so ask the database before deploying and
+-- not during:
+--
+--   SELECT object_key, count(*) FROM upload_sessions GROUP BY 1 HAVING count(*) > 1;
 
 -- +goose Up
 

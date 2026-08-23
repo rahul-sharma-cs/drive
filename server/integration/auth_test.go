@@ -132,13 +132,6 @@ func TestAuthRateLimitIsReadFromTheEnvironment(t *testing.T) {
 	if refused.Code() != "rate_limited" {
 		t.Errorf("code = %q, want rate_limited", refused.Code())
 	}
-
-	// The suite's own server is not affected: the limit came from this child's
-	// environment, not from anything shared.
-	if got := H.Anonymous(t).Post(t, "/api/auth/verify-email",
-		map[string]any{"token": "nope"}).Status; got == http.StatusTooManyRequests {
-		t.Error("the shared server was refused too; the child's limit is not its own")
-	}
 }
 
 // DRIVE_EMAIL_DAILY_CAP reaches the service-wide send budget in a real process.

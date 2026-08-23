@@ -44,6 +44,14 @@ import (
 // repeat the same complaint. requestLogger seeds the context; a request that
 // never went through it (a unit test, a handler called directly) still gets an
 // answer, it is simply computed on the spot.
+//
+// The memo is on the CONTEXT, not on the request, and that is its one sharp
+// edge: a request built from an inherited context -- one a handler synthesises
+// out of r.Context() to hand somewhere else -- answers with the address of the
+// request that seeded it, whatever its own headers and peer say, and without a
+// line to say so. requestLogger is the only thing that should seed it. Anything
+// asking about a request it made up itself wants resolveClientIP, which always
+// reads that request's own headers and peer.
 func ClientIP(r *http.Request) string {
 	if ip, ok := r.Context().Value(clientIPKey{}).(string); ok {
 		return ip
