@@ -1,7 +1,8 @@
 import { Fragment, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 
 import type { DriveNode } from '../../lib/api'
+import { isPlainClick, navigateWithTransition } from '../../lib/viewTransition'
 import { dragPayload, isNodeDrag } from './dnd'
 
 /**
@@ -22,6 +23,7 @@ export function Breadcrumbs({
   onDropInto: (id: string, ids: string[]) => void
 }) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const navigate = useNavigate()
 
   return (
     <nav aria-label="Breadcrumb" className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm text-ink-3">
@@ -47,6 +49,12 @@ export function Breadcrumbs({
                   dropTarget === crumb.id ? 'bg-teal-soft text-teal-strong ring-1 ring-teal' : ''
                 }`}
                 to={crumb.id === rootId ? '/' : `/folders/${crumb.id}`}
+                // Going up is folder navigation too, and crossfades the same way.
+                onClick={(e) => {
+                  if (!isPlainClick(e)) return
+                  e.preventDefault()
+                  navigateWithTransition(() => void navigate(crumb.id === rootId ? '/' : `/folders/${crumb.id}`))
+                }}
                 onDragOver={(e) => {
                   if (!isNodeDrag(e.dataTransfer)) return
                   e.preventDefault()

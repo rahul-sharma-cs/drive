@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 
 import type { DriveNode, Sort, SortKey } from '../../lib/api'
+import { navigateWithTransition } from '../../lib/viewTransition'
 import { Card, SkeletonRows } from '../../ui/controls'
 import { CommandBand, type BandAction } from './CommandBand'
 import { FileRow, openTarget } from './FileRow'
@@ -126,8 +127,10 @@ export function FileList({
       const node = nodes[index]
       if (!node) return
       // The same destination the name link carries, so Enter and a click on the
-      // name can never mean two different things.
-      void navigate(openTarget(node, params).to)
+      // name can never mean two different things — the crossfade included.
+      const { to } = openTarget(node, params)
+      if (node.kind === 'folder') navigateWithTransition(() => void navigate(to))
+      else void navigate(to)
     },
     onTrash: (ids) => onDelete?.(nodes.filter((n) => ids.includes(n.id))),
     onSelectAll: () => {

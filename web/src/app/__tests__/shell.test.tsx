@@ -407,6 +407,28 @@ describe('the rail and the account menu', () => {
     expect(screen.getAllByRole('navigation', { hidden: true })).toHaveLength(1)
   })
 
+  it('puts focus in the rail when a widen closes the drawer, not on the hidden hamburger', async () => {
+    const viewport = stubBreakpoint()
+    renderShell([], { route: '/folders/f9' })
+    const hamburger = screen.getByRole('button', { name: 'Open navigation' })
+
+    await userEvent.click(hamburger)
+    await screen.findByRole('dialog')
+
+    viewport.cross(true)
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    // Every other close hands focus back to the trigger, which is right. This
+    // one cannot: the widen is what took the trigger away (`md:hidden`), so the
+    // ordinary restore parks a keyboard user on something that is not on the
+    // screen. The rail that replaced the drawer holds the same destinations, so
+    // focus goes to the first of them.
+    const rail = screen.getByRole('complementary', { hidden: true })
+    const first = within(rail).getByRole('link', { name: 'My Drive' })
+    await waitFor(() => expect(document.activeElement).toBe(first))
+    expect(document.activeElement).not.toBe(hamburger)
+  })
+
   it('signs out from the account menu, which is where it lives now', async () => {
     const { calls, client } = renderShell([{ method: 'POST', path: '/api/auth/logout', body: { status: 'ok' } }])
     // Something this account fetched, still in the cache when it leaves.

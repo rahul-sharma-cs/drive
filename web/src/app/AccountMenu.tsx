@@ -38,10 +38,16 @@ export function AccountMenu() {
     // trash, usage — was fetched with a cookie that no longer exists, and the
     // next account to sign in on this browser must not be shown the last one's
     // files while its own answers are still in flight.
+    //
+    // Navigation first, for the reason `SessionsSection` spells out: everything
+    // this menu is rendered inside sits under `useSession()`, which throws on an
+    // empty cache. Queueing the route change before emptying it lets the whole
+    // signed-in chrome unmount in the same commit instead of rendering one
+    // frame with no user in it.
     onSuccess: () => {
+      void navigate('/login', { replace: true })
       setSession(null)
       client.clear()
-      void navigate('/login', { replace: true })
     },
   })
 

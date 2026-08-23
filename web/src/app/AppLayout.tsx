@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Outlet, useLocation, useParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -37,12 +37,20 @@ export function AppLayout() {
   // So does growing past `md`, where the desktop rail takes over. Left open, the
   // drawer and its scrim sit on top of a layout that has unmounted its <aside>
   // and hidden the only control that could dismiss them.
+  //
+  // Closing it that way is the one close that must not hand focus back to the
+  // hamburger, because the widen is what hid the hamburger. This records that
+  // the close came from the viewport rather than from a person, and
+  // `onCloseAutoFocus` below spends the flag.
+  const widened = useRef(false)
   useEffect(() => {
     // The width Tailwind compiles `md:` from. jsdom defines no `matchMedia`.
     const wide = window.matchMedia?.('(min-width: 48rem)')
     if (!wide) return
     const onChange = (e: MediaQueryListEvent) => {
-      if (e.matches) setDrawer(false)
+      if (!e.matches) return
+      widened.current = true
+      setDrawer(false)
     }
     wide.addEventListener('change', onChange)
     return () => wide.removeEventListener('change', onChange)
@@ -65,7 +73,10 @@ export function AppLayout() {
                 answers to "where am I". The drawer only opens below `md`, where
                 this one is display:none anyway, so unmounting it costs nothing. */}
             {!drawer && (
-              <aside className="fixed top-14 bottom-0 left-0 z-30 hidden w-60 flex-col border-r border-line bg-surface md:flex">
+              <aside
+                data-desktop-rail
+                className="fixed top-14 bottom-0 left-0 z-30 hidden w-60 flex-col border-r border-line bg-surface md:flex"
+              >
                 <SideRail />
               </aside>
             )}
@@ -73,7 +84,24 @@ export function AppLayout() {
             {/* `bg-surface`, not the sheet's default canvas grey: this is the
                 same rail as the one on the left, and it has to be the same
                 colour as it. */}
-            <SheetContent side="left" className="w-72 gap-0 bg-surface" showCloseButton={false}>
+            <SheetContent
+              side="left"
+              className="w-72 gap-0 bg-surface"
+              showCloseButton={false}
+              onCloseAutoFocus={(event) => {
+                // Radix hands focus back to the trigger. Right after a widen
+                // the trigger is `md:hidden`, so that lands a keyboard user on
+                // an element they cannot see and cannot use. The rail that took
+                // the drawer's place is where they were, so focus goes to the
+                // first place in it.
+                if (!widened.current) return
+                widened.current = false
+                const link = document.querySelector<HTMLElement>('[data-desktop-rail] a')
+                if (!link) return
+                event.preventDefault()
+                link.focus()
+              }}
+            >
               <SheetHeader className="flex-row items-center gap-2 border-b border-line px-3 py-2.5">
                 <SheetTitle className="flex items-center gap-2 text-[15px] tracking-tight text-ink">
                   <span className="flex h-6 w-6 items-center justify-center rounded-md bg-ink text-canvas">

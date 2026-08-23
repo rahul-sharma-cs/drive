@@ -33,7 +33,7 @@ export function StorageMeter() {
         className="h-1.5 w-full overflow-hidden rounded-full bg-line"
       >
         <div
-          className={`h-full rounded-full transition-[width] duration-500 ease-out ${tight ? 'bg-warn' : 'bg-teal'}`}
+          className={`h-full rounded-full transition-[width] duration-[400ms] ease-out ${tight ? 'bg-warn' : 'bg-teal'}`}
           style={{ width: `${Math.max(2, fraction * 100)}%` }}
         />
       </div>

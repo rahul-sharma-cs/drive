@@ -1,9 +1,10 @@
 import type { MouseEvent as ReactMouseEvent, ReactNode, Ref } from 'react'
-import { Link, useSearchParams, type To } from 'react-router'
+import { Link, useNavigate, useSearchParams, type To } from 'react-router'
 
 import { Checkbox } from '@/components/ui/checkbox'
 
 import type { DriveNode } from '../../lib/api'
+import { isPlainClick, navigateWithTransition } from '../../lib/viewTransition'
 import { FileIcon } from '../../ui/FileIcon'
 import { formatBytes } from '../../ui/format'
 import { formatWhen } from '../../ui/when'
@@ -86,6 +87,7 @@ export function FileRow({
 }: FileRowProps) {
   const isFolder = node.kind === 'folder'
   const [params] = useSearchParams()
+  const navigate = useNavigate()
   const target = openTarget(node, params)
   const dropTarget = dnd?.over === node.id
 
@@ -138,7 +140,11 @@ export function FileRow({
       // runs before the trigger's own — so this is the row's chance to become
       // the selection before the menu that acts on it opens.
       onContextMenu={onContextMenuOpen}
-      className={`group flex h-12 items-center gap-3 px-3 outline-none transition duration-100 sm:px-4 ${
+      // Two durations, because the two things being animated answer different
+      // questions. The tint says "this is selected", which is a state and can
+      // afford 100ms; the ring says "let go here", which is feedback on a
+      // pointer that is still moving and has to arrive under it.
+      className={`group flex h-12 items-center gap-3 px-3 outline-none [transition:background-color_100ms_var(--ease-out),box-shadow_80ms_var(--ease-out)] sm:px-4 ${
         dropTarget
           ? 'bg-teal-soft ring-1 ring-inset ring-teal'
           : selected
@@ -174,6 +180,18 @@ export function FileRow({
           data-preview-id={isFolder ? undefined : node.id}
           className={`min-w-0 flex-1 truncate text-sm text-ink hover:underline ${isFolder ? 'font-medium' : ''}`}
           to={target.to}
+          onClick={
+            // Opening a folder replaces the whole list, so it crossfades.
+            // Opening a file does not — the viewer arrives over rows that stay
+            // where they are, and it has an animation of its own.
+            isFolder
+              ? (e) => {
+                  if (!isPlainClick(e)) return
+                  e.preventDefault()
+                  navigateWithTransition(() => void navigate(target.to))
+                }
+              : undefined
+          }
         >
           {node.name}
         </Link>
