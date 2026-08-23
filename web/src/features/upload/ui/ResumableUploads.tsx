@@ -1,8 +1,8 @@
+import { CircleAlert } from 'lucide-react'
 import { useRef } from 'react'
 
 import type { UploadSession } from '../../../lib/api'
-import { ghostButtonClass, secondaryButtonClass } from '../../../ui/controls'
-import { AlertIcon } from '../../../ui/icons'
+import { Button } from '@/components/ui/button'
 import { formatBytes } from '../../../ui/format'
 
 /**
@@ -65,19 +65,19 @@ function ResumableRow({
         <span className="numeric ml-auto shrink-0 text-ink-3">{formatBytes(session.file_size)}</span>
       </div>
       <p className="flex items-start gap-1.5 text-[13px] text-warn">
-        <AlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <CircleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
         <span>
           Interrupted — {done} of {session.parts_total} parts are already uploaded. Pick the same file to carry on from
           there.
         </span>
       </p>
       <div className="flex gap-1">
-        <button className={secondaryButtonClass} onClick={() => input.current?.click()}>
+        <Button variant="outline" size="sm" onClick={() => input.current?.click()}>
           Pick the file
-        </button>
-        <button className={ghostButtonClass} onClick={() => onDiscard(session.upload_id)}>
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => onDiscard(session.upload_id)}>
           Discard
-        </button>
+        </Button>
         <input
           ref={input}
           type="file"

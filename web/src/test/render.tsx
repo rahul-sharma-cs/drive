@@ -1,7 +1,13 @@
 /**
  * Test harness for component tests: one fresh QueryClient per test (a shared
- * one leaks a cached `me` between tests) and a router, since every screen uses
- * links or navigation.
+ * one leaks a cached `me` between tests), a router, since every screen uses
+ * links or navigation, and the tooltip provider.
+ *
+ * The provider is here rather than in each test because the app mounts it once
+ * in `AppLayout`, above every screen — a component test that renders a screen
+ * directly is standing in for that layout, and a `Tooltip` without a provider
+ * throws. Leaving it out is what kept the command band's icon buttons
+ * tooltip-less: they could not be given one that the tests could render.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -9,6 +15,8 @@ import { render } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { vi } from 'vitest'
+
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 export function renderApp(
   ui: ReactNode,
@@ -20,7 +28,9 @@ export function renderApp(
   seed?.(client)
   const result = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>
+      <MemoryRouter initialEntries={[route]}>
+        <TooltipProvider delayDuration={400}>{ui}</TooltipProvider>
+      </MemoryRouter>
     </QueryClientProvider>,
   )
   return { ...result, client }

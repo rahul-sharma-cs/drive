@@ -1,7 +1,7 @@
+import { Upload } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
 import { useCurrentFolder } from '../../../app/CurrentFolder'
-import { UploadIcon } from '../../../ui/icons'
 import { collectDropEntries, walkEntries } from '../engine/traverse'
 import { useIngest } from './pickers'
 
@@ -82,7 +82,7 @@ export function DropZone({ children }: { children: ReactNode }) {
         // wash.
         <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-card bg-teal-soft/80 ring-2 ring-teal">
           <span className="flex items-center gap-2 rounded-control bg-surface px-3 py-2 text-sm font-medium text-teal-strong shadow-card">
-            <UploadIcon />
+            <Upload aria-hidden className="size-4" />
             Drop to upload here
           </span>
         </div>

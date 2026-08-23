@@ -1,7 +1,7 @@
+import { Upload } from 'lucide-react'
 import { useParams } from 'react-router'
 
 import { EmptyState } from '../../ui/controls'
-import { UploadIcon } from '../../ui/icons'
 import { useSession } from '../auth/session'
 import { PreviewDialog } from '../preview/PreviewDialog'
 import { DropZone } from '../upload/ui/DropZone'
@@ -56,7 +56,7 @@ function FolderView({ folderId, rootId }: { folderId: string; rootId: string }) 
           onRetry={() => void children.refetch()}
           empty={
             <EmptyState
-              icon={<UploadIcon />}
+              icon={<Upload aria-hidden className="size-5" />}
               title="This folder is empty."
               hint="Drop files or folders here, or add them from the New menu."
             />

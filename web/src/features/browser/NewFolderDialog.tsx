@@ -1,7 +1,10 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useState } from 'react'
 
-import { buttonClass, fieldClass, FormError, inputClass, secondaryButtonClass } from '../../ui/controls'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+
+import { fieldClass, FormError } from '../../ui/controls'
 import { useCreateFolder } from './queries'
 
 /**
@@ -60,16 +63,18 @@ export function NewFolderDialog({
           >
             <label className={fieldClass}>
               Name
-              <input className={inputClass} value={name} required onChange={(e) => setName(e.target.value)} autoFocus />
+              <Input value={name} required onChange={(e) => setName(e.target.value)} autoFocus />
             </label>
             <FormError error={create.error} />
             <div className="flex justify-end gap-2 pt-1">
-              <Dialog.Close className={secondaryButtonClass} type="button">
-                Cancel
+              <Dialog.Close asChild>
+                <Button variant="outline" type="button">
+                  Cancel
+                </Button>
               </Dialog.Close>
-              <button className={buttonClass} type="submit" disabled={create.isPending}>
+              <Button type="submit" disabled={create.isPending}>
                 Create
-              </button>
+              </Button>
             </div>
           </form>
         </Dialog.Content>

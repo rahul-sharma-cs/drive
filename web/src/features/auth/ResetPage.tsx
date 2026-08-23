@@ -2,9 +2,11 @@ import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+
 import { ApiError, confirmReset } from '../../lib/api'
-import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
-import { invalidFieldClass } from './fields'
+import { AuthCard, fieldClass, FormError } from '../../ui/controls'
 import { isAcceptablePassword, passwordHint } from './password'
 
 /**
@@ -59,9 +61,9 @@ export function ResetPage() {
         <p className="text-sm text-ink-2">
           Your new password is in place, and every device that was signed in has been signed out.
         </p>
-        <Link className={buttonClass} to="/login">
-          Go to sign in
-        </Link>
+        <Button asChild>
+          <Link to="/login">Go to sign in</Link>
+        </Button>
       </AuthCard>
     )
   }
@@ -89,8 +91,7 @@ export function ResetPage() {
         <div className="flex flex-col gap-1.5">
           <label className={fieldClass}>
             New password
-            <input
-              className={`${inputClass} ${invalidFieldClass}`}
+            <Input
               type="password"
               name="new_password"
               autoComplete="new-password"
@@ -116,8 +117,7 @@ export function ResetPage() {
         </div>
         <label className={fieldClass}>
           Confirm new password
-          <input
-            className={inputClass}
+          <Input
             type="password"
             name="confirm_password"
             autoComplete="new-password"
@@ -136,9 +136,9 @@ export function ResetPage() {
         ) : (
           <FormError error={mutation.error} />
         )}
-        <button className={buttonClass} type="submit" disabled={mutation.isPending}>
+        <Button type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? 'Setting…' : 'Set password'}
-        </button>
+        </Button>
       </form>
       {spent && (
         <p className="text-[13px] text-ink-3">

@@ -1,7 +1,7 @@
+import { ChevronDown } from 'lucide-react'
 import { memo, useRef, useState, type ReactNode } from 'react'
 
-import { dangerButtonClass, ghostButtonClass, secondaryButtonClass } from '../../../ui/controls'
-import { ChevronIcon } from '../../../ui/icons'
+import { Button } from '@/components/ui/button'
 import { formatBytes } from '../../../ui/format'
 import type { UploadSnapshot, UploadState } from '../engine/types'
 import type { UploadActions } from './engineStore'
@@ -46,18 +46,19 @@ export function UploadManager({
         </div>
         <div className="ml-auto flex items-center gap-1">
           {finished && (
-            <button className={ghostButtonClass} onClick={actions.clearFinished}>
+            <Button variant="ghost" size="sm" onClick={actions.clearFinished}>
               Clear finished
-            </button>
+            </Button>
           )}
-          <button
-            className={ghostButtonClass}
+          <Button
+            variant="ghost"
+            size="icon-sm"
             aria-expanded={open}
             aria-label={open ? 'Hide upload details' : 'Show upload details'}
             onClick={() => setOpen((was) => !was)}
           >
-            <ChevronIcon className={`h-4 w-4 transition-transform duration-200 ${open ? '' : 'rotate-180'}`} />
-          </button>
+            <ChevronDown className={`transition-transform duration-200 ${open ? '' : 'rotate-180'}`} />
+          </Button>
         </div>
       </header>
       {open && (
@@ -158,25 +159,25 @@ const UploadRow = memo(function UploadRow(props: RowProps) {
 
         <div className="ml-auto flex shrink-0 gap-1">
           {running && (
-            <button className={ghostButtonClass} onClick={() => actions.pause(id)}>
+            <Button variant="ghost" size="sm" onClick={() => actions.pause(id)}>
               Pause
-            </button>
+            </Button>
           )}
           {(state === 'paused' || state === 'queued') && (
-            <button className={secondaryButtonClass} onClick={() => actions.resume(id)}>
+            <Button variant="outline" size="sm" onClick={() => actions.resume(id)}>
               Resume
-            </button>
+            </Button>
           )}
           {(state === 'failed' || state === 'session_expired') && (
-            <button className={secondaryButtonClass} onClick={() => actions.retry(id)}>
+            <Button variant="outline" size="sm" onClick={() => actions.retry(id)}>
               Try again
-            </button>
+            </Button>
           )}
           {state === 'error_file_changed' && (
             <>
-              <button className={secondaryButtonClass} onClick={() => repick.current?.click()}>
+              <Button variant="outline" size="sm" onClick={() => repick.current?.click()}>
                 Pick the file again
-              </button>
+              </Button>
               <input
                 ref={repick}
                 type="file"
@@ -191,9 +192,14 @@ const UploadRow = memo(function UploadRow(props: RowProps) {
             </>
           )}
           {!done && (
-            <button className={dangerButtonClass} onClick={() => actions.cancel(id)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="hover:bg-danger-soft hover:text-danger"
+              onClick={() => actions.cancel(id)}
+            >
               Cancel
-            </button>
+            </Button>
           )}
         </div>
       </div>

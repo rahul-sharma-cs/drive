@@ -1,8 +1,9 @@
+import { CircleAlert } from 'lucide-react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { useState } from 'react'
 
-import { buttonClass, ghostButtonClass, secondaryButtonClass } from '../../../ui/controls'
-import { AlertIcon } from '../../../ui/icons'
+import { Button } from '@/components/ui/button'
+
 import type { ConflictPolicy, UploadSnapshot } from '../engine/types'
 
 /**
@@ -44,7 +45,7 @@ export function ConflictDialog({
         <Dialog.Overlay className="scrim fixed inset-0 z-50" />
         <Dialog.Content className="pop-enter fixed left-1/2 top-[42%] z-50 w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-pop border border-line bg-surface p-5 shadow-pop">
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-warn-soft text-warn">
-            <AlertIcon />
+            <CircleAlert aria-hidden className="size-4" />
           </span>
           <Dialog.Title className="mt-3 text-[15px] leading-snug font-semibold">
             “{current.original_name}” is already here
@@ -67,15 +68,13 @@ export function ConflictDialog({
           )}
 
           <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <button className={ghostButtonClass} onClick={() => onSkip(targets())}>
+            <Button variant="ghost" onClick={() => onSkip(targets())}>
               Skip
-            </button>
-            <button className={secondaryButtonClass} onClick={() => onResolve(targets(), 'replace')}>
+            </Button>
+            <Button variant="outline" onClick={() => onResolve(targets(), 'replace')}>
               Replace
-            </button>
-            <button className={buttonClass} onClick={() => onResolve(targets(), 'rename')}>
-              Keep both
-            </button>
+            </Button>
+            <Button onClick={() => onResolve(targets(), 'rename')}>Keep both</Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

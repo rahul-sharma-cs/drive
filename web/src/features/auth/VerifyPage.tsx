@@ -15,8 +15,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router'
 
+import { Button } from '@/components/ui/button'
+
 import { verifyEmail } from '../../lib/api'
-import { AuthCard, buttonClass, FormError } from '../../ui/controls'
+import { AuthCard, FormError } from '../../ui/controls'
 
 export function VerifyPage() {
   const [params] = useSearchParams()
@@ -50,9 +52,9 @@ export function VerifyPage() {
       {isSuccess && (
         <>
           <p className="text-sm text-ink-2">Your email is verified. You can sign in now.</p>
-          <Link className={buttonClass} to="/login">
-            Go to sign in
-          </Link>
+          <Button asChild>
+            <Link to="/login">Go to sign in</Link>
+          </Button>
         </>
       )}
       {error && (

@@ -2,6 +2,7 @@ import { X, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 import type { DriveNode } from '../../lib/api'
 
@@ -101,9 +102,15 @@ export function CommandBand({ count, chosen, onClear, onReturnFocus, actions, id
             // the very thing that used to shove the list down.
             className="flex w-full items-center gap-1 overflow-x-auto rounded-card bg-teal-soft/60 px-1.5"
           >
-            <Button variant="ghost" size="icon-sm" aria-label="Clear the selection" onClick={onClear}>
-              <X />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Clear the selection" onClick={onClear}>
+                  <X />
+                </Button>
+              </TooltipTrigger>
+              {/* This one never has a word beside it at any width. */}
+              <TooltipContent>Clear the selection</TooltipContent>
+            </Tooltip>
             <span className="numeric shrink-0 px-1 text-teal-strong">{lastCount.current} selected</span>
             <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-teal/25" />
 
@@ -155,6 +162,12 @@ function Layer({
  * A command in the band. The word is hidden below `sm` and the icon carries it,
  * but the accessible name is the same at every width — a control that loses its
  * name on a narrow screen loses it on the screen that needs it most.
+ *
+ * Below `sm` a tooltip gives the word back to a pointer as well as to a screen
+ * reader. It is hidden from `sm` up rather than never mounted, because the
+ * thing that decides whether the label is showing is a CSS breakpoint: asking
+ * JavaScript the same question would put a second, differently-timed answer in
+ * the product for one that CSS already has.
  */
 function BandButton({ action }: { action: BandAction }) {
   const Icon = action.icon
@@ -166,25 +179,30 @@ function BandButton({ action }: { action: BandAction }) {
   )
 
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      asChild={action.href !== undefined}
-      aria-label={action.label}
-      disabled={action.disabled}
-      onClick={action.onSelect}
-      className={`shrink-0 ${action.danger ? 'hover:bg-danger-soft hover:text-danger' : ''}`}
-    >
-      {action.href === undefined ? (
-        body
-      ) : (
-        // A download is a navigation to the 302 the API answers with, in its
-        // own tab: the bytes come from the object store and must never pass
-        // through this app, and a 401 rendered in this tab would replace it.
-        <a href={action.href} target="_blank" rel="noopener">
-          {body}
-        </a>
-      )}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          asChild={action.href !== undefined}
+          aria-label={action.label}
+          disabled={action.disabled}
+          onClick={action.onSelect}
+          className={`shrink-0 ${action.danger ? 'hover:bg-danger-soft hover:text-danger' : ''}`}
+        >
+          {action.href === undefined ? (
+            body
+          ) : (
+            // A download is a navigation to the 302 the API answers with, in its
+            // own tab: the bytes come from the object store and must never pass
+            // through this app, and a 401 rendered in this tab would replace it.
+            <a href={action.href} target="_blank" rel="noopener">
+              {body}
+            </a>
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent className="sm:hidden">{action.label}</TooltipContent>
+    </Tooltip>
   )
 }

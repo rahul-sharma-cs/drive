@@ -2,10 +2,12 @@ import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+
 import { ApiError, requestReset } from '../../lib/api'
-import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
+import { AuthCard, fieldClass, FormError } from '../../ui/controls'
 import { emailHint, isPlausibleEmail } from './email'
-import { invalidFieldClass } from './fields'
 
 /**
  * `/forgot` — ask for a reset link.
@@ -64,8 +66,7 @@ export function ForgotPage() {
         <div className="flex flex-col gap-1.5">
           <label className={fieldClass}>
             Email
-            <input
-              className={`${inputClass} ${invalidFieldClass}`}
+            <Input
               type="email"
               name="email"
               autoComplete="email"
@@ -96,9 +97,9 @@ export function ForgotPage() {
         ) : (
           <FormError error={mutation.error} />
         )}
-        <button className={buttonClass} type="submit" disabled={mutation.isPending}>
+        <Button type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? 'Sending…' : 'Send reset link'}
-        </button>
+        </Button>
       </form>
       <p className="text-[13px] text-ink-3">
         Remembered it?{' '}

@@ -1,42 +1,28 @@
 /**
- * The shared controls. Three button weights and one input, because a file
- * manager only ever asks for three levels of emphasis: the one action a screen
- * is for, the actions beside it, and the actions on a row.
+ * What is left of the shared controls once the buttons and the inputs became
+ * `Button` and `Input`: the pieces that are Drive's own shapes rather than a
+ * primitive wearing Drive's palette — a panel, a form error, an empty screen,
+ * a loading row, and the signed-out frame.
  *
- * Every control answers on press rather than on release — the scale step is on
- * `:active`, not on `click` — and the focus ring is the single global one from
- * `index.css`, so a keyboard user sees the same ring everywhere.
+ * There used to be four button class strings and an input class string here
+ * too, which meant the auth screens and the dialogs said "primary button" one
+ * way while the file browser said it another. They are gone; every button in
+ * the product is now `<Button variant=…>` and every field `<Input>`, both
+ * pointed at the tokens below by the variable block in `index.css`.
  */
 
+import { CircleAlert } from 'lucide-react'
 import type { ReactNode } from 'react'
 
+import { Skeleton } from '@/components/ui/skeleton'
+
 import { ApiError } from '../lib/api'
-import { AlertIcon, DriveMark } from './icons'
+import { DriveMark } from './icons'
 
-const pressable =
-  'inline-flex items-center justify-center gap-1.5 rounded-control font-medium transition duration-100 ease-out ' +
-  'active:scale-[0.98] disabled:pointer-events-none disabled:opacity-45'
-
-/** The one action a screen exists for. */
-export const buttonClass = `${pressable} bg-teal px-4 py-2 text-sm text-white hover:bg-teal-strong`
-
-/** Everything alongside it: toolbars, dialog cancels, row actions. */
-export const secondaryButtonClass =
-  `${pressable} border border-line-strong bg-surface px-2.5 py-1.5 text-[13px] text-ink-2 ` +
-  'shadow-card hover:border-ink-3 hover:text-ink'
-
-/** Quiet by default, present on hover — for repeated actions on every row. */
-export const ghostButtonClass =
-  `${pressable} px-2 py-1.5 text-[13px] text-ink-3 hover:bg-surface-muted hover:text-ink`
-
-/** The same, for the action that throws something away. */
-export const dangerButtonClass =
-  `${pressable} px-2 py-1.5 text-[13px] text-ink-3 hover:bg-danger-soft hover:text-danger`
-
-export const inputClass =
-  'w-full rounded-control border border-line-strong bg-surface px-3 py-2 text-sm text-ink outline-none ' +
-  'transition duration-100 placeholder:text-ink-3 focus:border-teal focus:ring-2 focus:ring-teal/20'
-
+/**
+ * A labelled field: the caption above, the control below, wrapped so the two
+ * are associated without an id to keep in sync.
+ */
 export const fieldClass = 'flex flex-col gap-1.5 text-[13px] font-medium text-ink-2'
 
 /** A panel of content: the file list, the trash list, search results. */
@@ -62,7 +48,7 @@ export function FormError({ error }: { error: unknown }) {
       role="alert"
       className="flex items-start gap-2 rounded-control bg-danger-soft px-3 py-2 text-[13px] text-danger"
     >
-      <AlertIcon className="mt-0.5 h-4 w-4 shrink-0" />
+      <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
       <span>{message}</span>
     </p>
   )
@@ -84,15 +70,19 @@ export function EmptyState({ icon, title, hint }: { icon: ReactNode; title: stri
   )
 }
 
-/** The shape of the answer while it is still being fetched. */
+/**
+ * The shape of the answer while it is still being fetched — a row's icon, its
+ * name, its size, at the height a real row will land at, so nothing jumps when
+ * the answer arrives.
+ */
 export function SkeletonRows({ rows = 3 }: { rows?: number }) {
   return (
     <ul aria-hidden="true" className="divide-y divide-line">
       {Array.from({ length: rows }, (_, i) => (
-        <li key={i} className="flex items-center gap-3 px-4 py-3">
-          <span className="skeleton h-4 w-4 rounded" />
-          <span className="skeleton h-3.5 rounded" style={{ width: `${38 - i * 7}%` }} />
-          <span className="skeleton ml-auto h-3 w-12 rounded" />
+        <li key={i} className="flex h-12 items-center gap-3 px-3 sm:px-4">
+          <Skeleton className="h-[22px] w-[22px] rounded-sm" />
+          <Skeleton className="h-3.5" style={{ width: `${38 - i * 7}%` }} />
+          <Skeleton className="ml-auto h-3 w-12" />
         </li>
       ))}
     </ul>

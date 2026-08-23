@@ -2,17 +2,12 @@ import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+
 import { ApiError, login, resendVerification } from '../../lib/api'
-import {
-  AuthCard,
-  buttonClass,
-  fieldClass,
-  FormError,
-  inputClass,
-  secondaryButtonClass,
-} from '../../ui/controls'
+import { AuthCard, fieldClass, FormError } from '../../ui/controls'
 import { emailHint, isPlausibleEmail } from './email'
-import { invalidFieldClass } from './fields'
 import { useSetSession } from './session'
 
 export function LoginPage() {
@@ -82,8 +77,7 @@ export function LoginPage() {
         <div className="flex flex-col gap-1.5">
           <label className={fieldClass}>
             Email
-            <input
-              className={`${inputClass} ${invalidFieldClass}`}
+            <Input
               type="email"
               name="email"
               autoComplete="email"
@@ -118,8 +112,7 @@ export function LoginPage() {
         <div className="flex flex-col gap-1.5">
           <label className={fieldClass}>
             Password
-            <input
-              className={`${inputClass} ${invalidFieldClass}`}
+            <Input
               type="password"
               name="password"
               autoComplete="current-password"
@@ -155,19 +148,19 @@ export function LoginPage() {
                   button that fails back to exactly how it looked before the
                   press invites being pressed again until one of them does. */}
               <FormError error={resend.error} />
-              <button
+              <Button
                 type="button"
-                className={secondaryButtonClass}
+                variant="outline"
                 disabled={resend.isPending}
                 onClick={() => resend.mutate()}
               >
                 {resend.isPending ? 'Sending…' : 'Resend verification'}
-              </button>
+              </Button>
             </>
           ))}
-        <button className={buttonClass} type="submit" disabled={mutation.isPending}>
+        <Button type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? 'Signing in…' : 'Sign in'}
-        </button>
+        </Button>
         <Link className="self-start text-[13px] font-medium text-teal hover:underline" to="/forgot">
           Forgot password?
         </Link>

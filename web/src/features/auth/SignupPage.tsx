@@ -2,10 +2,12 @@ import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router'
 
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+
 import { signup } from '../../lib/api'
-import { AuthCard, buttonClass, fieldClass, FormError, inputClass } from '../../ui/controls'
+import { AuthCard, fieldClass, FormError } from '../../ui/controls'
 import { emailHint, isPlausibleEmail } from './email'
-import { invalidFieldClass } from './fields'
 import { isAcceptablePassword, passwordHint } from './password'
 
 export function SignupPage() {
@@ -59,8 +61,7 @@ export function SignupPage() {
       >
         <label className={fieldClass}>
           Name
-          <input
-            className={inputClass}
+          <Input
             name="display_name"
             autoComplete="name"
             required
@@ -71,8 +72,7 @@ export function SignupPage() {
         <div className="flex flex-col gap-1.5">
           <label className={fieldClass}>
             Email
-            <input
-              className={`${inputClass} ${invalidFieldClass}`}
+            <Input
               type="email"
               name="email"
               autoComplete="email"
@@ -99,8 +99,7 @@ export function SignupPage() {
         <div className="flex flex-col gap-1.5">
           <label className={fieldClass}>
             Password
-            <input
-              className={`${inputClass} ${invalidFieldClass}`}
+            <Input
               type="password"
               name="password"
               autoComplete="new-password"
@@ -125,9 +124,9 @@ export function SignupPage() {
           </p>
         </div>
         <FormError error={mutation.error} />
-        <button className={buttonClass} type="submit" disabled={mutation.isPending}>
+        <Button type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? 'Creating…' : 'Create account'}
-        </button>
+        </Button>
       </form>
       <p className="text-[13px] text-ink-3">
         Already have an account?{' '}

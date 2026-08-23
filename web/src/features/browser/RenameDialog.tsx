@@ -1,7 +1,10 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useState } from 'react'
 
-import { buttonClass, fieldClass, FormError, inputClass, secondaryButtonClass } from '../../ui/controls'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+
+import { fieldClass, FormError } from '../../ui/controls'
 
 /**
  * Rename. The input opens with the current name selected up to the extension,
@@ -38,8 +41,7 @@ export function RenameDialog({
           >
             <label className={fieldClass}>
               Name
-              <input
-                className={inputClass}
+              <Input
                 value={name}
                 required
                 autoFocus
@@ -52,12 +54,12 @@ export function RenameDialog({
             </label>
             <FormError error={error} />
             <div className="flex justify-end gap-2 pt-1">
-              <button type="button" className={secondaryButtonClass} onClick={onCancel}>
+              <Button type="button" variant="outline" onClick={onCancel}>
                 Cancel
-              </button>
-              <button className={buttonClass} type="submit" disabled={busy || name.trim() === ''}>
+              </Button>
+              <Button type="submit" disabled={busy || name.trim() === ''}>
                 Rename
-              </button>
+              </Button>
             </div>
           </form>
         </Dialog.Content>

@@ -1,9 +1,10 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useState } from 'react'
 
+import { Button } from '@/components/ui/button'
+
 import { getNode, type DriveNode } from '../../lib/api'
-import { buttonClass, ghostButtonClass, secondaryButtonClass } from '../../ui/controls'
-import { FolderIcon } from '../../ui/icons'
+import { FileIcon } from '../../ui/FileIcon'
 import { useChildren } from './queries'
 
 /**
@@ -61,17 +62,17 @@ export function DestinationDialog({
               Pick the folder to put {excludeIds.length === 1 ? 'it' : 'them'} in.
             </Dialog.Description>
             <nav aria-label="Destination" className="mt-3 flex flex-wrap items-center gap-1 text-[13px]">
-              <button className={ghostButtonClass} onClick={() => setTrail([])}>
+              <Button variant="ghost" size="sm" onClick={() => setTrail([])}>
                 My Drive
-              </button>
+              </Button>
               {trail.map((crumb, i) => (
                 <span key={crumb.id} className="flex items-center gap-1">
                   <span aria-hidden className="text-line-strong">
                     /
                   </span>
-                  <button className={ghostButtonClass} onClick={() => setTrail(trail.slice(0, i + 1))}>
+                  <Button variant="ghost" size="sm" onClick={() => setTrail(trail.slice(0, i + 1))}>
                     {crumb.name}
-                  </button>
+                  </Button>
                 </span>
               ))}
             </nav>
@@ -88,9 +89,9 @@ export function DestinationDialog({
                   className="flex w-full items-center gap-2.5 px-5 py-2 text-left text-sm transition duration-100 hover:bg-surface-muted"
                   onClick={() => void open(folder)}
                 >
-                  <span className="shrink-0 text-teal">
-                    <FolderIcon />
-                  </span>
+                  {/* The same amber folder every list draws — the picker is
+                      showing the same folders, so it says so the same way. */}
+                  <FileIcon kind="folder" name={folder.name} size={20} />
                   <span className="min-w-0 truncate">{folder.name}</span>
                 </button>
               </li>
@@ -98,12 +99,12 @@ export function DestinationDialog({
           </ul>
 
           <div className="flex justify-end gap-2 border-t border-line px-5 py-4">
-            <button className={secondaryButtonClass} onClick={onCancel}>
+            <Button variant="outline" onClick={onCancel}>
               Cancel
-            </button>
-            <button className={buttonClass} disabled={busy} onClick={() => onPick(here)}>
+            </Button>
+            <Button disabled={busy} onClick={() => onPick(here)}>
               {action}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

@@ -1,4 +1,4 @@
-import { dangerButtonClass } from '../../ui/controls'
+import { Button } from '@/components/ui/button'
 import { formatBytes } from '../../ui/format'
 import { IndividualDownloads } from './IndividualDownloads'
 import { cancelZipDownload, useZipJob, type ZipJob } from './useZipDownload'
@@ -53,9 +53,14 @@ function ArchivePanel({ job }: { job: ZipJob }) {
             {walking ? 'Looking through the folders…' : `${formatBytes(job.written)} of ${formatBytes(job.total)}`}
           </p>
         </div>
-        <button className={`${dangerButtonClass} ml-auto shrink-0`} onClick={cancelZipDownload}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto shrink-0 hover:bg-danger-soft hover:text-danger"
+          onClick={cancelZipDownload}
+        >
           Cancel
-        </button>
+        </Button>
       </header>
 
       <div className="flex flex-col gap-2 px-4 py-3">
