@@ -145,7 +145,12 @@ token:
 #     (.env.example holds obvious placeholders; .env.test holds only throwaway
 #     test-stack constants — rebound ports and fixed test credentials that
 #     exist nowhere else. Nothing else under .env* may be tracked.)
-#   - docs/build, docs/research, docs/summary are all gitignored
+#   - docs/build, docs/research, docs/summary are all gitignored. The trailing
+#     slash on the path is load-bearing: the patterns are directory-form
+#     ("docs/build/"), and git check-ignore matches those only against a path
+#     it can tell is a directory. It reads the working tree to decide, so in a
+#     git worktree -- where docs/ does not exist at all, because it is ignored
+#     -- the bare name matches nothing and this check reported a false FAIL.
 #   - the go:embed placeholder is tracked, so a fresh clone compiles
 #   - no AWS-key-shaped string, PEM private-key header, or drv_ PAT-shaped
 #     string appears in any tracked file's current content
@@ -170,10 +175,10 @@ verify-public:
 		echo "PASS: no .env* files tracked"; \
 	fi; \
 	for d in docs/build docs/research docs/summary; do \
-		if git check-ignore -q "$$d"; then \
-			echo "PASS: $$d is gitignored"; \
+		if git check-ignore -q "$$d/"; then \
+			echo "PASS: $$d/ is gitignored"; \
 		else \
-			echo "FAIL: $$d is NOT gitignored"; fail=1; \
+			echo "FAIL: $$d/ is NOT gitignored"; fail=1; \
 		fi; \
 	done; \
 	if git ls-files --error-unmatch server/web/dist/index.html >/dev/null 2>&1; then \
