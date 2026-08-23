@@ -19,7 +19,22 @@ const queryClient = new QueryClient({
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      {/* `useTransitions={false}`, and the folder crossfade is why.
+          `navigateWithTransition` hands `startViewTransition` a callback that
+          has to leave the new screen in the DOM by the time it returns — that
+          is what the browser snapshots. Left at the default, the router marks
+          every location change as a React transition, which is exactly the
+          kind of update `flushSync` does not flush: the callback returns with
+          the old rows still on the page, the browser animates one state
+          against itself, and the new folder appears afterwards with no
+          crossfade at all. Nothing about it fails loudly, which is why it is
+          spelled out here.
+
+          The cost is the thing transitions buy — a slow route staying
+          interactive on the old screen instead of suspending — and every
+          screen in this app is already mounted synchronously off cached
+          queries, so there is nothing to keep interactive. */}
+      <BrowserRouter useTransitions={false}>
         <App />
         {/* Top-right: the upload manager occupies the bottom-right corner. */}
         <Toaster

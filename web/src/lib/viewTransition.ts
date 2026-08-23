@@ -20,6 +20,13 @@ import { flushSync } from 'react-dom'
  * actually changed by the time the callback returns, and React's default
  * batching would leave the update sitting in a queue until after.
  *
+ * `flushSync` alone is not enough, and this is the half that is easy to miss:
+ * it flushes synchronous work, and a `React.startTransition` update is by
+ * definition not that. The router wraps every location change in one unless it
+ * is told otherwise, so the app's `<BrowserRouter useTransitions={false}>` is
+ * as load-bearing here as the call below — without it this helper runs, starts
+ * a transition, and animates the old page against itself.
+ *
  * `Document.startViewTransition` is typed as always present and is not — no
  * Safari before 18 and no Firefox before 144 has it — so the runtime check
  * below is the real gate, whatever the DOM lib says.
