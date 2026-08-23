@@ -454,6 +454,16 @@ func googleCountIdentities(t *testing.T, pool *pgxpool.Pool, subject string) int
 	return n
 }
 
+func googleCountUserIdentities(t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM user_identities WHERE user_id = $1`, userID).Scan(&n); err != nil {
+		t.Fatalf("counting the account's identities: %v", err)
+	}
+	return n
+}
+
 func googleCountUsers(t *testing.T, pool *pgxpool.Pool, email string) int {
 	t.Helper()
 	var n int
@@ -531,6 +541,11 @@ func TestGoogleSignInCreatesAnAccount(t *testing.T) {
 
 // A Google address that already has a Drive account links to it rather than
 // colliding with it -- and the password that account already had still works.
+//
+// This is the other half of the rule the unverified case below tests. A
+// verified account proved the address itself, before anybody linked anything,
+// so its password is its own and linking does not touch it. Only an account the
+// link is *activating* loses one.
 func TestGoogleSignInLinksAVerifiedEmailToAnExistingAccount(t *testing.T) {
 	_, h, stub, pool, _ := googleTestServer(t, nil)
 	sender := &authRecordingSender{}
@@ -576,9 +591,18 @@ func TestGoogleSignInLinksAVerifiedEmailToAnExistingAccount(t *testing.T) {
 }
 
 // An account that never clicked its verification link is rescued by a Google
-// sign-in on the same address: the provider has just proven the same thing the
-// mail proves.
-func TestGoogleSignInVerifiesAnUnverifiedAccount(t *testing.T) {
+// sign-in on the same address -- and loses the password nobody ever proved.
+//
+// The rescue and the discard are one rule. On an open-signup deployment the
+// unverified row is not necessarily the address owner's: anybody can sign up an
+// address they do not own, the row then sits there refusing to log in, and the
+// verification mail goes to the person who does own it. This sign-in is the
+// moment that row becomes a live account, so the credential attached to it goes
+// with it -- otherwise whoever squatted the address now has a working password
+// on somebody else's Drive, can rotate it, and can unlink the owner's Google
+// account. Password reset has no equivalent hole: a reset replaces the hash
+// instead of activating one.
+func TestAGoogleLinkActivatesAnUnverifiedAccountWithoutItsPassword(t *testing.T) {
 	_, h, stub, pool, _ := googleTestServer(t, nil)
 
 	passwordServer, _, _ := authTestServer(t)
@@ -588,22 +612,98 @@ func TestGoogleSignInVerifiesAnUnverifiedAccount(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("signup: status %d, body %s", rec.Code, rec.Body.String())
 	}
-	if _, _, verified, _, _ := googleUserRow(t, pool, email); verified != nil {
+	_, squatted, verified, _, _ := googleUserRow(t, pool, email)
+	if verified != nil {
 		t.Fatal("the account was already verified before the Google sign-in")
+	}
+	if !squatted {
+		t.Fatal("the signup wrote no password hash, so everything below would be vacuous")
 	}
 
 	id := googleIdentity(t, "sub-rescue-"+uuid.NewString())
 	id.Email = email
 	stub.SetIdentity(id)
-	googleSignedIn(t, h)
+	session := googleSignedIn(t, h)
 
-	if _, _, verified, _, _ := googleUserRow(t, pool, email); verified == nil {
+	_, hasPassword, verified, _, _ := googleUserRow(t, pool, email)
+	if verified == nil {
 		t.Error("email_verified_at is still null after a verified Google sign-in")
 	}
-	// And the password login it could not do before now works.
-	if rec := authDo(t, passwordServer, http.MethodPost, "/api/auth/login",
-		authLoginBody{email, authTestPassword}, nil); rec.Code != http.StatusOK {
-		t.Fatalf("password login after the rescue: status %d, body %s", rec.Code, rec.Body.String())
+	if hasPassword {
+		t.Error("the account kept the hash it was signed up with -- whoever chose it never proved the address")
+	}
+	if meHasPassword(t, h, session) {
+		t.Error("/me reports has_password on an account whose unproven hash was discarded")
+	}
+
+	// And the password that could not log in before the rescue still cannot,
+	// told the same thing an address with no account at all is told.
+	login := authDo(t, passwordServer, http.MethodPost, "/api/auth/login",
+		authLoginBody{email, authTestPassword}, nil)
+	nodeWant(t, login, http.StatusUnauthorized, CodeUnauthorized)
+	unknown := authDo(t, passwordServer, http.MethodPost, "/api/auth/login",
+		authLoginBody{authTestEmail(t), authTestPassword}, nil)
+	if got, want := login.Body.String(), unknown.Body.String(); got != want {
+		t.Errorf("the discarded password answers %s, want the unknown-address body %s", got, want)
+	}
+}
+
+// A second Google account offered for an account that already has one is a
+// permanent conflict, and is named as one.
+//
+// The unique index on (user_id, provider) refuses the row now and would refuse
+// it on every retry, so treating it as a lost race costs a second transaction
+// to reach the same refusal under a reason that points at the wrong thing. The
+// caller still gets the generic redirect -- every refusal here does -- but the
+// log line is the only trace there is, and it has to say what happened.
+func TestASecondGoogleAccountForOneDriveAccountIsAlreadyLinked(t *testing.T) {
+	_, h, stub, pool, logs := googleTestServer(t, nil)
+
+	passwordServer, sender, _ := authTestServer(t)
+	email := authVerifiedUser(t, passwordServer, sender)
+
+	first := googleIdentity(t, "sub-linked-first-"+uuid.NewString())
+	first.Email = email
+	stub.SetIdentity(first)
+	googleSignedIn(t, h)
+
+	userID, _, _, _, found := googleUserRow(t, pool, email)
+	if !found {
+		t.Fatalf("no user row for %s", email)
+	}
+	if n := googleCountUserIdentities(t, pool, userID); n != 1 {
+		t.Fatalf("%d identities after the first link, want 1", n)
+	}
+
+	// The same person, a different Google account, the same Drive address.
+	second := googleIdentity(t, "sub-linked-second-"+uuid.NewString())
+	second.Email = email
+	stub.SetIdentity(second)
+
+	rec := googleSignIn(t, h)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != loginGoogleError {
+		t.Fatalf("the second link answered %d → %q, want 302 → %q",
+			rec.Code, rec.Header().Get("Location"), loginGoogleError)
+	}
+	if cookieNamed(rec, SessionCookie) != nil {
+		t.Error("a refused link minted a session")
+	}
+	if !strings.Contains(logs.String(), "reason="+reasonAlreadyLinked) {
+		t.Errorf("the refusal carries no reason=%s line:\n%s", reasonAlreadyLinked, logs.String())
+	}
+	if strings.Contains(logs.String(), "reason="+reasonLinkFailed) {
+		t.Errorf("a permanent conflict was reported as a failed link:\n%s", logs.String())
+	}
+
+	// Nothing was written, and the first link is untouched.
+	if n := googleCountIdentities(t, pool, second.Subject); n != 0 {
+		t.Errorf("%d identity rows for the second Google account, want 0", n)
+	}
+	if n := googleCountUserIdentities(t, pool, userID); n != 1 {
+		t.Errorf("%d identities on the account, want the one it started with", n)
+	}
+	if row, ok := googleIdentityRow(t, pool, first.Subject); !ok || row.UserID != userID {
+		t.Error("the original link did not survive the refused one")
 	}
 }
 
@@ -821,6 +921,45 @@ func TestGoogleCallbackTreatsCancelQuietly(t *testing.T) {
 	}
 	if cleared := cookieNamed(rec, OAuthCookie); cleared == nil || cleared.MaxAge >= 0 {
 		t.Error("the flow cookie survived a cancelled sign-in")
+	}
+}
+
+// The provider's error parameter is a query parameter, and a query parameter is
+// not something the provider is the only one who can write.
+//
+// The callback is a URL anybody can send a browser to, so ?error= is
+// attacker-chosen text arriving at a Warn line that production actually writes.
+// Only the codes the specifications define are logged as themselves; everything
+// else is the constant "unknown", which is all the line was ever going to be
+// used for.
+func TestAnUnknownProviderErrorIsNotLoggedVerbatim(t *testing.T) {
+	_, h, _, _, logs := googleTestServer(t, nil)
+	_, flow := googleStart(t, h, "")
+
+	junk := strings.Repeat("A", 10*1024)
+	rec := googleGet(t, h, "/api/auth/google/callback?error="+url.QueryEscape(junk)+"&state=whatever", flow)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != loginGoogleError {
+		t.Fatalf("status %d → %q, want 302 → %q", rec.Code, rec.Header().Get("Location"), loginGoogleError)
+	}
+
+	written := logs.String()
+	if strings.Contains(written, junk[:64]) {
+		t.Errorf("the provider's error parameter reached the log, which is now %d bytes", len(written))
+	}
+	if !strings.Contains(written, "reason="+reasonProviderError) {
+		t.Errorf("no %s line in the log:\n%s", reasonProviderError, written)
+	}
+	if !strings.Contains(written, "error=unknown") {
+		t.Errorf("the log does not carry the bounded code:\n%s", written)
+	}
+
+	// A code the specifications do define is still written as itself -- that is
+	// the whole diagnostic value of the line.
+	_, knownH, _, _, knownLogs := googleTestServer(t, nil)
+	_, knownFlow := googleStart(t, knownH, "")
+	googleGet(t, knownH, "/api/auth/google/callback?error=server_error&state=whatever", knownFlow)
+	if !strings.Contains(knownLogs.String(), "error=server_error") {
+		t.Errorf("a code the provider is allowed to send was not logged:\n%s", knownLogs.String())
 	}
 }
 
@@ -1069,6 +1208,34 @@ func TestGoogleRoutesAreBucketedWithARedirect(t *testing.T) {
 	}
 }
 
+// The two browser navigations spend an allowance of their own, not the password
+// form's.
+//
+// They are the only routes on the auth surface a stranger can make somebody's
+// browser visit without that person doing anything -- a link, an <img src>, a
+// crawler working through /login. If those hits came out of the login bucket,
+// an address could be talked out of its own sign-in allowance, and the person
+// behind it would find the password form refusing them for something they never
+// did.
+func TestTheBrowserNavigationsDoNotSpendTheLoginAllowance(t *testing.T) {
+	_, h, _, _, _ := googleTestServer(t, nil)
+
+	// One past the burst, so the bucket in front of /start is provably empty.
+	for range int(burstFor(DefaultAuthRatePerMin)) + 1 {
+		googleGet(t, h, "/api/auth/google/start")
+	}
+	if got := googleGet(t, h, "/api/auth/google/start").Header().Get("Location"); got != loginGoogleError {
+		t.Fatalf("/start → %q past the burst, want the bucketed %q -- the bucket is not empty", got, loginGoogleError)
+	}
+
+	rec := authDo(t, h, http.MethodPost, "/api/auth/login",
+		authLoginBody{authTestEmail(t), authTestPassword}, nil)
+	if rec.Code == http.StatusTooManyRequests {
+		t.Fatalf("login answered 429 from the address a crawler spent the browser bucket from: %s", rec.Body.String())
+	}
+	nodeWant(t, rec, http.StatusUnauthorized, CodeUnauthorized)
+}
+
 // A deployment with no Google client still answers both routes, and answers
 // them the way a browser can use.
 func TestGoogleRoutesAreMountedWhenUnconfigured(t *testing.T) {
@@ -1254,6 +1421,13 @@ func TestGoogleDisplayNameFallsBackToTheLocalPart(t *testing.T) {
 		// Nothing usable anywhere still has to produce a name, because
 		// display_name is NOT NULL and the insert would otherwise fail.
 		{"nothing usable at all", "", "@example.test", "@example.test"},
+		// A name over the limit is cut to it rather than refused. Refusing it
+		// falls through to the local part, which would call somebody by their
+		// email address because their provider profile was long. Multi-byte
+		// runes, so a cut made in bytes would show up as a wrong length here
+		// and as half a character in the name.
+		{"a name longer than the limit", strings.Repeat("é", maxDisplayName+50), "ada@example.test",
+			strings.Repeat("é", maxDisplayName)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := googleDisplayName(c.claim, c.email); got != c.want {

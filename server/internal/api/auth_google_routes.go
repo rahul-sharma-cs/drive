@@ -62,6 +62,7 @@ const (
 const (
 	reasonNotConfigured  = "not_configured"
 	reasonDiscovery      = "discovery_failed"
+	reasonInternal       = "internal"
 	reasonNoCookie       = "no_cookie"
 	reasonBadState       = "bad_state"
 	reasonNoCode         = "no_code"
@@ -72,9 +73,43 @@ const (
 	reasonEmailUnverif   = "email_unverified"
 	reasonBadEmail       = "bad_email"
 	reasonSignupsClosed  = "signups_closed"
+	reasonAlreadyLinked  = "already_linked"
 	reasonLinkFailed     = "link_failed"
 	reasonRateLimited    = "rate_limited"
 )
+
+// knownOAuthErrors is every error code RFC 6749 §4.1.2.1 and OpenID Connect
+// Core §3.1.2.6 define. Anything else the provider sends is logged as
+// "unknown".
+//
+// The parameter arrives on a URL a browser was sent to, so its contents are
+// whatever the last hop chose to put there: without this, a caller who
+// navigates to the callback with ?error=<ten kilobytes> writes ten kilobytes
+// into the log for the cost of one request. The set is closed rather than
+// length-capped because a truncated unknown string is still attacker-chosen
+// text in a log line, and there is nothing to learn from it that the reason
+// constant does not already say.
+var knownOAuthErrors = map[string]bool{
+	"access_denied":             true,
+	"invalid_request":           true,
+	"unauthorized_client":       true,
+	"unsupported_response_type": true,
+	"invalid_scope":             true,
+	"server_error":              true,
+	"temporarily_unavailable":   true,
+	"interaction_required":      true,
+	"login_required":            true,
+	"consent_required":          true,
+}
+
+// oauthErrorCode is the provider's error parameter if it is one of the codes
+// the specifications define, and "unknown" otherwise.
+func oauthErrorCode(raw string) string {
+	if knownOAuthErrors[raw] {
+		return raw
+	}
+	return "unknown"
+}
 
 // oauthFlow is the cookie's payload.
 type oauthFlow struct {
@@ -110,14 +145,17 @@ func (s *Server) authGoogleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The two minters read crypto/rand, and a failure there is this process's
+	// problem and not the provider's -- logging it as a discovery failure would
+	// send whoever reads the line to look at somebody else's server.
 	state, _, err := auth.NewToken()
 	if err != nil {
-		s.googleRefuse(w, r, reasonDiscovery, err)
+		s.googleRefuse(w, r, reasonInternal, err)
 		return
 	}
 	nonce, _, err := auth.NewToken()
 	if err != nil {
-		s.googleRefuse(w, r, reasonDiscovery, err)
+		s.googleRefuse(w, r, reasonInternal, err)
 		return
 	}
 	verifier := oidcauth.NewVerifier()
@@ -162,9 +200,10 @@ func (s *Server) authGoogleCallback(w http.ResponseWriter, r *http.Request) {
 			redirect(w, loginPath)
 			return
 		}
-		// The provider's own code is a constant it chose, not anything from
-		// this flow, so it is safe to log.
-		s.googleRefuse(w, r, reasonProviderError, errors.New(provErr))
+		// Only the codes the specifications define are logged verbatim. The
+		// parameter is on a URL, and a URL is not something the provider is the
+		// only one who can write.
+		s.googleRefuse(w, r, reasonProviderError, errors.New(oauthErrorCode(provErr)))
 		return
 	}
 
@@ -207,6 +246,13 @@ func (s *Server) authGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		s.clearOAuthCookie(w)
 		redirect(w, loginGoogleClosed)
 		return
+	case errors.Is(err, auth.ErrIdentityAlreadyLinked):
+		// A second provider account offered for an account that already has
+		// one. The answer is the generic redirect like every other refusal, but
+		// the log says what it actually was rather than calling a permanent
+		// conflict a race.
+		s.googleRefuse(w, r, reasonAlreadyLinked, nil)
+		return
 	case err != nil:
 		s.googleRefuse(w, r, reasonLinkFailed, err)
 		return
@@ -246,7 +292,17 @@ func reasonFor(err error) string {
 
 // googleDisplayName is the name claim cleaned, falling back to the address's
 // local part when the provider sent none or it cleaned away to nothing.
+//
+// A long name is cut to the limit rather than dropped. cleanDisplayName refuses
+// anything over maxDisplayName, and the fallback for a refusal is the local
+// part -- so without the cut, somebody whose provider profile carries a long
+// name would be called by their email address instead of the first hundred
+// characters of the name they chose. Runes, not bytes: half a character is not
+// a name.
 func googleDisplayName(name, email string) string {
+	if runes := []rune(name); len(runes) > maxDisplayName {
+		name = string(runes[:maxDisplayName])
+	}
 	if cleaned, err := cleanDisplayName(name); err == nil {
 		return cleaned
 	}
@@ -277,15 +333,22 @@ func (s *Server) googleRefuse(w http.ResponseWriter, r *http.Request, reason str
 }
 
 // rateLimitBrowser is RateLimitAuth's sibling for the two browser navigations:
-// the same bucket and the same numbers, refused with a redirect instead of the
-// JSON envelope.
+// the same numbers, its own bucket, refused with a redirect instead of the JSON
+// envelope.
+//
+// Its own bucket because these two are the only routes on the auth surface a
+// stranger can make a browser visit without the browser's owner doing anything:
+// a link, an <img src>, a crawler following /login. Sharing the login bucket
+// would let any of those spend an address's whole sign-in allowance, and the
+// person at that address -- an office, a NAT, a phone network -- would find the
+// password form refusing them for something they never did.
 //
 // The nil guard is not decoration -- bare &Server{} literals exist in this
 // package's tests, and clientip.go carries the same guard for the same reason.
 func (s *Server) rateLimitBrowser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := ClientIP(r)
-		if s.AuthRate != nil && !s.AuthRate.allow(ip) {
+		if s.BrowserRate != nil && !s.BrowserRate.allow(ip) {
 			LoggerFrom(r.Context()).Warn("google sign-in refused",
 				"reason", reasonRateLimited, "client_ip", ip, "path", r.URL.Path)
 			s.clearOAuthCookie(w)

@@ -90,6 +90,11 @@ type Server struct {
 	Argon2 *auth.Limiter
 	// AuthRate is the per-IP token bucket in front of /api/auth.
 	AuthRate *ipLimiter
+	// BrowserRate is the same allowance again, spent separately, in front of
+	// the two Google routes. They are the only auth routes a stranger can make
+	// somebody's browser visit, so they must not be able to empty the bucket
+	// the password form depends on.
+	BrowserRate *ipLimiter
 	// MailRate is the per-IP bucket in front of the two endpoints that mail an
 	// address the caller does not have to own: password-reset and
 	// resend-verification.
@@ -138,9 +143,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, sender mail.S
 
 	return &Server{
 		Cfg: cfg, DB: pool, Log: log, Mail: sender, S3: s3c, Presign: presign,
-		Google:   google,
-		Argon2:   auth.NewLimiter(argon2Limit),
-		AuthRate: newIPLimiter(float64(authRate), burstFor(float64(authRate))),
+		Google:      google,
+		Argon2:      auth.NewLimiter(argon2Limit),
+		AuthRate:    newIPLimiter(float64(authRate), burstFor(float64(authRate))),
+		BrowserRate: newIPLimiter(float64(authRate), burstFor(float64(authRate))),
 		// The mail bucket's burst is the allowance itself, not twice it: this
 		// one is a budget for the hour, and a burst on top of it would simply
 		// be a different, larger number nobody chose.

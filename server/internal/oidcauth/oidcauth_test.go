@@ -216,6 +216,61 @@ func TestExchangeRefusesEveryBadToken(t *testing.T) {
 	}
 }
 
+// The issuer claim is held to the configured issuer exactly, including for the
+// one provider go-oidc lets off the spec.
+//
+// The library checks the issuer itself and then carves out an exception: with
+// the issuer configured as Google's https:// form it also accepts the same host
+// with the scheme stripped, because Google has been known to send that
+// (oidc/verify.go, v3.20.0). A library has to interoperate; this deployment
+// does not. It named one issuer, that string is the identity of the key set an
+// ID token was believed against, and two spellings of a host are two strings.
+//
+// The check is exercised directly rather than through the stub, because the
+// stub cannot serve the host the library's exception is written for -- a flow
+// through it would only ever prove go-oidc's own check again, which is what the
+// bare-issuer row in the table above already does.
+func TestTheIssuerCheckIsExact(t *testing.T) {
+	const issuer = "https://accounts.example.test"
+	p := New(Config{ClientID: testClientID, ClientSecret: testClientSecret, Issuer: issuer})
+
+	if err := p.requireIssuer(issuer); err != nil {
+		t.Errorf("the configured issuer was refused: %v", err)
+	}
+	for _, iss := range []string{
+		// The scheme-less form: the shape of the claim the exception exists
+		// for.
+		"accounts.example.test",
+		"http://accounts.example.test",
+		issuer + "/",
+		"https://accounts.evil.test",
+		"",
+	} {
+		if err := p.requireIssuer(iss); !errors.Is(err, ErrVerify) {
+			t.Errorf("requireIssuer(%q) = %v, want one wrapping ErrVerify", iss, err)
+		}
+	}
+
+	// And it is consulted on the exchange path, not merely defined. Discovery
+	// is cached by the time the code is exchanged, so moving the configured
+	// issuer afterwards leaves the verifier checking against the string the
+	// discovery document published -- which the token still carries. Anything
+	// that refuses it now is this check.
+	stub, live := newStubProvider(t)
+	stub.SetIdentity(oidcstub.Identity{
+		Subject:       "subject-0003",
+		Email:         "person@example.test",
+		EmailVerified: true,
+	})
+	verifier := oauth2.GenerateVerifier()
+	code, _ := authorize(t, live, "the-state", "the-nonce", verifier)
+
+	live.cfg.Issuer = strings.TrimPrefix(live.cfg.Issuer, "http://")
+	if _, err := live.Exchange(context.Background(), code, verifier, "the-nonce"); !errors.Is(err, ErrVerify) {
+		t.Errorf("Exchange accepted a token whose issuer is not the configured one: %v", err)
+	}
+}
+
 // PKCE: the code is worthless without the verifier that started the flow.
 func TestExchangeRefusesAWrongPKCEVerifier(t *testing.T) {
 	_, p := newStubProvider(t)

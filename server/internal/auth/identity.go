@@ -39,6 +39,12 @@ var (
 	// the second attempt, so this is not one -- it is a state the code does not
 	// model, and the caller refuses rather than guessing.
 	ErrIdentityRace = errors.New("auth: could not resolve the identity after a retry")
+	// ErrIdentityAlreadyLinked means the account already holds an identity from
+	// this provider under a different subject. One Drive account links one
+	// account per provider, so this is a permanent refusal and not a race: no
+	// number of retries makes the unique index on (user_id, provider) admit a
+	// second row.
+	ErrIdentityAlreadyLinked = errors.New("auth: that account is already linked to a different account at this provider")
 	// ErrIdentityUnverified means an account reached through an identity has no
 	// email_verified_at. Every path that creates or links one sets it, so this
 	// is an invariant violation and not a user-visible state.
@@ -60,8 +66,9 @@ var (
 //  2. by the address, when the subject is unknown. The provider has just proven
 //     the same thing Drive's own verification mail proves, so the identity is
 //     linked to the existing account and a never-clicked verification is
-//     stamped. The password hash is untouched: a linked account still signs in
-//     with its password.
+//     stamped. A verified account keeps its password and still signs in with
+//     it; an account this link is *activating* loses the one it was carrying,
+//     for the reason the UPDATE documents.
 //  3. otherwise a new account, its root folder and the identity, in one
 //     transaction -- unless signups are closed, which is a refusal and not a
 //     back door.
@@ -147,17 +154,46 @@ func signInAttempt(ctx context.Context, pool *pgxpool.Pool, provider, subject, e
 			return nil, false, false, err
 		}
 		if !linked {
-			// Either another caller linked this subject first, or this account
-			// already has an identity from this provider under a different
-			// subject. The re-run resolves the first; the second finds nothing
-			// and ends as ErrIdentityRace, which is a refusal -- linking a
-			// second provider account to one Drive account is not something the
-			// account screen can explain.
+			// Two different conflicts wear the same zero-rows answer, and only
+			// one of them is a race. Another caller linking this subject first
+			// is resolved by the re-run; this account already holding a
+			// different subject from this provider is not resolved by anything,
+			// and reporting it as a race would spend a second transaction to
+			// arrive at the same refusal under a log reason that names the
+			// wrong cause.
+			var held string
+			lookupErr := tx.QueryRow(ctx,
+				`SELECT subject FROM user_identities WHERE user_id = $1 AND provider = $2`,
+				existing.ID, provider).Scan(&held)
+			if lookupErr != nil && !errors.Is(lookupErr, pgx.ErrNoRows) {
+				return nil, false, false, fmt.Errorf("auth: looking up the account's %s identity: %w", provider, lookupErr)
+			}
+			if lookupErr == nil && held != subject {
+				return nil, false, false, ErrIdentityAlreadyLinked
+			}
 			return nil, false, true, nil
 		}
-		if _, err := tx.Exec(ctx,
-			`UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1`,
-			existing.ID); err != nil {
+		// The link both activates the account and discards a password nobody
+		// has ever proven.
+		//
+		// On an open-signup deployment anyone can sign up an address they do not
+		// own. That row sits unverified, login refuses it, and the verification
+		// mail goes to the real owner -- who may well press Continue with Google
+		// instead. This UPDATE is the moment that squatted row becomes a live
+		// account, so keeping the hash would hand the squatter a working
+		// password on somebody else's Drive: one they could rotate, and use to
+		// unlink the owner's identity. Password reset has no equivalent hole
+		// because a reset *replaces* the hash rather than activating one.
+		//
+		// A verified account keeps its password: it proved the address itself
+		// before any of this, so the credential is its own. Postgres evaluates
+		// every SET expression against the pre-update row, which is what lets
+		// one statement read email_verified_at and write both columns.
+		if _, err := tx.Exec(ctx, `
+			UPDATE users
+			   SET password_hash = CASE WHEN email_verified_at IS NULL THEN NULL ELSE password_hash END,
+			       email_verified_at = COALESCE(email_verified_at, now())
+			 WHERE id = $1`, existing.ID); err != nil {
 			return nil, false, false, fmt.Errorf("auth: marking %s verified: %w", existing.ID, err)
 		}
 		// Re-read, so the caller gets the stamped row rather than the one from
@@ -217,8 +253,8 @@ func signInAttempt(ctx context.Context, pool *pgxpool.Pool, provider, subject, e
 }
 
 // insertIdentity writes the link and reports whether a row went in. Zero rows
-// is a unique-index conflict on either index, which the caller reads as "run
-// the lookup again".
+// is a unique-index conflict on either index, and which index it was decides
+// what the caller does -- so the caller asks, rather than assuming a race.
 //
 // last_login_at is stamped at insert: this sign-in is a use of the link, and an
 // account screen that showed "never used" straight after signing in with it

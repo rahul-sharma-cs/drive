@@ -179,6 +179,9 @@ func (p *Provider) Exchange(ctx context.Context, code, verifier, nonce string) (
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrVerify, err)
 	}
+	if err := p.requireIssuer(idToken.Issuer); err != nil {
+		return nil, err
+	}
 
 	// Constant time, because this is a secret comparison even though a mismatch
 	// is not exploitable through timing on its own.
@@ -212,6 +215,24 @@ func (p *Provider) Exchange(ctx context.Context, code, verifier, nonce string) (
 	}, nil
 }
 
+// requireIssuer holds the ID token's iss claim to the configured issuer,
+// exactly.
+//
+// go-oidc checks the issuer already, and then carves out one exception: with
+// the issuer configured as Google's https:// form it also accepts the same host
+// with the scheme stripped, because Google has been known to send that
+// (oidc/verify.go, v3.20.0). The library is right to be lenient -- it has to
+// interoperate. Drive does not: the issuer string is the identity of the key
+// set an ID token was believed against, this deployment named exactly one, and
+// two spellings of it are not the same string. So the claim is re-checked here
+// on the caller's own terms, where no provider gets an exception.
+func (p *Provider) requireIssuer(iss string) error {
+	if iss != p.cfg.Issuer {
+		return fmt.Errorf("%w: the ID token's issuer is not the one this deployment was configured with", ErrVerify)
+	}
+	return nil
+}
+
 // discover returns the built provider, building it at most once.
 //
 // singleflight rather than a mutex: a mutex would park every concurrent
@@ -231,11 +252,15 @@ func (p *Provider) discover(ctx context.Context) (*discovered, error) {
 			return d, err
 		}
 
-		ctx := oidc.ClientContext(context.WithoutCancel(ctx), p.client)
-		ctx, cancel := context.WithTimeout(ctx, httpTimeout)
+		// The discovery round trip: detached from whichever request happened to
+		// trigger it, since every coalesced caller is waiting on this one and a
+		// cancelled request must not take the others' answer with it, and
+		// bounded, because nothing else would ever end it.
+		discoverCtx := oidc.ClientContext(context.WithoutCancel(ctx), p.client)
+		discoverCtx, cancel := context.WithTimeout(discoverCtx, httpTimeout)
 		defer cancel()
 
-		provider, err := oidc.NewProvider(ctx, p.cfg.Issuer)
+		provider, err := oidc.NewProvider(discoverCtx, p.cfg.Issuer)
 		if err != nil {
 			p.rememberFailure()
 			return nil, fmt.Errorf("%w: %w", ErrDiscovery, err)
@@ -257,11 +282,15 @@ func (p *Provider) discover(ctx context.Context) (*discovered, error) {
 			// dependency bump can widen it.
 			//
 			// VerifierContext, not Verifier: the verifier holds a remote key
-			// set that refetches the JWKS when it meets an unknown kid, and
-			// this context -- carrying the bounded client, and detached from
-			// the request that happened to trigger discovery -- is the one it
-			// keeps for the life of the process.
-			verifier: provider.VerifierContext(ctx, &oidc.Config{
+			// set that refetches the JWKS whenever it meets an unknown kid, and
+			// the context handed here is the one it keeps for the life of the
+			// process. So it is Background carrying the bounded client, and
+			// explicitly not discoverCtx: that one is cancelled by the defer a
+			// few lines below, and a verifier built on a dead context works
+			// only because go-oidc happens to re-wrap it per verification --
+			// every refetch would otherwise fail on a context this function
+			// cancelled on its way out.
+			verifier: provider.VerifierContext(oidc.ClientContext(context.Background(), p.client), &oidc.Config{
 				ClientID:             p.cfg.ClientID,
 				SupportedSigningAlgs: []string{oidc.RS256},
 			}),
