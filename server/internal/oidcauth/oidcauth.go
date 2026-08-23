@@ -22,6 +22,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -64,6 +65,21 @@ const discoveryFailureTTL = 30 * time.Second
 // ReadHeaderTimeout and no WriteTimeout, on purpose, because uploads take
 // hours.
 const httpTimeout = 10 * time.Second
+
+// maxProviderBody bounds every response this package reads, because the timeout
+// on its own does not: go-oidc reads both the discovery document and the JWKS
+// with an unbounded io.ReadAll, so a provider that is compromised, misbehaving,
+// or reachable only through a broken TLS path can stream at line rate for the
+// whole ten seconds into one allocation. The issuer is operator-configured, so
+// this is depth rather than a reachable attack -- and 1 MiB is two orders of
+// magnitude above any real discovery document or key set.
+const maxProviderBody = 1 << 20
+
+// errBodyTooLarge is what a caller reading past the cap is told. It is not one
+// of the package's exported reasons: it surfaces wrapped in whatever go-oidc
+// makes of a failed read, which the discovery and verification paths already
+// turn into ErrDiscovery and ErrVerify.
+var errBodyTooLarge = errors.New("oidcauth: the provider's response exceeded the size limit")
 
 // Config is what a deployment knows before it has ever talked to the provider.
 type Config struct {
@@ -124,8 +140,63 @@ func New(cfg Config) *Provider {
 	if client == nil {
 		client = &http.Client{Timeout: httpTimeout}
 	}
-	return &Provider{cfg: cfg, client: client, now: time.Now}
+	// Bounded in bytes as well as in time, and bounded here rather than at each
+	// call site so that every request this package makes -- discovery, the JWKS
+	// fetch and its refetches, the token exchange -- is covered by construction,
+	// including the ones made inside go-oidc where there is no body to wrap. An
+	// injected client is copied rather than mutated: it belongs to the caller.
+	bounded := *client
+	bounded.Transport = boundedTransport{base: client.Transport}
+	return &Provider{cfg: cfg, client: &bounded, now: time.Now}
 }
+
+// boundedTransport caps the body of every response it carries.
+type boundedTransport struct{ base http.RoundTripper }
+
+func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	resp, err := base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = &boundedBody{inner: resp.Body, left: maxProviderBody + 1}
+	return resp, nil
+}
+
+// boundedBody fails once the cap is passed rather than truncating there.
+//
+// A plain io.LimitReader would hand go-oidc a short document, which decodes as
+// a JSON syntax error somewhere in the middle of a file that is fine at the
+// source -- or, worse, as a key set that simply does not contain the kid. An
+// error says what happened.
+//
+// left is the cap plus one: a body of exactly maxProviderBody bytes reads to
+// EOF with one byte of headroom to spare, and only a body larger than that
+// consumes it.
+type boundedBody struct {
+	inner io.ReadCloser
+	left  int64
+}
+
+func (b *boundedBody) Read(p []byte) (int, error) {
+	if b.left <= 0 {
+		return 0, errBodyTooLarge
+	}
+	if int64(len(p)) > b.left {
+		p = p[:b.left]
+	}
+	n, err := b.inner.Read(p)
+	b.left -= int64(n)
+	if b.left <= 0 && err == nil {
+		return n, errBodyTooLarge
+	}
+	return n, err
+}
+
+func (b *boundedBody) Close() error { return b.inner.Close() }
 
 // AuthCodeURL is where the browser is sent to start a sign-in.
 //
@@ -215,22 +286,41 @@ func (p *Provider) Exchange(ctx context.Context, code, verifier, nonce string) (
 	}, nil
 }
 
-// requireIssuer holds the ID token's iss claim to the configured issuer,
-// exactly.
+// The two spellings of Google's issuer, as go-oidc spells them
+// (oidc/verify.go, v3.20.0).
+const (
+	issuerGoogle         = "https://accounts.google.com"
+	issuerGoogleNoScheme = "accounts.google.com"
+)
+
+// requireIssuer re-checks the ID token's iss claim against the configured
+// issuer, making the same single exception the library makes and no other.
 //
 // go-oidc checks the issuer already, and then carves out one exception: with
 // the issuer configured as Google's https:// form it also accepts the same host
-// with the scheme stripped, because Google has been known to send that
-// (oidc/verify.go, v3.20.0). The library is right to be lenient -- it has to
-// interoperate. Drive does not: the issuer string is the identity of the key
-// set an ID token was believed against, this deployment named exactly one, and
-// two spellings of it are not the same string. So the claim is re-checked here
-// on the caller's own terms, where no provider gets an exception.
+// with the scheme stripped, because Google has been known to send that. The
+// re-check exists so the claim is held on this package's own terms rather than
+// on a dependency's, but it deliberately agrees with the library on that one
+// case. A stricter re-check would not be safer, it would only be brittler: the
+// spelling of the claim is Google's to change, no deployment can configure
+// around it, and disagreeing would turn a provider-side quirk into every
+// Google sign-in on the deployment failing until somebody shipped code.
+//
+// The exception widens nothing. By the time this runs the token's signature has
+// been verified against the key set fetched from the *configured* issuer's
+// discovery document, and aud has been required to carry this deployment's
+// client id -- so the token is one Google signed for this client. The exception
+// can only fire on a deployment that configured Google's issuer, i.e. that had
+// already decided to trust that key set; accepting a second spelling of the
+// string it named adds no provider to that set. Every other issuer stays exact.
 func (p *Provider) requireIssuer(iss string) error {
-	if iss != p.cfg.Issuer {
-		return fmt.Errorf("%w: the ID token's issuer is not the one this deployment was configured with", ErrVerify)
+	if iss == p.cfg.Issuer {
+		return nil
 	}
-	return nil
+	if p.cfg.Issuer == issuerGoogle && iss == issuerGoogleNoScheme {
+		return nil
+	}
+	return fmt.Errorf("%w: the ID token's issuer is not the one this deployment was configured with", ErrVerify)
 }
 
 // discover returns the built provider, building it at most once.

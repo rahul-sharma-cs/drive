@@ -9,6 +9,7 @@ package oidcauth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -216,39 +217,61 @@ func TestExchangeRefusesEveryBadToken(t *testing.T) {
 	}
 }
 
-// The issuer claim is held to the configured issuer exactly, including for the
-// one provider go-oidc lets off the spec.
+// The issuer claim is held to the configured issuer exactly, apart from the one
+// exception go-oidc makes for Google -- which this check makes too, so that the
+// two agree.
 //
-// The library checks the issuer itself and then carves out an exception: with
+// The library checks the issuer itself and then carves out that exception: with
 // the issuer configured as Google's https:// form it also accepts the same host
 // with the scheme stripped, because Google has been known to send that
-// (oidc/verify.go, v3.20.0). A library has to interoperate; this deployment
-// does not. It named one issuer, that string is the identity of the key set an
-// ID token was believed against, and two spellings of a host are two strings.
+// (oidc/verify.go, v3.20.0). Re-checking here more strictly than that would not
+// hold anything the library does not already hold -- the token's signature was
+// verified against the configured issuer's key set and its aud against this
+// client -- it would only mean that the day Google sends the scheme-less form,
+// every sign-in on the deployment fails with nothing to configure. Every other
+// issuer stays exact, including a scheme-stripped one.
 //
 // The check is exercised directly rather than through the stub, because the
-// stub cannot serve the host the library's exception is written for -- a flow
-// through it would only ever prove go-oidc's own check again, which is what the
+// stub cannot serve the host the exception is written for -- a flow through it
+// would only ever prove go-oidc's own check again, which is what the
 // bare-issuer row in the table above already does.
-func TestTheIssuerCheckIsExact(t *testing.T) {
+func TestTheIssuerCheckIsExactApartFromGoogle(t *testing.T) {
 	const issuer = "https://accounts.example.test"
-	p := New(Config{ClientID: testClientID, ClientSecret: testClientSecret, Issuer: issuer})
+	const google = "https://accounts.google.com"
 
-	if err := p.requireIssuer(issuer); err != nil {
-		t.Errorf("the configured issuer was refused: %v", err)
-	}
-	for _, iss := range []string{
-		// The scheme-less form: the shape of the claim the exception exists
-		// for.
-		"accounts.example.test",
-		"http://accounts.example.test",
-		issuer + "/",
-		"https://accounts.evil.test",
-		"",
+	for _, c := range []struct {
+		name       string
+		configured string
+		iss        string
+		ok         bool
+	}{
+		{"the configured issuer itself", issuer, issuer, true},
+		// The scheme-less form of an issuer that is not Google: refused, because
+		// the exception is Google's alone in the library and here.
+		{"a scheme-stripped issuer that is not Google", issuer, "accounts.example.test", false},
+		{"the wrong scheme", issuer, "http://accounts.example.test", false},
+		{"a trailing slash", issuer, issuer + "/", false},
+		{"another provider entirely", issuer, "https://accounts.evil.test", false},
+		{"no issuer at all", issuer, "", false},
+		{"Google, spelled the way the spec wants", google, google, true},
+		// The one exception: the spelling Google has been observed to send.
+		{"Google, scheme-stripped", google, "accounts.google.com", true},
+		// And the exception is an equality, not a prefix match: a host that
+		// merely starts with Google's, which is what a lookalike registration
+		// buys an attacker, gets nothing from it.
+		{"a host that only starts like Google's", google, "accounts.google.com.example.test", false},
+		{"the scheme-less form with a trailing slash", google, "accounts.google.com/", false},
 	} {
-		if err := p.requireIssuer(iss); !errors.Is(err, ErrVerify) {
-			t.Errorf("requireIssuer(%q) = %v, want one wrapping ErrVerify", iss, err)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			p := New(Config{ClientID: testClientID, ClientSecret: testClientSecret, Issuer: c.configured})
+			err := p.requireIssuer(c.iss)
+			if c.ok && err != nil {
+				t.Errorf("requireIssuer(%q) with %q configured = %v, want nil", c.iss, c.configured, err)
+			}
+			if !c.ok && !errors.Is(err, ErrVerify) {
+				t.Errorf("requireIssuer(%q) with %q configured = %v, want one wrapping ErrVerify", c.iss, c.configured, err)
+			}
+		})
 	}
 
 	// And it is consulted on the exchange path, not merely defined. Discovery
@@ -413,6 +436,77 @@ func TestConcurrentFirstSignInsShareOneDiscovery(t *testing.T) {
 	}
 	if got := discoveries.Load(); got != 1 {
 		t.Errorf("%d discovery requests for %d concurrent sign-ins, want 1", got, callers)
+	}
+}
+
+// The provider's responses are bounded in bytes, not only in time.
+//
+// go-oidc reads the discovery document and the JWKS with an unbounded
+// io.ReadAll, and the ten-second timeout is no bound at all on a provider that
+// is compromised, misbehaving, or reachable only through a broken TLS path: it
+// can stream at line rate for the whole window into one allocation.
+//
+// The padded document is the stub's own, valid, with one enormous extra field,
+// and the same server serves it unpadded to the second provider. So the only
+// difference between the refusal and the success is the size, and the cap is
+// the only thing that can be doing the refusing -- remove the wrapper and the
+// first half passes.
+func TestAnOversizedProviderResponseIsRefused(t *testing.T) {
+	stub, err := oidcstub.New(testClientID, testClientSecret)
+	if err != nil {
+		t.Fatalf("building the stub: %v", err)
+	}
+
+	var pad atomic.Bool
+	inner := stub.Handler()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != oidcstub.DiscoveryPath || !pad.Load() {
+			inner.ServeHTTP(w, r)
+			return
+		}
+		// The real document, decoded and re-encoded with one huge field, so
+		// what comes out is still valid JSON describing this issuer.
+		rec := httptest.NewRecorder()
+		inner.ServeHTTP(rec, r)
+		var doc map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+			t.Errorf("the stub's own discovery document did not decode: %v", err)
+			return
+		}
+		doc["padding"] = strings.Repeat("a", maxProviderBody)
+		out, err := json.Marshal(doc)
+		if err != nil {
+			t.Errorf("re-encoding the discovery document: %v", err)
+			return
+		}
+		if len(out) <= maxProviderBody {
+			t.Errorf("the padded document is %d bytes, which is inside the %d-byte cap", len(out), maxProviderBody)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(out)
+	}))
+	defer ts.Close()
+	stub.SetBaseURL(ts.URL)
+
+	cfg := Config{ClientID: testClientID, ClientSecret: testClientSecret, Issuer: ts.URL, RedirectURL: testRedirectURL}
+
+	pad.Store(true)
+	_, err = New(cfg).AuthCodeURL(context.Background(), "s", "n", "v")
+	if !errors.Is(err, ErrDiscovery) {
+		t.Fatalf("an oversized discovery document: error = %v, want one wrapping ErrDiscovery", err)
+	}
+	// Named, not merely wrapped: ErrDiscovery is also what an unreachable
+	// provider and a malformed document produce, and this has to be the cap.
+	if !strings.Contains(err.Error(), errBodyTooLarge.Error()) {
+		t.Errorf("error = %v, want it to carry %q", err, errBodyTooLarge)
+	}
+
+	// The same document without the padding, on a fresh provider because the
+	// failure above is remembered for half a minute.
+	pad.Store(false)
+	if _, err := New(cfg).AuthCodeURL(context.Background(), "s", "n", "v"); err != nil {
+		t.Fatalf("a normal-sized discovery document was refused: %v", err)
 	}
 }
 
