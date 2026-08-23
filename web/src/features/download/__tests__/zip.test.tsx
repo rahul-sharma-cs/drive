@@ -10,7 +10,7 @@ import { renderApp, stubFetch, type StubRoute } from '../../../test/render'
 import { CurrentFolderProvider } from '../../../app/CurrentFolder'
 import { meKey } from '../../auth/session'
 import { FolderPage } from '../../browser/FolderPage'
-import { collectSubtree, liveDeps, MEMORY_LIMIT, type ZipDeps } from '../zip'
+import { archiveBytes, collectSubtree, liveDeps, MEMORY_LIMIT, writeArchive, type ZipDeps, type ZipSink } from '../zip'
 import { resetZipDownload, startZipDownload } from '../useZipDownload'
 import { ZipDock } from '../ZipDock'
 
@@ -77,18 +77,24 @@ function deps(pages: Record<string, Page<DriveNode>>, over: Partial<ZipDeps> = {
   }
 }
 
-/** A save-file handle whose writer is a spy, so the abort is observable. */
+/**
+ * A save-file handle whose writer and `remove` are spies, so both halves of a
+ * failed archive — the bytes thrown away, the named file deleted — are
+ * observable.
+ */
 function stubPicker() {
   const writer = {
     write: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     abort: vi.fn(async () => {}),
   }
-  const picker = vi.fn(async () => ({
+  const handle = {
     createWritable: async () => ({ getWriter: () => writer }),
-  }))
+    remove: vi.fn(async () => {}),
+  }
+  const picker = vi.fn(async () => handle)
   window.showSaveFilePicker = picker as unknown as typeof window.showSaveFilePicker
-  return { writer, picker }
+  return { writer, handle, picker }
 }
 
 /** Starts an archive and lets everything it kicked off settle, inside one `act`. */
@@ -275,8 +281,8 @@ describe('the size guard', () => {
 /* ------------------------------------------------------- a refused file */
 
 describe('a file the store will not hand over', () => {
-  it('aborts the writer, names the file, and says the archive was not saved', async () => {
-    const { writer } = stubPicker()
+  it('aborts the writer, deletes the file, and names both files in the toast', async () => {
+    const { writer, handle } = stubPicker()
 
     startZipDownload([node({ id: 'f1', name: 'Reports' })], {
       deps: deps(
@@ -287,11 +293,17 @@ describe('a file the store will not hand over', () => {
     await waitFor(() => expect(toasts).toHaveLength(1))
 
     expect(toasts[0].message).toContain('bad.bin')
-    expect(toasts[0].message).toContain('the archive was not saved')
+    // The archive is named too: the browser created that file the moment the
+    // dialog was answered, and on a browser without `remove()` an empty one
+    // survives the abort. Whoever reads this has to know which file is the dud.
+    expect(toasts[0].message).toContain('“Reports.zip” was not saved')
     // The half-written file is thrown away rather than closed: a named file on
     // disk holding most of an archive is worse than no file at all.
     expect(writer.abort).toHaveBeenCalledTimes(1)
     expect(writer.close).not.toHaveBeenCalled()
+    // Aborting the writer discards the bytes, not the file — without this the
+    // failure leaves a 0-byte Reports.zip sitting where the real one would be.
+    expect(handle.remove).toHaveBeenCalledTimes(1)
   })
 
   it('closes the writer when every file comes back', async () => {
@@ -328,6 +340,114 @@ describe('the fetch that reads the store', () => {
     // value is `undefined`, and `{ signal, credentials: undefined }` is still a
     // second init key someone added.
     expect(Object.keys(fetchMock.mock.calls[0][1] ?? {})).toEqual(['signal'])
+  })
+})
+
+/* ----------------------------------------------------------- the progress */
+
+describe('progress reporting', () => {
+  /** A stream that arrives in `count` chunks, the way a real body does. */
+  const chunked = (count: number, size: number) =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (let i = 0; i < count; i++) controller.enqueue(new Uint8Array(size))
+          controller.close()
+        },
+      }),
+    )
+
+  it('coalesces a stream of chunks into a few reports, and ends on the exact total', async () => {
+    // Date is frozen rather than mocked away: it isolates the byte rule from
+    // the time rule, so the count below is the coalescing and not the speed of
+    // the machine running the test.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const entries = [{ path: 'big.bin', id: 'a1', size: 100 * 1024 }]
+      let bytes = 0
+      const sink: ZipSink = {
+        write: async (chunk) => {
+          bytes += chunk.byteLength
+        },
+        close: async () => {},
+        abort: async () => {},
+      }
+      const reports: number[] = []
+
+      await writeArchive(
+        entries,
+        sink,
+        new AbortController().signal,
+        deps({}, { fetchBytes: async () => chunked(100, 1024) }),
+        ({ written }) => reports.push(written),
+      )
+
+      // 100 chunks in, a handful of reports out — every one of them is a React
+      // render of the dock for a number that has not visibly moved.
+      expect(reports.length).toBeLessThan(10)
+      // And the last one is the truth, not a coalesced number a chunk behind:
+      // the dock's final frame has to read as finished.
+      expect(reports.at(-1)).toBe(bytes)
+      expect(reports.at(-1)).toBe(archiveBytes(entries))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+/* -------------------------------------------------------- the save dialog */
+
+describe('the save dialog', () => {
+  it('does not hold the walk up while it is open', async () => {
+    // A person choosing a folder takes seconds; the listing needs nothing from
+    // them. Waiting for the handle first spends that time twice.
+    window.showSaveFilePicker = vi.fn(
+      () => new Promise<FileSystemFileHandle>(() => {}),
+    ) as unknown as typeof window.showSaveFilePicker
+    const listChildren = vi.fn(async () => page([file('a1', 'a.txt', 5)]))
+
+    startZipDownload([node({ id: 'f1', name: 'Reports' })], { deps: deps({}, { listChildren }) })
+    await settle()
+
+    expect(listChildren).toHaveBeenCalledWith('f1', undefined)
+  })
+
+  it('says nothing when it is dismissed, and stops the walk it started', async () => {
+    window.showSaveFilePicker = vi.fn(async () => {
+      throw new DOMException('The user aborted a request.', 'AbortError')
+    }) as unknown as typeof window.showSaveFilePicker
+    // A chain of folders, deep enough that a walk nobody stopped would still be
+    // asking for pages long after the dialog was dismissed.
+    const listChildren = vi.fn(async (id: string) => {
+      const depth = Number(id.slice(1))
+      return depth === 8 ? page([]) : page([node({ id: `f${depth + 1}`, name: 'Sub' })])
+    })
+    renderApp(<ZipDock />)
+
+    await start([node({ id: 'f1', name: 'Reports' })], deps({}, { listChildren }))
+
+    // Dismissing a dialog is an answer, not an error to report back.
+    expect(toasts).toEqual([])
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    // The walk was already running when the dialog came back empty-handed, and
+    // the dismissal stopped it: it got a folder or two in, not all eight.
+    expect(listChildren).toHaveBeenCalledWith('f1', undefined)
+    expect(listChildren.mock.calls.length).toBeLessThan(4)
+  })
+
+  it('says one plain sentence when the browser refuses to open it', async () => {
+    // What the browser says here is "Failed to execute 'showSaveFilePicker' on
+    // 'Window': …" — a console string, and thrown synchronously at that.
+    window.showSaveFilePicker = vi.fn(() => {
+      throw new TypeError("Failed to execute 'showSaveFilePicker' on 'Window'")
+    }) as unknown as typeof window.showSaveFilePicker
+
+    startZipDownload([node({ id: 'f1', name: 'Reports' })], {
+      deps: deps({ 'f1|': page([file('a1', 'a.txt', 5)]) }),
+    })
+    await waitFor(() => expect(toasts).toHaveLength(1))
+
+    expect(toasts[0].message).toBe('Couldn’t open the save dialog — try again from a click')
   })
 })
 
@@ -421,10 +541,17 @@ describe('what the band offers', () => {
   })
 
   it('opens the save dialog inside the click, before it asks the API anything', async () => {
-    const picker = vi.fn(() => new Promise<FileSystemFileHandle>(() => {}))
+    let callsWhenOpened = -1
+    const picker = vi.fn(() => {
+      callsWhenOpened = calls.length
+      return new Promise<FileSystemFileHandle>(() => {})
+    })
     window.showSaveFilePicker = picker as unknown as typeof window.showSaveFilePicker
 
-    const { calls } = renderFolder(twoFilesAndAFolder)
+    const { calls } = renderFolder([
+      ...twoFilesAndAFolder,
+      { path: /^\/api\/nodes\/f1\/children/, body: page([]) },
+    ])
     await screen.findByText('Reports')
     await select('Reports')
 
@@ -434,8 +561,13 @@ describe('what the band offers', () => {
     fireEvent.click(within(bar()).getByRole('button', { name: 'Download' }))
 
     // Transient user activation is gone by the first await, and the paginated
-    // walk is all awaits — so the picker has to be spent here or not at all.
+    // walk is all awaits — so the picker has to be spent here or not at all,
+    // with nothing awaited in front of it.
     expect(picker).toHaveBeenCalledTimes(1)
-    expect(calls.length).toBe(before)
+    expect(callsWhenOpened).toBe(before)
+    // And the walk goes out in the same click rather than after the dialog is
+    // answered: the two overlap, so the listing is done by the time a folder
+    // has been chosen.
+    expect(calls.slice(before).map((call) => call.url)).toEqual(['/api/nodes/f1/children'])
   })
 })

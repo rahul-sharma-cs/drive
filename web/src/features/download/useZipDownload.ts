@@ -9,6 +9,7 @@ import {
   canStreamToDisk,
   collectSubtree,
   diskSink,
+  FileFetchError,
   isAbort,
   liveDeps,
   MEMORY_LIMIT,
@@ -123,18 +124,29 @@ export function startZipDownload(
 
   controller = new AbortController()
   publish({ name, current: '', written: 0, total: 0 })
-  // `run` awaits `handle` before it yields, so a cancelled save dialog is never
-  // an unhandled rejection.
+  // `run` claims the rejection of both the dialog and the walk before it yields,
+  // so neither a dismissed dialog nor a cancelled walk is ever unhandled.
   void run(roots, name, handle, controller, deps)
 }
 
-/** The save dialog, opened inside the click. */
+/**
+ * The save dialog, opened inside the click.
+ *
+ * A browser that refuses the call refuses it *synchronously* — an exception,
+ * not a rejected promise — and an exception here would escape the click handler
+ * having already put the dock on screen with nothing behind it. One shape comes
+ * out of this function: a promise, or nothing at all because there is no picker.
+ */
 function openSaveDialog(name: string): Promise<FileSystemFileHandle> | undefined {
   if (!canStreamToDisk()) return undefined
-  return window.showSaveFilePicker?.({
-    suggestedName: name,
-    types: [{ description: 'Zip archive', accept: { 'application/zip': ['.zip'] } }],
-  })
+  try {
+    return window.showSaveFilePicker?.({
+      suggestedName: name,
+      types: [{ description: 'Zip archive', accept: { 'application/zip': ['.zip'] } }],
+    })
+  } catch (err) {
+    return Promise.reject(err)
+  }
 }
 
 async function run(
@@ -144,9 +156,20 @@ async function run(
   ac: AbortController,
   deps: ZipDeps,
 ): Promise<void> {
+  // Started in the same tick as the dialog rather than after it: the dialog is
+  // a person choosing a folder — seconds, sometimes a minute — and the listing
+  // needs nothing from their answer. Both run under `ac`, so a dismissed dialog
+  // stops the walk it overlapped with.
+  const walking = collectSubtree(roots, ac.signal, deps)
+  // Claimed now rather than only at the `await` below, which sits behind the
+  // dialog: a walk that fails or is cancelled while the dialog is still open
+  // would otherwise be an unhandled rejection. The promise stays rejected, so
+  // the `await` still sees it.
+  void walking.catch(() => {})
+
   try {
-    const file = handle === undefined ? null : await handle
-    const entries = await collectSubtree(roots, ac.signal, deps)
+    const file = handle === undefined ? null : await saveTarget(handle, ac)
+    const entries = await walking
     const total = archiveBytes(entries)
 
     // No File System Access: the whole archive would have to be assembled in
@@ -164,11 +187,46 @@ async function run(
     )
   } catch (err) {
     // A cancel is an answer, not a failure — the person already knows.
-    if (!isAbort(err)) toast.error((err as Error)?.message ?? 'The archive could not be built')
+    if (!isAbort(err)) toast.error(failureMessage(err, name))
   } finally {
     controller = null
     publish(null)
   }
+}
+
+/**
+ * The file the archive is written to, or an abort.
+ *
+ * Dismissing the dialog is an answer: it cancels the walk that has been running
+ * behind it and says nothing else. Anything else is the browser declining to
+ * open the dialog at all, and what it says about that ("Failed to execute
+ * 'showSaveFilePicker' on 'Window': Must be handling a user gesture…") is a
+ * console string, not a sentence to hand to whoever clicked Download.
+ */
+async function saveTarget(
+  handle: Promise<FileSystemFileHandle>,
+  ac: AbortController,
+): Promise<FileSystemFileHandle> {
+  try {
+    return await handle
+  } catch (err) {
+    ac.abort(err)
+    if (isAbort(err)) throw err
+    throw new Error('Couldn’t open the save dialog — try again from a click')
+  }
+}
+
+/**
+ * A failure names the archive as well as the file that caused it: on the disk
+ * path the browser created that file the moment the dialog was answered, and
+ * where it cannot be deleted afterwards an empty one is left behind. The person
+ * has to be able to tell which file on their disk is the dud.
+ */
+function failureMessage(err: unknown, name: string): string {
+  if (err instanceof FileFetchError) {
+    return `Couldn’t download “${err.fileName}” — “${name}” was not saved`
+  }
+  return (err as Error)?.message ?? 'The archive could not be built'
 }
 
 /**

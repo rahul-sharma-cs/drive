@@ -213,7 +213,17 @@ export async function diskSink(handle: FileSystemFileHandle): Promise<ZipSink> {
   return {
     write: (chunk) => writer.write(chunk),
     close: () => writer.close(),
-    abort: (reason) => writer.abort(reason),
+    abort: async (reason) => {
+      await writer.abort(reason)
+      // Aborting the writer throws away the bytes but not the file: the picker
+      // created it the moment it was named, so a failed archive otherwise
+      // leaves an empty file wearing the archive's name, which is precisely the
+      // thing the abort exists to prevent. `remove()` is newer than the rest of
+      // File System Access and missing from older Chromium, so it is
+      // feature-detected — and its own failure changes nothing, because the
+      // real error is already on its way to the toast.
+      await handle.remove?.().catch(() => {})
+    },
   }
 }
 
@@ -253,6 +263,18 @@ export interface ZipProgress {
 }
 
 /**
+ * How often progress is worth reporting.
+ *
+ * The stream hands over a chunk every few kilobytes, and a report is a React
+ * render of the whole dock — tens of thousands of them across a large archive,
+ * nearly all for a byte count that has not visibly moved. One report per 64 KB
+ * or 100 ms keeps the bar smooth at any speed, and the file being fetched and
+ * the last byte are always reported outright.
+ */
+const PROGRESS_BYTES = 64 * 1024
+const PROGRESS_MS = 100
+
+/**
  * Builds the archive and pumps it into `sink`, reporting as it goes.
  *
  * The pump is written out rather than left to `pipeTo` for two reasons: this is
@@ -269,11 +291,22 @@ export async function writeArchive(
 ): Promise<void> {
   let written = 0
   let current = ''
+  let reportedBytes = 0
+  let reportedAt = Date.now()
+
+  /** `always` for the two moments the dock must show exactly: a new file, and the last byte. */
+  const report = (always = false): void => {
+    const now = Date.now()
+    if (!always && written - reportedBytes < PROGRESS_BYTES && now - reportedAt < PROGRESS_MS) return
+    reportedBytes = written
+    reportedAt = now
+    onProgress({ written, current })
+  }
 
   const body = downloadZip(
     zipInputs(entries, signal, deps, (path) => {
       current = path
-      onProgress({ written, current })
+      report(true)
     }),
   ).body
   if (body === null) throw new Error('the archive stream has no body')
@@ -286,8 +319,9 @@ export async function writeArchive(
       if (done) break
       await sink.write(value)
       written += value.byteLength
-      onProgress({ written, current })
+      report()
     }
+    report(true)
     await sink.close()
   } catch (err) {
     await sink.abort(err).catch(() => {})
@@ -355,5 +389,10 @@ declare global {
       suggestedName?: string
       types?: { description?: string; accept: Record<string, string[]> }[]
     }) => Promise<FileSystemFileHandle>
+  }
+
+  interface FileSystemFileHandle {
+    /** Deletes the file itself. Newer than the rest of File System Access, hence optional. */
+    remove?: () => Promise<void>
   }
 }
