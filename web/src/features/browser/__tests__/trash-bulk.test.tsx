@@ -43,6 +43,32 @@ const node = (over: Partial<DriveNode>): DriveNode => ({
 
 const two = [node({ id: 't1', name: 'old.txt' }), node({ id: 't2', name: 'older.txt' })]
 
+const three = [...two, node({ id: 't3', name: 'oldest.txt' })]
+
+const ok = (id: string) => ({ id, status: 'ok' })
+const pending = (id: string) => ({ id, status: 'pending' })
+
+/**
+ * A `/api/trash/restore` that answers differently on each round.
+ *
+ * The body is read at call time, so a getter is what lets the second call see
+ * something different: the loop runs inside the mutation and a test cannot step
+ * into the middle of it. It counts requests rather than its own reads, which
+ * the harness makes more than one of per call.
+ */
+function restoreRounds(answers: Record<number, unknown>, seen: () => number): StubRoute {
+  return {
+    method: 'POST',
+    path: '/api/trash/restore',
+    get body() {
+      // A round past the last one scripted answers everything at once, so a
+      // client that would not stop on its own finishes loudly wrong instead of
+      // spinning the whole suite to a halt.
+      return answers[seen()] ?? { results: three.map((n) => ok(n.id)), remaining: false }
+    },
+  }
+}
+
 const selectAll = () => userEvent.click(screen.getByRole('checkbox', { name: /^Select all/ }))
 
 afterEach(() => {
@@ -84,7 +110,7 @@ describe('the trash in bulk', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['search'] })
   })
 
-  it('deletes the whole selection for good on the Delete key', async () => {
+  it('does not destroy the selection on the Delete key', async () => {
     const calls = stubFetch([
       { path: '/api/trash', body: { items: two, next_cursor: null } },
       {
@@ -97,10 +123,22 @@ describe('the trash in bulk', () => {
 
     await screen.findByText('old.txt')
     await selectAll()
-    // In a folder this key trashes. Here there is nowhere further down to go,
-    // so it has to reach the purge route rather than quietly doing nothing.
+    // In a folder this key means "move to the trash", and the trash is where
+    // it can be undone from. On this screen the same key would mean "destroy
+    // it", with no dialog in front of it and nothing behind it — a keystroke
+    // away from a file that is not coming back. So it means nothing here, the
+    // way Enter does.
     fireEvent.keyDown(screen.getByTestId('file-list'), { key: 'Delete' })
+    fireEvent.keyDown(screen.getByTestId('file-list'), { key: 'Backspace' })
 
+    // Given a moment to happen, so that the assertion is about the request not
+    // being sent rather than about it not having been sent yet.
+    await waitFor(() => expect(screen.getByText('2 selected')).toBeTruthy())
+    expect(calls.filter((c) => c.url === '/api/trash/purge')).toHaveLength(0)
+
+    // And the deliberate way to do it still works, so what is under test is the
+    // key and not a screen that lost its purge.
+    await userEvent.click(screen.getByRole('button', { name: 'Delete forever' }))
     await waitFor(() => {
       const posts = calls.filter((c) => c.url === '/api/trash/purge')
       expect(posts).toHaveLength(1)
@@ -143,6 +181,70 @@ describe('the trash in bulk', () => {
       expect(deletes).toHaveLength(2)
     })
     expect(errorToast).not.toHaveBeenCalled()
+  })
+
+  it('asks the second round for the ids the first never reached, and for nothing else', async () => {
+    // The route works under a wall clock. It got through one root, ran out of
+    // budget, and handed the other two back untouched.
+    let calls: StubbedCall[] = []
+    const rounds = () => calls.filter((c) => c.url === '/api/trash/restore').length
+    const restoring = restoreRounds(
+      {
+        1: { results: [ok('t1'), pending('t2'), pending('t3')], remaining: true },
+        2: { results: [ok('t2'), ok('t3')], remaining: false },
+      },
+      rounds,
+    )
+    calls = stubFetch([{ path: '/api/trash', body: { items: three, next_cursor: null } }, restoring])
+    renderApp(<TrashPage />)
+
+    await screen.findByText('oldest.txt')
+    await selectAll()
+    await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
+
+    await waitFor(() => expect(rounds()).toBe(2))
+    const posts = calls.filter((c) => c.url === '/api/trash/restore')
+    expect(posts[0].body).toEqual({ ids: ['t1', 't2', 't3'] })
+    // Exactly the two that came back pending, in the order they were handed
+    // over. Sending the whole selection again would restore the first one a
+    // second time — by then it is out of the trash, so the answer is
+    // `not_found`, which this client reads as "already done" and nobody ever
+    // hears that a row came back twice.
+    expect(posts[1].body).toEqual({ ids: ['t2', 't3'] })
+
+    // Nothing was left pending after the second round, so there is no third.
+    await waitFor(() => expect(screen.queryByText('Restore')).toBeTruthy())
+    expect(rounds()).toBe(2)
+    expect(errorToast).not.toHaveBeenCalled()
+  })
+
+  it('gives up on a round that got through none of them, rather than asking forever', async () => {
+    // The server gets to at least one root per call, so a round that resolved
+    // nothing resolves nothing on the next pass either. `remaining: true` is
+    // still what it says — a client that trusted it would spin against a server
+    // in this state for as long as the tab is open.
+    let calls: StubbedCall[] = []
+    const rounds = () => calls.filter((c) => c.url === '/api/trash/restore').length
+    const restoring = restoreRounds(
+      {
+        1: { results: [ok('t1'), pending('t2'), pending('t3')], remaining: true },
+        2: { results: [pending('t2'), pending('t3')], remaining: true },
+      },
+      rounds,
+    )
+    calls = stubFetch([{ path: '/api/trash', body: { items: three, next_cursor: null } }, restoring])
+    renderApp(<TrashPage />)
+
+    await screen.findByText('oldest.txt')
+    await selectAll()
+    await userEvent.click(screen.getByRole('button', { name: 'Restore' }))
+
+    // Said out loud, because the rows are still in the list and a screen that
+    // simply stopped would look like one that had finished.
+    await waitFor(() =>
+      expect(errorToast).toHaveBeenCalledWith('Some of the trash is still there. Try again.'),
+    )
+    expect(rounds()).toBe(2)
   })
 
   it('leaves a row that could not be restored where it is, and names it', async () => {

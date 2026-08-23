@@ -72,6 +72,12 @@ export function TrashPage() {
    * Not `rowActions` from the row menu: nothing in the trash can be renamed,
    * copied or moved while it is here, and the two things it can do are not on
    * that list at all.
+   *
+   * Neither reaches the list's Delete key, which is why `onDelete` is not
+   * passed at all. In a folder that key moves rows to the trash and the trash
+   * is where they can be got back from; here the same key would destroy them,
+   * with no dialog in front of it and nothing behind it. Deleting for good is
+   * worth reaching for on purpose — the band, or this menu.
    */
   const rowActions = (node: DriveNode): Action[] => [
     { label: 'Restore', icon: ArchiveRestore, disabled: busy, onSelect: () => onRestore([node]) },
@@ -123,7 +129,6 @@ export function TrashPage() {
             </Button>
           )
         }
-        onDelete={onPurge}
         actions={rowActions}
         linkNames={false}
         time={{ label: 'Trashed', of: (node) => node.deleted_at }}

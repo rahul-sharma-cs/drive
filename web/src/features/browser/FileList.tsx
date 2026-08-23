@@ -313,15 +313,19 @@ function ColumnHeader({
         />
       )}
       <span className="w-[22px] shrink-0" aria-hidden />
-      <ColumnLabel sort={sort} by="name" className="inline-flex min-w-0 flex-1 items-center gap-1">
-        Name
-      </ColumnLabel>
-      <ColumnLabel sort={sort} by="updated_at" className="hidden w-32 shrink-0 items-center gap-1 sm:inline-flex">
-        {timeLabel}
-      </ColumnLabel>
-      <ColumnLabel sort={sort} by="size" className="inline-flex w-20 shrink-0 items-center justify-end gap-1">
-        Size
-      </ColumnLabel>
+      <ColumnLabel sort={sort} by="name" label="Name" className="inline-flex min-w-0 flex-1 items-center gap-1" />
+      <ColumnLabel
+        sort={sort}
+        by="updated_at"
+        label={timeLabel}
+        className="hidden w-32 shrink-0 items-center gap-1 sm:inline-flex"
+      />
+      <ColumnLabel
+        sort={sort}
+        by="size"
+        label="Size"
+        className="inline-flex w-20 shrink-0 items-center justify-end gap-1"
+      />
       {/* Keeps Size over the size column rather than over the kebab. */}
       {gutter && <span className="w-8 shrink-0" aria-hidden />}
     </div>
@@ -338,15 +342,15 @@ function ColumnHeader({
 function ColumnLabel({
   sort,
   by,
+  label,
   className,
-  children,
 }: {
   sort?: ListSort
   by: SortKey
+  label: string
   className: string
-  children: ReactNode
 }) {
-  if (!sort) return <span className={className}>{children}</span>
+  if (!sort) return <span className={className}>{label}</span>
 
   const active = sort.active.key === by
   const Arrow = active && sort.active.dir === 'desc' ? ArrowDown : ArrowUp
@@ -355,12 +359,16 @@ function ColumnLabel({
     <button
       type="button"
       onClick={() => sort.onToggle(by)}
+      // The arrow is the state, and an arrow is not something a screen reader
+      // can read. The name carries it instead — on the column in force only,
+      // since the other two are not sorted in any direction at all.
+      aria-label={active ? `${label}, ${sort.active.dir === 'asc' ? 'ascending' : 'descending'}` : undefined}
       // The arrow says which way it is sorted; this says what a click will do
       // next, which the arrow cannot.
       title={active && sort.active.dir === 'asc' ? 'Sort descending' : 'Sort ascending'}
       className={`${className} rounded-control hover:text-ink ${active ? 'text-ink' : ''}`}
     >
-      <span className="truncate">{children}</span>
+      <span className="truncate">{label}</span>
       {active && <Arrow aria-hidden className="size-3 shrink-0 opacity-70" />}
     </button>
   )

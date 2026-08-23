@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { notifyManager } from '@tanstack/react-query'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +9,7 @@ import { Route, Routes, useNavigate } from 'react-router'
 
 import type { DriveNode, Me } from '../../lib/api'
 import { renderApp, stubFetch, type StubRoute } from '../../test/render'
+import { RequireAuth } from '../../features/auth/RequireAuth'
 import { meKey } from '../../features/auth/session'
 import { FolderPage } from '../../features/browser/FolderPage'
 import { AppLayout } from '../AppLayout'
@@ -59,21 +61,30 @@ const chrome: StubRoute[] = [
  * The layout over placeholder screens. The pages are deliberately inert: this
  * file is about the shell, and a real screen would bring a second `nav` and a
  * second set of buttons into every query.
+ *
+ * `RequireAuth` is over it because the app puts it there. The layout and the
+ * account menu both call `useSession()`, which throws rather than render a
+ * chrome with nobody in it, and the guard is what makes that safe. Mounting the
+ * layout bare is a tree that does not ship — and signing out, which empties the
+ * cache while the layout is still on screen, is the moment that difference
+ * turns into a thrown error nobody catches.
  */
 function renderShell(routes: StubRoute[] = [], { route = '/', page }: { route?: string; page?: ReactNode } = {}) {
   const calls = stubFetch([...chrome, ...routes])
   const rendered = renderApp(
     <Routes>
-      <Route element={<AppLayout />}>
-        <Route index element={page ?? <p>my drive</p>} />
-        <Route path="/folders/:id" element={page ?? <p>a folder</p>} />
-        <Route path="/trash" element={<p>trash</p>} />
-        <Route path="/search" element={<p>search</p>} />
-        <Route path="/account" element={<p>account</p>} />
-        {/* A stand-in for any screen behind the layout that is neither a
-            folder nor one of the named exceptions. What the New menu says on
-            a screen nobody has written a rule for is the whole question. */}
-        <Route path="/elsewhere" element={<p>elsewhere</p>} />
+      <Route element={<RequireAuth />}>
+        <Route element={<AppLayout />}>
+          <Route index element={page ?? <p>my drive</p>} />
+          <Route path="/folders/:id" element={page ?? <p>a folder</p>} />
+          <Route path="/trash" element={<p>trash</p>} />
+          <Route path="/search" element={<p>search</p>} />
+          <Route path="/account" element={<p>account</p>} />
+          {/* A stand-in for any screen behind the layout that is neither a
+              folder nor one of the named exceptions. What the New menu says on
+              a screen nobody has written a rule for is the whole question. */}
+          <Route path="/elsewhere" element={<p>elsewhere</p>} />
+        </Route>
       </Route>
       <Route path="/login" element={<p>login</p>} />
     </Routes>,
@@ -110,6 +121,13 @@ function stubBreakpoint() {
 
 beforeEach(() => {
   enqueue.mockClear()
+  // React Query defers cache notifications to a macrotask, so whether a render
+  // sees an emptied cache before or after the navigation that follows it is a
+  // race — one that lands one way on a loaded machine and the other way on an
+  // idle one. Notifying synchronously pins the losing order, which is the only
+  // one worth a test: it is the order in which the chrome re-renders with the
+  // session already gone from under it.
+  notifyManager.setScheduler((cb) => cb())
 })
 
 afterEach(() => {

@@ -102,6 +102,7 @@ describe('sorting from the column headers', () => {
     // entry from the sorted-by-name one.
     expect(listings(calls)[0].url).toBe('/api/nodes/root-1/children')
 
+    // Nothing is sorted by size yet, so the header is named plainly.
     await userEvent.click(screen.getByRole('button', { name: 'Size' }))
 
     await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('?sort=size&dir=asc'))
@@ -111,12 +112,21 @@ describe('sorting from the column headers', () => {
       expect(last).toContain('dir=asc')
     })
 
+    // The arrow that appeared is the whole of the state on screen, and an arrow
+    // is not something a screen reader can read. So the name carries it — and
+    // only on the column in force: the other two are not sorted in any
+    // direction, and naming one of them would be a claim about an order the
+    // list is not in.
+    expect(await screen.findByRole('button', { name: 'Size, ascending' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Name' })).toBeTruthy()
+
     // The same header again is the other direction — a sort control with no
     // way back to descending is half a control.
-    await userEvent.click(screen.getByRole('button', { name: 'Size' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Size, ascending' }))
 
     await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('?sort=size&dir=desc'))
     await waitFor(() => expect(listings(calls).at(-1)!.url).toContain('dir=desc'))
+    expect(await screen.findByRole('button', { name: 'Size, descending' })).toBeTruthy()
   })
 
   it('builds the first request from the address, not from a default', async () => {
@@ -131,6 +141,8 @@ describe('sorting from the column headers', () => {
     const first = listings(calls)[0].url
     expect(first).toContain('sort=updated_at')
     expect(first).toContain('dir=desc')
+    // And the column says so without a click having happened at all.
+    expect(screen.getByRole('button', { name: 'Modified, descending' })).toBeTruthy()
   })
 })
 
