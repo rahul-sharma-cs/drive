@@ -1,16 +1,17 @@
 {
   "//": [
     "Playwright transpiles the specs with esbuild and never type-checks them, so",
-    "this file only ever serves an editor or a hand-run tsc.",
+    "this file only ever serves an editor or a hand-run `npx tsc --noEmit -p .`",
+    "from this directory.",
     "",
     "DOM is in lib because a spec is two languages in one file: the outer half is",
     "Node, and everything inside page.evaluate() is browser code. window, URL,",
     "setTimeout and import.meta.url all come from here.",
     "",
-    "The Node half is still unresolved: 'node' cannot go in types until",
-    "@types/node is a devDependency of this package, and typescript is not one",
-    "either, so a standalone `tsc -p e2e` still reports process, Buffer and the",
-    "node: imports. Adding both is a dependency decision, not a config one."
+    "'node' is in types for the other half — process, Buffer and the node:*",
+    "imports — which is what @types/node and typescript are devDependencies of",
+    "this package for. Neither ships to anything; they exist so the specs can be",
+    "checked rather than only run."
   ],
   "compilerOptions": {
     "target": "ES2022",
@@ -20,7 +21,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["@playwright/test"]
+    "types": ["@playwright/test", "node"]
   },
   "include": ["**/*.ts"]
 }

@@ -262,7 +262,9 @@ test('a right-click too quick to be a menu click runs no command', async () => {
       await page.keyboard.press('Escape');
       await expect(contextMenu()).toHaveCount(0);
     } finally {
-      await slowly.evaluate((tag) => tag.remove());
+      // addStyleTag hands back an ElementHandle<Node>, and remove() is on
+      // Element. It is the <style> this call just injected.
+      await slowly.evaluate((tag) => (tag as HTMLStyleElement).remove());
     }
 
     // The control: a deliberate click on an item still runs it, at this same
