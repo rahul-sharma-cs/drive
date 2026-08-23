@@ -321,8 +321,19 @@ func googleDisplayName(name, email string) string {
 func (s *Server) googleRefuse(w http.ResponseWriter, r *http.Request, reason string, err error) {
 	l := LoggerFrom(r.Context())
 	// The error is wrapped by the packages that produced it and carries no
-	// code, state, nonce, verifier or token -- those never leave this file's
-	// local variables.
+	// credential: no code, state, nonce, verifier or token -- those never leave
+	// this file's local variables, and that is the property this line depends
+	// on, because a log an operator reads is not a place a replayable secret
+	// may sit.
+	//
+	// It is not blank, though, and the comment should not pretend otherwise. On
+	// a database error or an invariant violation the wrapped message can name
+	// the address being signed in (auth.FindUserByEmail is a lookup *by*
+	// address, so there is no id to key it off instead) or the provider and its
+	// subject. Both identify a person rather than authenticate one, both are
+	// reachable only on a path where something is already broken, and the
+	// alternative -- a refusal whose log line says nothing about which account
+	// it was -- is worse to be on call for.
 	if err != nil {
 		l.Warn("google sign-in refused", "reason", reason, "error", err)
 	} else {

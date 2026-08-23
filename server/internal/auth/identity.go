@@ -66,9 +66,10 @@ var (
 //  2. by the address, when the subject is unknown. The provider has just proven
 //     the same thing Drive's own verification mail proves, so the identity is
 //     linked to the existing account and a never-clicked verification is
-//     stamped. A verified account keeps its password and still signs in with
-//     it; an account this link is *activating* loses the one it was carrying,
-//     for the reason the UPDATE documents.
+//     stamped. A verified account keeps its password and its display name and
+//     still signs in with that password; an account this link is *activating*
+//     loses both, since neither was ever the address owner's, for the reasons
+//     the UPDATE documents.
 //  3. otherwise a new account, its root folder and the identity, in one
 //     transaction -- unless signups are closed, which is a refusal and not a
 //     back door.
@@ -188,12 +189,21 @@ func signInAttempt(ctx context.Context, pool *pgxpool.Pool, provider, subject, e
 		// A verified account keeps its password: it proved the address itself
 		// before any of this, so the credential is its own. Postgres evaluates
 		// every SET expression against the pre-update row, which is what lets
-		// one statement read email_verified_at and write both columns.
+		// one statement read email_verified_at and write all three columns.
+		//
+		// The display name goes the same way as the hash, and for the same
+		// reason. Whatever the squatter typed at signup is attacker-chosen text
+		// sitting on somebody else's account, and this is the moment the account
+		// stops being theirs -- so the name the provider vouches for replaces
+		// it. A verified account's name is its own and is not touched: that
+		// keeps the rule in this package's doc comment intact, since the only
+		// row a claim is ever written over is one nobody had proven.
 		if _, err := tx.Exec(ctx, `
 			UPDATE users
 			   SET password_hash = CASE WHEN email_verified_at IS NULL THEN NULL ELSE password_hash END,
+			       display_name  = CASE WHEN email_verified_at IS NULL THEN $2 ELSE display_name END,
 			       email_verified_at = COALESCE(email_verified_at, now())
-			 WHERE id = $1`, existing.ID); err != nil {
+			 WHERE id = $1`, existing.ID, displayName); err != nil {
 			return nil, false, false, fmt.Errorf("auth: marking %s verified: %w", existing.ID, err)
 		}
 		// Re-read, so the caller gets the stamped row rather than the one from

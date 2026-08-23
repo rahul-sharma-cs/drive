@@ -559,12 +559,19 @@ func TestGoogleSignInLinksAVerifiedEmailToAnExistingAccount(t *testing.T) {
 	id.Email = email
 	stub.SetIdentity(id)
 
+	// Read before the link, so the assertion below is against what this account
+	// actually called itself rather than a literal copied from a helper.
+	_, _, _, nameBefore, _ := googleUserRow(t, pool, email)
+	if nameBefore == "" || nameBefore == id.Name {
+		t.Fatalf("the account's name is %q, so an unchanged-name assertion would be vacuous", nameBefore)
+	}
+
 	googleSignedIn(t, h)
 
 	if n := googleCountUsers(t, pool, email); n != 1 {
 		t.Errorf("%d user rows for %s, want 1 -- a second account was created instead of linked", n, email)
 	}
-	userID, hasPassword, verified, _, found := googleUserRow(t, pool, email)
+	userID, hasPassword, verified, displayName, found := googleUserRow(t, pool, email)
 	if !found {
 		t.Fatalf("no user row for %s", email)
 	}
@@ -573,6 +580,12 @@ func TestGoogleSignInLinksAVerifiedEmailToAnExistingAccount(t *testing.T) {
 	}
 	if verified == nil {
 		t.Error("email_verified_at is null after a verified Google sign-in")
+	}
+	// The name goes the same way as the password. This account chose its own,
+	// having proved the address before anybody linked anything, so a claim does
+	// not get to rewrite it -- only an account a link is *activating* is renamed.
+	if displayName != nameBefore {
+		t.Errorf("display_name = %q after linking, want the account's own name %q", displayName, nameBefore)
 	}
 	row, ok := googleIdentityRow(t, pool, id.Subject)
 	if !ok {
@@ -607,30 +620,46 @@ func TestAGoogleLinkActivatesAnUnverifiedAccountWithoutItsPassword(t *testing.T)
 
 	passwordServer, _, _ := authTestServer(t)
 	email := authTestEmail(t)
+	const squatterName = "Never Verified"
 	rec := authDo(t, passwordServer, http.MethodPost, "/api/auth/signup",
-		authSignupBody{email, authTestPassword, "Never Verified"}, nil)
+		authSignupBody{email, authTestPassword, squatterName}, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("signup: status %d, body %s", rec.Code, rec.Body.String())
 	}
-	_, squatted, verified, _, _ := googleUserRow(t, pool, email)
+	_, squatted, verified, squattedName, _ := googleUserRow(t, pool, email)
 	if verified != nil {
 		t.Fatal("the account was already verified before the Google sign-in")
 	}
 	if !squatted {
 		t.Fatal("the signup wrote no password hash, so everything below would be vacuous")
 	}
+	if squattedName != squatterName {
+		t.Fatalf("display_name = %q after the signup, want %q -- the name assertions below would be vacuous", squattedName, squatterName)
+	}
 
 	id := googleIdentity(t, "sub-rescue-"+uuid.NewString())
 	id.Email = email
 	stub.SetIdentity(id)
+	if id.Name == "" || id.Name == squatterName {
+		t.Fatalf("the provider's name is %q, so the rename assertion would be vacuous", id.Name)
+	}
 	session := googleSignedIn(t, h)
 
-	_, hasPassword, verified, _, _ := googleUserRow(t, pool, email)
+	_, hasPassword, verified, displayName, _ := googleUserRow(t, pool, email)
 	if verified == nil {
 		t.Error("email_verified_at is still null after a verified Google sign-in")
 	}
 	if hasPassword {
 		t.Error("the account kept the hash it was signed up with -- whoever chose it never proved the address")
+	}
+	// The name is the other thing the squatter chose. Rescuing the account
+	// without it would leave somebody's Drive permanently labelled with
+	// attacker-typed text until they renamed it themselves.
+	if displayName == squatterName {
+		t.Error("the rescued account still carries the name whoever squatted it typed at signup")
+	}
+	if displayName != id.Name {
+		t.Errorf("display_name = %q after the rescue, want the provider's name %q", displayName, id.Name)
 	}
 	if meHasPassword(t, h, session) {
 		t.Error("/me reports has_password on an account whose unproven hash was discarded")
