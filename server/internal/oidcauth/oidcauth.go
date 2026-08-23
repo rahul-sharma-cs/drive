@@ -162,7 +162,13 @@ func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp.Body = &boundedBody{inner: resp.Body, left: maxProviderBody + 1}
+	// The RoundTripper contract promises a non-nil body, but this wraps
+	// whatever base it was handed -- including a test double or a middleware
+	// that does not keep the promise, where the wrap would panic on the first
+	// read rather than fail the sign-in.
+	if resp.Body != nil {
+		resp.Body = &boundedBody{inner: resp.Body, left: maxProviderBody + 1}
+	}
 	return resp, nil
 }
 
@@ -173,9 +179,11 @@ func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // source -- or, worse, as a key set that simply does not contain the kid. An
 // error says what happened.
 //
-// left is the cap plus one: a body of exactly maxProviderBody bytes reads to
-// EOF with one byte of headroom to spare, and only a body larger than that
-// consumes it.
+// left is the cap plus one, so a body up to one byte past maxProviderBody still
+// reads to EOF -- net/http answers the read that finishes a response with
+// (n>0, io.EOF) rather than a bare (n, nil), and the err == nil guard below
+// does not fire on it. Only a body that keeps going past that is refused: the
+// first size this rejects is the cap plus two.
 type boundedBody struct {
 	inner io.ReadCloser
 	left  int64

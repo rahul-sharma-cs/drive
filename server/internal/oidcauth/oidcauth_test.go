@@ -510,6 +510,87 @@ func TestAnOversizedProviderResponseIsRefused(t *testing.T) {
 	}
 }
 
+// The other unbounded read, on the other side of the flow: the JWKS.
+//
+// The cap lives on the client rather than at either call site, so the two are
+// not the same test -- a wrap applied only where discovery is fetched would
+// leave the key set unbounded and the case above would not notice. This one
+// keeps discovery normal-sized and pads only the JWKS, so the refusal can come
+// from nowhere else, and the same server serves it unpadded to a second
+// provider to show the flow is otherwise fine.
+func TestAnOversizedJWKSIsRefused(t *testing.T) {
+	stub, err := oidcstub.New(testClientID, testClientSecret)
+	if err != nil {
+		t.Fatalf("building the stub: %v", err)
+	}
+
+	var pad atomic.Bool
+	inner := stub.Handler()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != oidcstub.JWKSPath || !pad.Load() {
+			inner.ServeHTTP(w, r)
+			return
+		}
+		// The real key set, decoded and re-encoded with one huge field, so what
+		// comes out still carries the key the token was signed with: only the
+		// size can be doing the refusing.
+		rec := httptest.NewRecorder()
+		inner.ServeHTTP(rec, r)
+		var doc map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+			t.Errorf("the stub's own JWKS did not decode: %v", err)
+			return
+		}
+		doc["padding"] = strings.Repeat("a", maxProviderBody)
+		out, err := json.Marshal(doc)
+		if err != nil {
+			t.Errorf("re-encoding the JWKS: %v", err)
+			return
+		}
+		if len(out) <= maxProviderBody {
+			t.Errorf("the padded key set is %d bytes, which is inside the %d-byte cap", len(out), maxProviderBody)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(out)
+	}))
+	defer ts.Close()
+	stub.SetBaseURL(ts.URL)
+	stub.SetIdentity(oidcstub.Identity{
+		Subject:       "subject-0003",
+		Email:         "person@example.test",
+		EmailVerified: true,
+	})
+
+	cfg := Config{ClientID: testClientID, ClientSecret: testClientSecret, Issuer: ts.URL, RedirectURL: testRedirectURL}
+
+	// The token is signed, the exchange succeeds, and the verification cannot
+	// get the key to check it with.
+	pad.Store(true)
+	padded := New(cfg)
+	verifier := oauth2.GenerateVerifier()
+	code, _ := authorize(t, padded, "the-state", "the-nonce", verifier)
+	_, err = padded.Exchange(context.Background(), code, verifier, "the-nonce")
+	if !errors.Is(err, ErrVerify) {
+		t.Fatalf("an oversized key set: error = %v, want one wrapping ErrVerify", err)
+	}
+	// Named, not merely wrapped: every bad signature in this file lands on
+	// ErrVerify too, and this has to be the cap.
+	if !strings.Contains(err.Error(), errBodyTooLarge.Error()) {
+		t.Errorf("error = %v, want it to carry %q", err, errBodyTooLarge)
+	}
+
+	// The same key set without the padding, on a fresh provider because go-oidc
+	// keeps the one it fetched.
+	pad.Store(false)
+	plain := New(cfg)
+	verifier = oauth2.GenerateVerifier()
+	code, _ = authorize(t, plain, "the-state", "the-nonce", verifier)
+	if _, err := plain.Exchange(context.Background(), code, verifier, "the-nonce"); err != nil {
+		t.Fatalf("a normal-sized key set was refused: %v", err)
+	}
+}
+
 // A guard on the stub itself: the discovery document has to publish exactly the
 // base URL it was told, or go-oidc refuses it and every case above fails for a
 // reason that has nothing to do with the code under test.
