@@ -133,8 +133,10 @@ export function SessionsSection() {
                       </span>
                     )}
                   </p>
-                  <p className="numeric mt-0.5 truncate text-ink-3">
-                    {s.ip ?? 'address unknown'} · last seen{' '}
+                  {/* The address is a quantity and keeps the mono face; the
+                      two times beside it are phrases and do not. */}
+                  <p className="mt-0.5 truncate text-[12px] text-ink-3">
+                    <span className="numeric">{s.ip ?? 'address unknown'}</span> · last seen{' '}
                     {s.last_seen_at ? formatWhen(s.last_seen_at) : 'not since sign-in'} · signed in{' '}
                     {formatWhen(s.created_at)}
                   </p>

@@ -181,8 +181,12 @@ export function FileRow({
         <span className="min-w-0 flex-1 truncate text-sm text-ink">{node.name}</span>
       )}
 
+      {/* Not `.numeric`. "3 days ago" is a phrase, not a quantity — set in the
+          mono face it reads as terminal output, and there are no columns of
+          digits here to keep aligned. The size cell next to it is a quantity
+          and keeps its tabular figures. */}
       <span
-        className="numeric hidden w-32 shrink-0 text-ink-3 sm:block"
+        className="hidden w-32 shrink-0 text-[12px] text-ink-3 sm:block"
         title={when ? new Date(when).toString() : undefined}
       >
         {when ? formatWhen(when) : ''}

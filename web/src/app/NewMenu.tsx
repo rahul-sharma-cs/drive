@@ -43,11 +43,18 @@ export function NewMenu() {
     <>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
+          {/* A raised white pill, not a teal one. Teal in this product means
+              something is selected, in progress, or focused; spending it on a
+              button that is on screen permanently would make the one colour
+              that reports state into wallpaper. The shape carries the emphasis
+              instead — the only rounded-full raised control in the chrome,
+              hugging its label while the nav rows beneath it stretch. */}
           <Button
+            variant="outline"
             size="lg"
-            className="h-12 gap-3 self-start rounded-full px-6 text-[14px] shadow-card hover:bg-teal-strong"
+            className="h-12 gap-3 self-start rounded-full border-line-strong bg-surface px-6 text-[14px] text-ink shadow-card hover:border-line-strong hover:bg-surface-muted hover:text-ink active:bg-line/50 active:shadow-none"
           >
-            <Plus className="size-5" />
+            <Plus className="size-5 text-ink-2" />
             New
           </Button>
         </DropdownMenuTrigger>

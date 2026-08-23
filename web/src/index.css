@@ -17,10 +17,14 @@
  *
  * The through-line: this is an instrument, not a consumer cloud app. Colour
  * carries meaning and nothing else — the chrome is strictly achromatic
- * graphite, and the only three hues in the product are teal (in motion /
- * stored), amber (waiting on you) and red (destructive or failed). Every
- * quantity — byte counts, part indices, speeds — is set in the mono face with
- * tabular figures, because the numbers are the subject.
+ * graphite, and the only three *UI* hues in the product are teal (in motion /
+ * stored), amber (waiting on you) and red (destructive or failed). Beside them
+ * sits one closed set of type-icon hues, which are a label rather than a
+ * state: they say what kind of file a row holds, the way an extension does,
+ * and they are pitched quieter than the three above so that nothing on a row
+ * can be mistaken for something happening. Every quantity — byte counts, part
+ * indices, speeds — is set in the mono face with tabular figures, because the
+ * numbers are the subject; relative times are not quantities and are not.
  *
  * Light only, declared rather than defaulted (`color-scheme`), so form controls
  * and scrollbars render in the palette below instead of a half-dark hybrid.
@@ -54,6 +58,31 @@
   /* Destructive, or failed. */
   --color-danger: #a4231f;
   --color-danger-soft: #fbe9e7;
+
+  /* Type icons — one hue per file family, and the only place in the product
+     where colour is a label instead of a state.
+
+     They are Drive's own rather than a stock palette's: every one is pitched
+     into the same register as the three hues above — deep, half-saturated,
+     around a third lightness — so a folder of mixed types reads as one system
+     and no single row shouts. Hues sit in the arcs the three UI colours leave
+     free, which is why there is no orange or crimson here: those are the
+     folder and the failure.
+
+     Folder is `warn` and PDF is `danger`, because those two *are* the
+     conventions everybody already reads. Presentations share the document
+     hue: they are the same family, the glyph and the extension tag separate
+     them, and a ninth colour in a product that states a three-hue rule is
+     inflation. */
+  --color-type-image: #1b6b90;
+  --color-type-video: #6b4796;
+  --color-type-audio: #8f3a6d;
+  --color-type-archive: #6b6030;
+  --color-type-sheet: #1f6a4a;
+  --color-type-doc: #3a539b;
+  --color-type-code: #4d5b6b;
+  /* Plain text has no type to announce, so it takes the metadata grey. */
+  --color-type-text: #626b74;
 
   /* Instrument Sans is the UI face: a grotesque with short extenders and open
      apertures, which is what keeps a 13px file name legible in a dense list.
@@ -312,7 +341,10 @@
   --destructive: var(--color-danger);
 
   --border: var(--color-line);
-  --input: var(--color-line);
+  /* A field's edge is the affordance — it is what says "you can type here" —
+     so it takes the stronger hairline while a divider between two rows takes
+     the quieter one. */
+  --input: var(--color-line-strong);
   --ring: var(--color-teal);
 
   --radius: var(--radius-control);

@@ -31,7 +31,12 @@ export type FileCategory =
 interface CategorySpec {
   category: FileCategory
   icon: LucideIcon
-  /** A Tailwind text-colour utility — the app's own tokens where one fits, a Tailwind default shade otherwise. */
+  /**
+   * A text-colour utility off one of the product's own tokens — never a stock
+   * palette shade. The type hues are declared as a closed set in `index.css`
+   * beside the three UI hues, which is what keeps a file list reading as one
+   * palette rather than as Drive's next to Tailwind's.
+   */
   colorClass: string
   /** Solid rather than outline — folders only, so far. */
   filled?: boolean
@@ -42,8 +47,8 @@ interface CategorySpec {
 }
 
 /**
- * One row per file category — the single table the design pass retokenises
- * from. Deliberately excludes `folder` and `generic`, which have no extensions
+ * One row per file category — the single table every type colour in the
+ * product comes out of. Deliberately excludes `folder` and `generic`, which have no extensions
  * to classify by and live in `FOLDER_SPEC`/`GENERIC_SPEC` below; keeping them
  * out of this array is what makes the "no duplicate extension" test meaningful
  * instead of vacuous.
@@ -59,28 +64,28 @@ export const FILE_ICON_TABLE: CategorySpec[] = [
   {
     category: 'image',
     icon: Image,
-    colorClass: 'text-sky-600',
+    colorClass: 'text-type-image',
     extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'heic'],
     mimePrefixes: ['image/'],
   },
   {
     category: 'video',
     icon: Video,
-    colorClass: 'text-violet-600',
+    colorClass: 'text-type-video',
     extensions: ['mp4', 'webm', 'mov', 'mkv'],
     mimePrefixes: ['video/'],
   },
   {
     category: 'audio',
     icon: FileAudio,
-    colorClass: 'text-rose-600',
+    colorClass: 'text-type-audio',
     extensions: ['mp3', 'ogg', 'wav', 'm4a', 'flac'],
     mimePrefixes: ['audio/'],
   },
   {
     category: 'archive',
     icon: FileArchive,
-    colorClass: 'text-orange-600',
+    colorClass: 'text-type-archive',
     extensions: ['zip', 'tar', 'gz', '7z', 'rar', 'tar.gz'],
     mimeExact: [
       'application/zip',
@@ -96,7 +101,7 @@ export const FILE_ICON_TABLE: CategorySpec[] = [
   {
     category: 'spreadsheet',
     icon: FileSpreadsheet,
-    colorClass: 'text-emerald-600',
+    colorClass: 'text-type-sheet',
     extensions: ['csv', 'xlsx', 'xls', 'ods'],
     mimeExact: [
       'text/csv',
@@ -108,7 +113,7 @@ export const FILE_ICON_TABLE: CategorySpec[] = [
   {
     category: 'document',
     icon: FileText,
-    colorClass: 'text-indigo-600',
+    colorClass: 'text-type-doc',
     extensions: ['docx', 'doc', 'odt', 'rtf'],
     mimeExact: [
       'application/msword',
@@ -121,7 +126,7 @@ export const FILE_ICON_TABLE: CategorySpec[] = [
   {
     category: 'presentation',
     icon: Presentation,
-    colorClass: 'text-orange-500',
+    colorClass: 'text-type-doc',
     extensions: ['pptx', 'key'],
     mimeExact: [
       'application/vnd.ms-powerpoint',
@@ -131,13 +136,13 @@ export const FILE_ICON_TABLE: CategorySpec[] = [
   {
     category: 'code',
     icon: FileCode,
-    colorClass: 'text-violet-500',
+    colorClass: 'text-type-code',
     extensions: ['js', 'ts', 'tsx', 'go', 'py', 'rs', 'html', 'css', 'json', 'yaml', 'yml', 'sh'],
   },
   {
     category: 'text',
     icon: FileText,
-    colorClass: 'text-slate-500',
+    colorClass: 'text-type-text',
     extensions: ['txt', 'md'],
     mimeExact: ['text/plain', 'text/markdown'],
   },
