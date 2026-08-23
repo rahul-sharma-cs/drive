@@ -61,6 +61,8 @@ export interface RowHandlers {
   onCopy: (node: DriveNode) => void
   onMove: (node: DriveNode) => void
   onTrash: (node: DriveNode) => void
+  /** A folder: zip it in the browser. Must run inside the click, not after it. */
+  onZip: (node: DriveNode) => void
 }
 
 /**
@@ -68,8 +70,8 @@ export interface RowHandlers {
  *
  * Preview leads for a file, above Download: it is the same thing the name does,
  * and a menu that only offered to download what the row will happily show would
- * be hiding its own best answer. Folders have neither — they open by being
- * navigated into.
+ * be hiding its own best answer. A folder has no preview — it opens by being
+ * navigated into — but it does download, as a zip built in this tab.
  *
  * `extra` is the slot share links will arrive in — items are spliced in after
  * Move to, so the destructive one stays last wherever it is rendered.
@@ -78,9 +80,9 @@ export function rowActions(node: DriveNode, handlers: RowHandlers, extra: Action
   const isFile = node.kind === 'file'
   return [
     ...(isFile ? [{ label: 'Preview', icon: Eye, previewId: node.id } satisfies Action] : []),
-    ...(isFile
-      ? [{ label: 'Download', icon: Download, href: downloadHref(node.id) } satisfies Action]
-      : []),
+    isFile
+      ? ({ label: 'Download', icon: Download, href: downloadHref(node.id) } satisfies Action)
+      : ({ label: 'Download', icon: Download, onSelect: () => handlers.onZip(node) } satisfies Action),
     { label: 'Rename', icon: Pencil, onSelect: () => handlers.onRename(node) },
     ...(isFile
       ? [{ label: 'Make a copy', icon: Copy, onSelect: () => handlers.onCopy(node) } satisfies Action]

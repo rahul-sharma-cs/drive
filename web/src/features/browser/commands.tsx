@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 
 import { downloadHref, type DriveNode } from '../../lib/api'
 import { useSession } from '../auth/session'
+import { startZipDownload } from '../download/useZipDownload'
 import type { BandAction } from './CommandBand'
 import { DestinationDialog } from './DestinationDialog'
 import { RenameDialog } from './RenameDialog'
@@ -36,6 +37,8 @@ export interface BandCommands {
   onCopy: (nodes: DriveNode[]) => void
   onMove: (nodes: DriveNode[]) => void
   onTrash: (nodes: DriveNode[]) => void
+  /** Anything that is not one file: build a zip of it, here in the browser. */
+  onZip: (nodes: DriveNode[]) => void
 }
 
 /**
@@ -51,13 +54,13 @@ export function nodeBandActions(
   const files = chosen.filter((n) => n.kind === 'file')
 
   return [
-    // One file at a time: there is no archive endpoint to answer a
-    // multi-selection with, and a button that silently downloaded one of five
-    // would be a lie. It takes the whole selection once downloading a set of
-    // files as one zip exists.
-    ...(single?.kind === 'file'
-      ? [{ label: 'Download', icon: Download, href: downloadHref(single.id) } satisfies BandAction]
-      : []),
+    // One file is still a plain navigation to the 302 — the browser's own
+    // download, with its own progress and its own resume. Wrapping a single file
+    // in a zip would take all of that away to gain nothing. Anything else has no
+    // single URL to point at, so it is built into an archive in this tab.
+    single?.kind === 'file'
+      ? ({ label: 'Download', icon: Download, href: downloadHref(single.id) } satisfies BandAction)
+      : ({ label: 'Download', icon: Download, onSelect: () => commands.onZip([...chosen]) } satisfies BandAction),
     ...(single
       ? [{ label: 'Rename', icon: Pencil, disabled: busy, onSelect: () => commands.onRename(single) } satisfies BandAction]
       : []),
@@ -117,6 +120,9 @@ export function useNodeCommands(parentId?: string): NodeCommands {
     onMove: (node) => setDialog({ kind: 'move', nodes: [node] }),
     onCopy: (node) => setDialog({ kind: 'copy', nodes: [node] }),
     onTrash: (node) => trash.mutate(node.id),
+    // Called straight through, synchronously: the save dialog it opens is only
+    // allowed while the click that asked for it is still the current gesture.
+    onZip: (node) => startZipDownload([node]),
   }
 
   const commands: BandCommands = {
@@ -124,6 +130,7 @@ export function useNodeCommands(parentId?: string): NodeCommands {
     onMove: (nodes) => setDialog({ kind: 'move', nodes }),
     onCopy: (nodes) => setDialog({ kind: 'copy', nodes }),
     onTrash: (nodes) => nodes.forEach((n) => trash.mutate(n.id)),
+    onZip: (nodes) => startZipDownload(nodes),
   }
 
   const dialogs = (

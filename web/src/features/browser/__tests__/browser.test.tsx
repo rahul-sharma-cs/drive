@@ -183,10 +183,14 @@ describe('selection and the actions it unlocks', () => {
 
     await userEvent.click(screen.getByRole('checkbox', { name: 'Select Reports' }))
     expect(within(bar()).getByText('2 selected')).toBeTruthy()
-    // Rename takes exactly one item, and there is no archive endpoint to
-    // download two things with, so neither is offered for a multi-selection.
+    // Rename takes exactly one item, so it is not offered for a multi-selection.
     expect(within(bar()).queryByRole('button', { name: 'Rename' })).toBeNull()
+    // Download is, though — two things have no single URL between them, so it
+    // stops being a link to the 302 and becomes the command that builds a zip.
+    // The archive itself is `features/download`; what is pinned here is that the
+    // band swapped one affordance for the other.
     expect(within(bar()).queryByRole('link', { name: 'Download' })).toBeNull()
+    expect(within(bar()).getByRole('button', { name: 'Download' })).toBeTruthy()
     // Copy survives, because one of the two is a file.
     expect(within(bar()).getByRole('button', { name: 'Copy to' })).toBeTruthy()
   })

@@ -7,6 +7,7 @@ import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTi
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 import { useSession } from '../features/auth/session'
+import { ZipDock } from '../features/download/ZipDock'
 import { UploadDock } from '../features/upload/ui/UploadDock'
 import { UploadPickers } from '../features/upload/ui/pickers'
 import { DriveMark } from '../ui/icons'
@@ -99,6 +100,7 @@ export function AppLayout() {
                 doing. */}
             <UploadPickers />
             <DockStack>
+              <ZipDock />
               <UploadDock />
             </DockStack>
           </div>
