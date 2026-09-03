@@ -144,9 +144,9 @@ test('reloading the page spends nothing', async () => {
 });
 
 test('Download follows the 302 to the bytes, and counts once per visitor', async () => {
-  await download(first);
+  await download(first, PNG_SHA256);
   await expectCount(PNG.name, '1 of 2');
-  await download(first);
+  await download(first, PNG_SHA256);
   await expectCount(PNG.name, '1 of 2');
 });
 
@@ -155,7 +155,7 @@ test('a second stranger takes the last download, and a third meets the limit', a
   await second.goto(url);
   await passGate(second, PASSWORD);
   await expectCard(second, PNG.name);
-  await download(second);
+  await download(second, PNG_SHA256);
   await expectCount(PNG.name, '2 of 2');
 
   third = await stranger();
@@ -185,7 +185,7 @@ test('raising the cap in Settings lets the third stranger in', async () => {
   await third.reload();
   await passGate(third, PASSWORD);
   await expectCard(third, PNG.name);
-  await download(third);
+  await download(third, PNG_SHA256);
   await expectCount(PNG.name, '3 of 3');
 });
 
@@ -215,7 +215,7 @@ test('New link stops the old one and starts the count over', async () => {
   await first.goto(url);
   await expectCard(first, PNG.name);
   await expectImage(first, PNG.name);
-  await download(first);
+  await download(first, PNG_SHA256);
   await expectCount(PNG.name, '1 of 5');
 
   const again = await openShare(PNG.name);
@@ -255,7 +255,7 @@ test('a trashed file makes its link inert until it is restored', async () => {
 
   await first.reload();
   await expectImage(first, PNG.name);
-  await download(first);
+  await download(first, PNG_SHA256);
   await expectCount(PNG.name, '1 of 5');
 });
 
@@ -282,11 +282,13 @@ test('a PDF gets the card and the button only', async () => {
   });
   await reader.goto(link);
   await expectCard(reader, PDF.name);
-  // A beat after the card, because "never asked" is a claim about a request
-  // that would arrive slightly after the element it belongs to.
-  await reader.waitForTimeout(500);
-  expect(asked, 'the page never asks for a preview it would be refused').toEqual([]);
+  // The card is the page settled: `/meta` is in, and the render that painted
+  // it decided the preview slot — absent for a PDF, so nothing that could ask
+  // exists. Announced previewable by mistake, the slot would be here in one
+  // of its states: loading, refused, or the frame.
   await expect(reader.locator('img, iframe, video, audio, pre')).toHaveCount(0);
+  await expect(reader.getByText(/^(Loading the preview|No preview)/)).toHaveCount(0);
+  expect(asked, 'the page never asks for a preview it would be refused').toEqual([]);
 });
 
 test('/shared lists every link with its counts', async () => {
@@ -351,24 +353,29 @@ async function expectCard(page: Page, name: string): Promise<void> {
   await expect(page.getByRole('link', { name: 'Download' })).toBeVisible();
 }
 
-/** The image decoded, not merely an `<img>` in the DOM: the bytes came back from the store and are a PNG. */
+/**
+ * The image decoded, not merely an `<img>` in the DOM, and straight off the
+ * store: its `src` is the presigned URL, not a path this app would proxy.
+ */
 async function expectImage(page: Page, name: string): Promise<void> {
   const image = page.getByRole('img', { name });
   await expect(image).toBeVisible();
+  const src = await image.getAttribute('src');
+  expect(new URL(src!, BASE).origin, `${src} is on the store, not this app`).not.toBe(new URL(BASE).origin);
   await expect.poll(() => image.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
 }
 
 /**
  * Download through the page's own cookie jar: the 302 to the presigned GET is
- * followed, and the body hashes equal to what the owner uploaded.
+ * followed, and the body hashes to `sha256Hex` — what the owner uploaded.
  */
-async function download(page: Page): Promise<void> {
+async function download(page: Page, sha256Hex: string): Promise<void> {
   const href = await page.getByRole('link', { name: 'Download' }).getAttribute('href');
   expect(href).toMatch(/^\/api\/s\/[A-Za-z0-9_-]{43}\/download$/);
   const res = await page.request.get(`${BASE}${href}`);
   expect(res.status()).toBe(200);
   expect(res.headers()['content-disposition']).toContain('attachment');
-  expect(sha256(await res.body())).toBe(PNG_SHA256);
+  expect(sha256(await res.body())).toBe(sha256Hex);
 }
 
 async function openShared(): Promise<void> {
