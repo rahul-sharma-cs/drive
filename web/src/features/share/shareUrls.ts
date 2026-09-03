@@ -11,12 +11,15 @@
  * The map is mirrored to `localStorage` so that a reload comes back to it:
  * read once when the module loads, merged into the stored map on every `set`
  * (two tabs minting links each hold only their own, and the second to write
- * must not erase the first's), removed on `clear`. Every touch of storage
- * sits in a `try/catch` — private mode, a full store, no storage at all — and
- * degrades to the in-memory map, which is what there was before. The owner's
- * own browser holding the owner's own links is the clipboard's posture; the
- * server-side posture (hash only) is unchanged, so a database leak still
- * leaks no link.
+ * must not erase the first's), removed on `clear`. Only the ids this tab has
+ * set since it loaded go into the merge — the rest of its map is a copy of
+ * storage as it was, and a tab still holding the URL another tab has since
+ * regenerated must not write the dead one back over the live one. Every
+ * touch of storage sits in a `try/catch` — private mode, a full store, no
+ * storage at all — and degrades to the in-memory map, which is what there
+ * was before. The owner's own browser holding the owner's own links is the
+ * clipboard's posture; the server-side posture (hash only) is unchanged, so
+ * a database leak still leaks no link.
  *
  * A share URL is a credential, so `AccountMenu` empties this wherever it
  * empties the query cache on sign-out — and emptying it removes the stored
@@ -45,9 +48,11 @@ function load(): Map<string, string> {
 
 function persist() {
   try {
-    // What another tab has kept since this one loaded, with this tab's on top.
+    // What another tab has kept since this one loaded, with what this tab
+    // itself wrote on top — not its whole map, which may hold a URL another
+    // tab has since replaced.
     const merged = load()
-    for (const [id, url] of urls) merged.set(id, url)
+    for (const [id, url] of urls) if (written.has(id)) merged.set(id, url)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(merged)))
   } catch {
     // Nowhere to keep it: this tab still holds the URL for as long as it lives.
@@ -63,6 +68,8 @@ function forget() {
 }
 
 const urls = load()
+/** The ids this tab has set since it loaded — the only ones it may write to storage. */
+const written = new Set<string>()
 const listeners = new Set<() => void>()
 let version = 0
 
@@ -82,11 +89,13 @@ export const shareUrls = {
   get: (shareId: string): string | undefined => urls.get(shareId),
   set(shareId: string, url: string): void {
     urls.set(shareId, url)
+    written.add(shareId)
     persist()
     notify()
   },
   clear(): void {
     urls.clear()
+    written.clear()
     forget()
     notify()
   },

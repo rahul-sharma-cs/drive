@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const KEY = 'drive.share-urls'
 const URL_1 = 'https://drive.example/s/0123456789abcdef0123456789abcdef0123456789a'
 const URL_2 = 'https://drive.example/s/fedcba9876543210fedcba9876543210fedcba98765'
+const URL_1_NEW = 'https://drive.example/s/1111111111111111111111111111111111111111111'
 
 /** What a reload gets: the module evaluated again, reading storage as it starts. */
 async function fresh() {
@@ -49,6 +50,25 @@ describe('the stored copy', () => {
     expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ s1: URL_1, s2: URL_2 })
     const reloaded = await fresh()
     expect(reloaded.get('s1')).toBe(URL_1)
+    expect(reloaded.get('s2')).toBe(URL_2)
+  })
+
+  it('is never overwritten by a tab still holding a URL another tab has since replaced', async () => {
+    // Tab A mints s1. Tab B loads and holds that s1. A makes a new link for
+    // the same share; B then mints s2. B's write must carry only what B set,
+    // or the dead s1 would land on top of the live one and a reload would
+    // offer Copy on a link that no longer opens.
+    const tabA = await fresh()
+    tabA.set('s1', URL_1)
+    const tabB = await fresh()
+    expect(tabB.get('s1')).toBe(URL_1)
+
+    tabA.set('s1', URL_1_NEW)
+    tabB.set('s2', URL_2)
+
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ s1: URL_1_NEW, s2: URL_2 })
+    const reloaded = await fresh()
+    expect(reloaded.get('s1')).toBe(URL_1_NEW)
     expect(reloaded.get('s2')).toBe(URL_2)
   })
 
