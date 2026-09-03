@@ -15,12 +15,14 @@ import { readEnvFile } from './support/mailpit';
  * can open, the password the owner typed is the one the gate wants, the
  * `<img>` on the page decodes bytes signed by the store, the counter the owner
  * reads is the one the recipient's downloads moved — and that a preview and a
- * reload moved it by nothing.
+ * reload moved it by nothing, and asked for no password twice.
  *
  * Serial: one owner page and a few throwaway recipient contexts, each a
  * browser that has never seen the app. The link's URL is read off the dialog's
  * own input, never the clipboard — a headless clipboard proves nothing, and
- * the input is what a person copies from.
+ * the input is what a person copies from. The owner's browser keeps that URL
+ * for itself (the server holds only a hash), so a full load of `/shared` is
+ * what asks whether it was kept anywhere a reload comes back to.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -100,6 +102,20 @@ test('the owner makes a link behind a password with a cap of 2, and reads it off
   await expect(dialog).toContainText('Password on · 0 of 2 downloads');
 });
 
+test('the link survives a reload of /shared', async () => {
+  // `/shared` is a full load already — the tab that minted the link has left
+  // that document behind — and the reload is the by-hand step: what the row
+  // offers must be what this browser kept, not what a tab still had in memory.
+  await openShared();
+  const link = sharedRow(PNG.name).getByLabel('Link', { exact: true });
+  await expect(link).toHaveValue(url);
+
+  await owner.reload();
+  await expect(owner.getByRole('heading', { name: 'Shared links' })).toBeVisible();
+  await expect(link).toHaveValue(url);
+  await expect(sharedRow(PNG.name).getByRole('button', { name: 'Copy link' })).toBeVisible();
+});
+
 test('a stranger meets the gate, fails once, and then sees the image', async () => {
   first = await stranger();
   await first.goto(url);
@@ -116,10 +132,13 @@ test('a stranger meets the gate, fails once, and then sees the image', async () 
 });
 
 test('reloading the page spends nothing', async () => {
+  // The gate was passed once, in this browser: it holds a live guest session,
+  // `/meta` says so, and each reload opens straight to the file — no password
+  // asked again, no download spent.
   for (let i = 0; i < 2; i++) {
     await first.reload();
-    await passGate(first, PASSWORD);
     await expectImage(first, PNG.name);
+    await expect(first.getByLabel('Password')).toHaveCount(0);
   }
   await expectCount(PNG.name, '0 of 2');
 });
@@ -148,13 +167,17 @@ test('a second stranger takes the last download, and a third meets the limit', a
 });
 
 test('raising the cap in Settings lets the third stranger in', async () => {
-  const dialog = await openShare(PNG.name);
-  // This tab reloaded since it made the link, so the URL is gone from it: New
-  // link stands where Copy would, never a disabled Copy.
-  await expect(dialog.getByRole('button', { name: 'New link' })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Copy link' })).toHaveCount(0);
+  // From the list this time: a row on `/shared` opens the file's own Share
+  // dialog. The row's button and the one inside the dialog share the name
+  // Settings, so each is found inside its own owner, and by its exact name.
+  await openShared();
+  await sharedRow(PNG.name).getByRole('button', { name: 'Settings', exact: true }).click();
+  const dialog = shareDialog(PNG.name);
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Password on · 2 of 2 downloads');
+  await expect(dialog.getByLabel('Link', { exact: true })).toHaveValue(url);
 
-  await dialog.getByRole('button', { name: 'Settings' }).click();
+  await dialog.getByRole('button', { name: 'Settings', exact: true }).click();
   await dialog.getByLabel('Download limit').fill('3');
   await dialog.getByRole('button', { name: 'Save settings' }).click();
   await expect(dialog).toContainText('Password on · 2 of 3 downloads');
