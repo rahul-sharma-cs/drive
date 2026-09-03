@@ -51,7 +51,10 @@ type Config struct {
 	TrashAge time.Duration
 	// TokenAge is how long a revoked or expired API token row is kept.
 	TokenAge time.Duration
-	// AccessLogAge is how long a denied share-access row is kept.
+	// AccessLogAge is how long a share-access row is kept -- view, download
+	// and denied alike. Audit rows outlive the share, not the retention
+	// window: 90 days is what the owner's log screen reads, and it is the
+	// whole answer to how long a visitor's IP address is retained.
 	AccessLogAge time.Duration
 	// ThrottleAge is how far past its start a throttle window is dropped. Every
 	// budget's window is an hour or less, so a day is generous.
@@ -424,7 +427,7 @@ func (g *GC) deleteExpiredRows(ctx context.Context) error {
 			    OR expires_at < now() - make_interval(secs => $1)`,
 			[]any{g.Cfg.TokenAge.Seconds()}},
 		{"share_access_log", `DELETE FROM share_access_log
-			 WHERE action = 'denied' AND at < now() - make_interval(secs => $1)`,
+			 WHERE at < now() - make_interval(secs => $1)`,
 			[]any{g.Cfg.AccessLogAge.Seconds()}},
 	}
 

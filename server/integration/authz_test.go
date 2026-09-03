@@ -1,13 +1,16 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/rahul-sharma-cs/drive/server/internal/share"
 	"github.com/rahul-sharma-cs/drive/server/internal/testutil"
 )
 
@@ -37,8 +40,13 @@ const (
 	roleOwner role = "owner" // owns the node in the path
 	roleOther role = "other" // a different signed-in user
 	roleAnon  role = "anon"  // signed out
-	// Still to come, if those features ship: roleGuest (a share guest
-	// session) and roleBearer (a personal access token).
+	// roleGuest holds a live share guest session and nothing else. Its
+	// cookie is presented as an explicit header on EVERY request regardless
+	// of path: the jar honours the cookie's Path=/api/s/ rule, so a row that
+	// only sent it where a browser would would be an assertion about
+	// net/http, not about Drive.
+	roleGuest role = "guest"
+	// Still to come, if it ships: roleBearer (a personal access token).
 )
 
 // want is one expected outcome: a status, and the error envelope's code when
@@ -74,6 +82,7 @@ type authzCase struct {
 	owner want
 	other want // zero value means the standard 404 not_found
 	anon  want // zero value means the standard 401 unauthorized
+	guest want // zero value means the standard 401 unauthorized
 
 	// restoresSession marks the logout row, after which the two signed-in
 	// clients have to sign back in.
@@ -84,6 +93,21 @@ func TestAuthzMatrix(t *testing.T) {
 	owner := H.NewUser(t)
 	other := H.NewUser(t)
 	anon := H.Anonymous(t)
+
+	// The guest: a live session on a real share of the owner's, minted
+	// before the matrix so the scene digests stay stable.
+	guestFile := H.CreateFile(t, owner.ID, owner.RootID,
+		"authz-guest-"+uuid.NewString()[:8]+".bin", []byte("guest fixture bytes"))
+	shareStore := share.NewStore(H.Pool)
+	guestShare, _, err := shareStore.Create(context.Background(), owner.ID, guestFile, share.Settings{})
+	if err != nil {
+		t.Fatalf("creating the guest's share: %v", err)
+	}
+	rawGuest, _, err := shareStore.MintGuest(context.Background(), guestShare.ID)
+	if err != nil {
+		t.Fatalf("minting the guest session: %v", err)
+	}
+	guest := H.Anonymous(t).WithHeader("Cookie", "gs_"+guestShare.ID.String()+"="+rawGuest)
 
 	cases := []authzCase{
 		{
@@ -204,11 +228,14 @@ func TestAuthzMatrix(t *testing.T) {
 			owner:           want{status: http.StatusNoContent},
 			other:           want{status: http.StatusNoContent},
 			anon:            want{status: http.StatusNoContent},
+			guest:           want{status: http.StatusNoContent},
 			restoresSession: true,
 		},
 	}
 
-	clients := map[role]*testutil.Client{roleOwner: owner, roleOther: other, roleAnon: anon}
+	clients := map[role]*testutil.Client{
+		roleOwner: owner, roleOther: other, roleAnon: anon, roleGuest: guest,
+	}
 
 	for i, c := range cases {
 		// Rejections are asserted against the digest, so the cases cannot run
@@ -216,9 +243,10 @@ func TestAuthzMatrix(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			sc := buildScene(t, i, owner, other)
 
-			// Anonymous first, then the other user, then the owner -- whose
-			// row is the only one that may legitimately destroy the scene.
-			for _, role := range []role{roleAnon, roleOther, roleOwner} {
+			// Anonymous first, then the guest, then the other user, then
+			// the owner -- whose row is the only one that may legitimately
+			// destroy the scene.
+			for _, role := range []role{roleAnon, roleGuest, roleOther, roleOwner} {
 				w := c.expected(role)
 				before := testutil.Digest(t, H.Pool, owner.ID, other.ID)
 
@@ -256,6 +284,11 @@ func (c authzCase) expected(r role) want {
 			return wantNotFound
 		}
 		return c.other
+	case roleGuest:
+		if c.guest == (want{}) {
+			return wantUnauthorized
+		}
+		return c.guest
 	default:
 		if c.anon == (want{}) {
 			return wantUnauthorized
@@ -407,4 +440,69 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// A guest session is scoped to its share in the database, not by the cookie
+// jar: a guest of share A presents its cookie at share B's routes -- the
+// path matches -- and is nobody there, because the row behind it says
+// share_id = A whatever the cookie was named.
+func TestGuestOfShareAIsNobodyAtShareB(t *testing.T) {
+	owner := H.NewUser(t)
+	ctx := context.Background()
+	store := share.NewStore(H.Pool)
+
+	fileA := H.CreateFile(t, owner.ID, owner.RootID, "guest-a-"+uuid.NewString()[:8]+".bin", []byte("share a bytes"))
+	fileB := H.CreateFile(t, owner.ID, owner.RootID, "guest-b-"+uuid.NewString()[:8]+".bin", []byte("share b bytes"))
+	shareA, tokenA, err := store.Create(ctx, owner.ID, fileA, share.Settings{})
+	if err != nil {
+		t.Fatalf("creating share A: %v", err)
+	}
+	shareB, tokenB, err := store.Create(ctx, owner.ID, fileB, share.Settings{})
+	if err != nil {
+		t.Fatalf("creating share B: %v", err)
+	}
+	rawA, _, err := store.MintGuest(ctx, shareA.ID)
+	if err != nil {
+		t.Fatalf("minting the guest: %v", err)
+	}
+	// The forged shape: A's session value under B's own cookie name,
+	// alongside the honest one.
+	cookies := "gs_" + shareB.ID.String() + "=" + rawA + "; gs_" + shareA.ID.String() + "=" + rawA
+
+	get := func(path string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, H.BaseURL()+path, nil)
+		if err != nil {
+			t.Fatalf("building the request: %v", err)
+		}
+		req.Header.Set("Cookie", cookies)
+		client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+
+	// At A the session is real: the download redirects to the store.
+	resp := get("/api/s/" + tokenA + "/download")
+	if resp.StatusCode != http.StatusFound || !strings.Contains(resp.Header.Get("Location"), "X-Amz-Signature") {
+		t.Fatalf("the guest's own share: status %d Location %q, want a signed store URL",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+	// At B it is nobody, however the cookie is named.
+	resp = get("/api/s/" + tokenB + "/download")
+	if got := resp.Header.Get("Location"); resp.StatusCode != http.StatusFound || got != "/s/"+tokenB+"?reason=session" {
+		t.Errorf("share B's download: status %d Location %q, want reason=session", resp.StatusCode, got)
+	}
+	var count int
+	if err := H.Pool.QueryRow(ctx, `SELECT download_count FROM shares WHERE id = $1`, shareB.ID).Scan(&count); err != nil {
+		t.Fatalf("reading share B's counter: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("share B's download_count = %d after the refusal, want 0", count)
+	}
 }

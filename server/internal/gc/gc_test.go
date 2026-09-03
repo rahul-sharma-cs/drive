@@ -40,6 +40,7 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 	"github.com/rahul-sharma-cs/drive/server/internal/db"
 	"github.com/rahul-sharma-cs/drive/server/internal/node"
+	"github.com/rahul-sharma-cs/drive/server/internal/share"
 	"github.com/rahul-sharma-cs/drive/server/internal/testutil"
 	"github.com/rahul-sharma-cs/drive/server/internal/upload"
 )
@@ -741,6 +742,41 @@ func TestGCPrunesExpiredAndRetiredRows(t *testing.T) {
 		t.Fatalf("inserting a live token: %v", err)
 	}
 
+	// The share sweeps: guest sessions go at expiry, and EVERY access-log
+	// action -- view, download and denied alike -- goes at AccessLogAge.
+	// A denied-only prune would retain anonymous visitors' IP addresses
+	// forever.
+	shareFile, _, _ := w.file(w.root, "gc-shared.bin", gcData(64))
+	sh, _, err := share.NewStore(w.pool).Create(w.ctx, w.user, shareFile, share.Settings{})
+	if err != nil {
+		t.Fatalf("creating the share: %v", err)
+	}
+	liveGuest, deadGuest := uuid.New(), uuid.New()
+	for id, expires := range map[uuid.UUID]string{
+		liveGuest: "now() + interval '1 day'",
+		deadGuest: "now() - interval '1 minute'",
+	} {
+		if _, err := w.pool.Exec(w.ctx, fmt.Sprintf(
+			`INSERT INTO share_guest_sessions (id, share_id, token_hash, expires_at) VALUES ($1, $2, $3, %s)`, expires),
+			id, sh.ID, []byte(id.String())); err != nil {
+			t.Fatalf("inserting a guest session: %v", err)
+		}
+	}
+	logRow := func(action, age string) int64 {
+		var rowID int64
+		if err := w.pool.QueryRow(w.ctx, fmt.Sprintf(
+			`INSERT INTO share_access_log (share_id, action, at) VALUES ($1, $2, now() - interval '%s') RETURNING id`, age),
+			sh.ID, action).Scan(&rowID); err != nil {
+			t.Fatalf("inserting a %s row: %v", action, err)
+		}
+		return rowID
+	}
+	oldView := logRow("view", "91 days")
+	oldDownload := logRow("download", "91 days")
+	oldDenied := logRow("denied", "91 days")
+	freshView := logRow("view", "89 days")
+	freshDownload := logRow("download", "1 day")
+
 	w.run()
 
 	cases := []struct {
@@ -755,6 +791,13 @@ func TestGCPrunesExpiredAndRetiredRows(t *testing.T) {
 		{"the stale throttle window", `SELECT count(*) FROM throttle WHERE key = $1`, throttleKey, 0},
 		{"the long-revoked API token", `SELECT count(*) FROM api_tokens WHERE id = $1`, staleToken, 0},
 		{"the live API token", `SELECT count(*) FROM api_tokens WHERE id = $1`, freshToken, 1},
+		{"the live guest session", `SELECT count(*) FROM share_guest_sessions WHERE id = $1`, liveGuest, 1},
+		{"the expired guest session", `SELECT count(*) FROM share_guest_sessions WHERE id = $1`, deadGuest, 0},
+		{"the 91-day-old view row", `SELECT count(*) FROM share_access_log WHERE id = $1`, oldView, 0},
+		{"the 91-day-old download row", `SELECT count(*) FROM share_access_log WHERE id = $1`, oldDownload, 0},
+		{"the 91-day-old denied row", `SELECT count(*) FROM share_access_log WHERE id = $1`, oldDenied, 0},
+		{"the 89-day-old view row", `SELECT count(*) FROM share_access_log WHERE id = $1`, freshView, 1},
+		{"the 1-day-old download row", `SELECT count(*) FROM share_access_log WHERE id = $1`, freshDownload, 1},
 	}
 	for _, c := range cases {
 		var n int

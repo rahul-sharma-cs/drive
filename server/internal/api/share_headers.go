@@ -54,18 +54,39 @@ func (s *Server) rateLimitShare(next http.Handler) http.Handler {
 	})
 }
 
+// rateLimitSharePassword charges the AUTH bucket with the share group's
+// logging. POST /api/s/{token}/password is the one unauthenticated route in
+// the group that reaches Argon2, so it is bounded exactly like login is --
+// but RateLimitAuth's refusal line logs r.URL.Path, and this path carries
+// the credential. Same bucket, same numbers, its own line.
+func (s *Server) rateLimitSharePassword(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := ClientIP(r)
+		if s.AuthRate != nil && !s.AuthRate.allow(ip) {
+			LoggerFrom(r.Context()).Warn("share password request refused by the per-IP bucket",
+				"client_ip", ip, "route", chi.RouteContext(r.Context()).RoutePattern())
+			WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
+				"too many requests. Try again in a minute.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // mountShare is the /api/s group, where the public share routes live. It
-// carries shareHeaders and the share bucket on everything under it, including
-// its own 404 and 405, so an unmatched subpath cannot fall through to /api's
-// bare JSON 404 without the headers.
+// carries shareHeaders on everything under it, including its own 404 and
+// 405, so an unmatched subpath cannot fall through to /api's bare JSON 404
+// without the headers.
 //
-// The catch-all Handle is load-bearing, exactly as it is for /api: chi skips a
-// mux's middleware when the mux has no routes, and a group whose only
-// registrations are NotFound and MethodNotAllowed has none.
+// The buckets are attached per route in mountShareGuest rather than here:
+// group middleware runs before the subrouter has matched anything, so a
+// refusal logged from this level could only name /api/s/* -- per route, the
+// line names the real pattern, and the token still never appears.
 func (s *Server) mountShare(r chi.Router) {
 	r.Route("/s", func(r chi.Router) {
 		r.Use(shareHeaders)
-		r.Use(s.rateLimitShare)
+
+		s.mountShareGuest(r)
 
 		unmatched := func(w http.ResponseWriter, r *http.Request) {
 			WriteErr(w, r, http.StatusNotFound, CodeNotFound, "no such endpoint")

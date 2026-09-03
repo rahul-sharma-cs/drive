@@ -1,17 +1,21 @@
 package api
 
-// Share links, the owner's half: make one, list them, change one, stop one.
-// Every route here is owner-scoped in SQL (created_by = caller), so another
-// user's share id is 404 exactly like an unknown one. The public half -- the
-// /api/s/{token}/* routes a recipient drives -- is registered inside
-// mountShare's group in share_headers.go, which carries the headers and the
-// bucket those routes need and these do not.
+// Share links, both halves. The owner's: make one, list them, change one,
+// stop one -- every owner route is owner-scoped in SQL (created_by =
+// caller), so another user's share id is 404 exactly like an unknown one.
+// The public half: the five /api/s/{token}/* routes anyone holding the URL
+// drives, registered into mountShare's group in share_headers.go, which
+// carries the headers every answer under /api/s needs. The public handlers
+// never read the user the chain may have loaded -- an owner's own
+// drive_session grants a share page nothing, and a guest cookie grants the
+// app nothing.
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,6 +25,7 @@ import (
 	"github.com/rahul-sharma-cs/drive/server/internal/auth"
 	"github.com/rahul-sharma-cs/drive/server/internal/node"
 	"github.com/rahul-sharma-cs/drive/server/internal/share"
+	"github.com/rahul-sharma-cs/drive/server/internal/upload"
 )
 
 // mountShares registers the owner's routes. The two writers sit in the
@@ -363,4 +368,440 @@ func (s *Server) revokeShare(w http.ResponseWriter, r *http.Request) {
 	}
 	LoggerFrom(r.Context()).Info("share revoked", "share_id", id, "user_id", u.ID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------- recipients --
+
+// mountShareGuest registers the five public routes into mountShare's /api/s
+// group. The share bucket sits in front of the four page routes;
+// /password is the one unauthenticated route here that reaches Argon2, so it
+// spends the auth allowance instead, exactly like login -- through its own
+// wrapper, because RateLimitAuth's refusal line logs the path and this path
+// carries the credential.
+func (s *Server) mountShareGuest(r chi.Router) {
+	r.With(s.rateLimitShare).Get("/{token}/meta", s.shareMeta)
+	r.With(s.rateLimitShare).Post("/{token}/session", s.shareSession)
+	r.With(s.rateLimitSharePassword).Post("/{token}/password", s.sharePassword)
+	r.With(s.rateLimitShare).Get("/{token}/download", s.shareDownload)
+	r.With(s.rateLimitShare).Get("/{token}/preview", s.sharePreview)
+}
+
+// The constant reasons a share refusal is logged under. A handler line
+// carries one of these, the share id when there is one, and the route
+// pattern -- never the token, the password or the cookie value: a
+// passwordless token is the entire credential, and these lines are what
+// production writes. The four dead states log as the state's own name
+// (revoked, expired, trashed, purged).
+const (
+	shareReasonNotFound           = "not_found"
+	shareReasonNoSession          = "no_session"
+	shareReasonForeignSession     = "foreign_session"
+	shareReasonBadPassword        = "bad_password"
+	shareReasonLocked             = "locked"
+	shareReasonBusy               = "busy"
+	shareReasonExhausted          = "exhausted"
+	shareReasonUnsupportedPreview = "unsupported_preview"
+)
+
+// shareNotFoundMsg is the one identical 404 every unknown or dead link gets:
+// unknown, revoked, expired, trashed and purged must not be distinguishable
+// from outside.
+const shareNotFoundMsg = "no such share"
+
+// shareRefused is the refusal line. The route pattern stands in for the
+// path, which carries the token; shareID is nil only for an unknown token,
+// where there is nothing to name.
+func shareRefused(r *http.Request, shareID *uuid.UUID, reason string) {
+	l := LoggerFrom(r.Context()).With(
+		"reason", reason, "route", chi.RouteContext(r.Context()).RoutePattern())
+	if shareID != nil {
+		l = l.With("share_id", *shareID)
+	}
+	l.Info("share request refused")
+}
+
+// shareFailed logs the real cause and tells the caller nothing about it.
+func (s *Server) shareFailed(w http.ResponseWriter, r *http.Request, what string, err error) {
+	LoggerFrom(r.Context()).Error("share: "+what, "error", err)
+	WriteErr(w, r, http.StatusInternalServerError, CodeInternal, "internal server error")
+}
+
+// shareAccess writes one access-log row, outside any transaction that can
+// roll back -- a denied row for a spent cap must survive CountOnce's
+// rollback. A failed write never fails the request that caused it: the
+// answer was already decided, and the log is the owner's record, not a gate.
+// Mode 1 always passes a nil email; a share handler never reads a cookie
+// that could name anyone.
+func (s *Server) shareAccess(r *http.Request, shareID uuid.UUID, action string) {
+	if err := s.shares().Log(r.Context(), &shareID, nil, action, ClientIP(r), r.UserAgent()); err != nil {
+		LoggerFrom(r.Context()).Error("writing the share access log",
+			"error", err, "action", action, "share_id", shareID)
+	}
+}
+
+// liveShare resolves {token} and refuses everything that is not a live link
+// with the identical 404 -- writing the denied row the owner is owed when a
+// share row exists to attribute it to, and nothing at all for an unknown
+// token, so a scan cannot fill the table. false means the refusal (or the
+// 500) is already written.
+func (s *Server) liveShare(w http.ResponseWriter, r *http.Request) (*share.Resolved, bool) {
+	res, err := s.shares().Resolve(r.Context(), auth.HashToken(chi.URLParam(r, "token")))
+	switch {
+	case errors.Is(err, share.ErrNotFound):
+		shareRefused(r, nil, shareReasonNotFound)
+	case err != nil:
+		s.shareFailed(w, r, "resolving a link", err)
+		return nil, false
+	case res.State != share.StateLive:
+		shareRefused(r, &res.ShareID, string(res.State))
+		s.shareAccess(r, res.ShareID, share.ActionDenied)
+	default:
+		return res, true
+	}
+	WriteErr(w, r, http.StatusNotFound, CodeNotFound, shareNotFoundMsg)
+	return nil, false
+}
+
+// ------------------------------------------------------------- guest cookie --
+
+// guestCookieName is per share on purpose: two links open in two tabs must
+// not share a session, and the name is how a handler asks for this share's
+// cookie and no other's -- the handler resolves the share by token first and
+// only then knows which name to read.
+func guestCookieName(shareID uuid.UUID) string { return "gs_" + shareID.String() }
+
+// setGuestCookie writes (or re-writes, on a slide) the guest cookie. The
+// path keeps it off everything that is not a share API call; Lax plus the
+// X-Drive-Client requirement on the POSTs and /preview is the CSRF posture,
+// and /download's residual without the header is accepted and named in the
+// protocol.
+func (s *Server) setGuestCookie(w http.ResponseWriter, shareID uuid.UUID, raw string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     guestCookieName(shareID),
+		Value:    raw,
+		Path:     "/api/s/",
+		MaxAge:   int(share.GuestSessionTTL.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   s.secureCookies(),
+	})
+}
+
+// guestFrom resolves this share's cookie to its live guest session. reason
+// is the log constant when there is none: no_session for a missing cookie,
+// foreign_session for one whose row is not a live session of THIS share --
+// another share's, a forged name or a lapsed one alike, which the store
+// keeps deliberately indistinguishable. A guest of share A really does
+// present its cookie at share B's routes -- the path matches -- and the row
+// behind it still says share_id = A, so it answers nothing here however the
+// cookie was named.
+func (s *Server) guestFrom(r *http.Request, shareID uuid.UUID) (g share.Guest, raw, reason string, err error) {
+	c, cerr := r.Cookie(guestCookieName(shareID))
+	if cerr != nil || c.Value == "" {
+		return share.Guest{}, "", shareReasonNoSession, nil
+	}
+	g, err = s.shares().GuestFor(r.Context(), shareID, c.Value)
+	if errors.Is(err, share.ErrNotFound) {
+		return share.Guest{}, "", shareReasonForeignSession, nil
+	}
+	if err != nil {
+		return share.Guest{}, "", "", err
+	}
+	return g, c.Value, "", nil
+}
+
+// slideGuest extends the session to now()+30m and re-sets the cookie, so 30
+// minutes means 30 minutes of inactivity rather than of visit -- what makes
+// the TTL survivable next to a 1 h presign. Best effort on purpose: the URL
+// was already earned, and a session that lapsed in the same instant only
+// means the next request re-asks.
+func (s *Server) slideGuest(w http.ResponseWriter, r *http.Request, shareID uuid.UUID, g share.Guest, raw string) {
+	if _, err := s.shares().ReuseGuest(r.Context(), g.ID); err != nil {
+		if !errors.Is(err, share.ErrNotFound) {
+			LoggerFrom(r.Context()).Warn("sliding a guest session", "error", err, "share_id", shareID)
+		}
+		return
+	}
+	s.setGuestCookie(w, shareID, raw)
+}
+
+// mintOrReuseGuest answers /session and a passed password gate, idempotent
+// per browser: a live session presented back is slid and re-set -- no row
+// inserted, no view logged -- so a reload is not a second visitor. Only a
+// browser with none mints, which is what keeps the view log at one row per
+// gate pass and an unauthenticated caller's writes bounded.
+func (s *Server) mintOrReuseGuest(w http.ResponseWriter, r *http.Request, shareID uuid.UUID) {
+	g, raw, reason, err := s.guestFrom(r, shareID)
+	if err != nil {
+		s.shareFailed(w, r, "reading the guest session", err)
+		return
+	}
+	if reason == "" {
+		_, err := s.shares().ReuseGuest(r.Context(), g.ID)
+		switch {
+		case err == nil:
+			s.setGuestCookie(w, shareID, raw)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		case !errors.Is(err, share.ErrNotFound):
+			s.shareFailed(w, r, "sliding the guest session", err)
+			return
+		}
+		// The row lapsed between the read and the slide; mint a fresh one.
+	}
+	fresh, _, err := s.shares().MintGuest(r.Context(), shareID)
+	if err != nil {
+		s.shareFailed(w, r, "minting a guest session", err)
+		return
+	}
+	s.setGuestCookie(w, shareID, fresh)
+	s.shareAccess(r, shareID, share.ActionView)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ------------------------------------------------------------------- routes --
+
+// shareMetaResponse is GET /meta's body: what the page shows before any
+// gate. preview is the server's answer for this file on a share page -- the
+// allowlist minus PDF -- and exhausted is the cap's state for THIS browser,
+// so the person who legitimately spent the one allowed download is not
+// locked out of their own page by a reload.
+type shareMetaResponse struct {
+	Name             string     `json:"name"`
+	Size             int64      `json:"size"`
+	Mime             string     `json:"mime"`
+	RequiresPassword bool       `json:"requires_password"`
+	ExpiresAt        *time.Time `json:"expires_at"`
+	Exhausted        bool       `json:"exhausted"`
+	Preview          bool       `json:"preview"`
+}
+
+// GET /api/s/{token}/meta. It never sets a cookie and never logs a view --
+// the page's own load must cost the visitor nothing -- but it may READ the
+// guest cookie, because exhausted is a per-browser answer.
+func (s *Server) shareMeta(w http.ResponseWriter, r *http.Request) {
+	res, ok := s.liveShare(w, r)
+	if !ok {
+		return
+	}
+	exhausted := res.MaxDownloads != nil && res.DownloadCount >= *res.MaxDownloads
+	if exhausted {
+		g, _, reason, err := s.guestFrom(r, res.ShareID)
+		if err != nil {
+			s.shareFailed(w, r, "reading the guest session", err)
+			return
+		}
+		if reason == "" && g.DownloadedAt != nil {
+			exhausted = false
+		}
+	}
+	_, preview := upload.SharePreviewContentType(res.Mime)
+	WriteJSON(w, http.StatusOK, shareMetaResponse{
+		Name:             res.Name,
+		Size:             res.Size,
+		Mime:             res.Mime,
+		RequiresPassword: res.PasswordHash != nil,
+		ExpiresAt:        res.ExpiresAt,
+		Exhausted:        exhausted,
+		Preview:          preview,
+	})
+}
+
+// POST /api/s/{token}/session -- passwordless shares only; a password share
+// mints through /password, and answers 401 here so the gate cannot be walked
+// around.
+func (s *Server) shareSession(w http.ResponseWriter, r *http.Request) {
+	res, ok := s.liveShare(w, r)
+	if !ok {
+		return
+	}
+	if res.PasswordHash != nil {
+		WriteErr(w, r, http.StatusUnauthorized, CodeUnauthorized, "this link asks for its password")
+		return
+	}
+	s.mintOrReuseGuest(w, r, res.ShareID)
+}
+
+// POST /api/s/{token}/password. The durable budget is consulted before
+// Argon2 runs -- a locked caller must not cost a hash -- and it is keyed
+// share_id:ip: keyed on the share alone, anyone holding a public link could
+// lock its real recipient out for as long as they cared to keep sending
+// wrong passwords.
+func (s *Server) sharePassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := ReadJSON(r, &req); err != nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "expected {password}")
+		return
+	}
+	res, ok := s.liveShare(w, r)
+	if !ok {
+		return
+	}
+	if res.PasswordHash == nil {
+		WriteErr(w, r, http.StatusUnprocessableEntity, CodeInvalid, "this link has no password")
+		return
+	}
+
+	ctx := r.Context()
+	key := res.ShareID.String() + ":" + ClientIP(r)
+	allowed, err := auth.Allowed(ctx, s.DB, auth.ScopeSharePassword, key,
+		auth.SharePasswordFailLimit, auth.SharePasswordFailWindow)
+	if err != nil {
+		s.shareFailed(w, r, "checking the password budget", err)
+		return
+	}
+	if !allowed {
+		shareRefused(r, &res.ShareID, shareReasonLocked)
+		s.shareAccess(r, res.ShareID, share.ActionDenied)
+		WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
+			"too many attempts. Try again in a few minutes.")
+		return
+	}
+
+	right, err := s.Argon2.Verify(*res.PasswordHash, req.Password)
+	if errors.Is(err, auth.ErrBusy) {
+		// authBusy's answer through this group's own line: that helper logs
+		// r.URL.Path, and this path carries the credential.
+		shareRefused(r, &res.ShareID, shareReasonBusy)
+		WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
+			"we are busy right now. Try again in a moment.")
+		return
+	}
+	if err != nil {
+		s.shareFailed(w, r, "verifying a share password", err)
+		return
+	}
+	if !right {
+		if _, err := auth.Bump(ctx, s.DB, auth.ScopeSharePassword, key, auth.SharePasswordFailWindow); err != nil {
+			LoggerFrom(ctx).Error("charging the share password budget", "error", err)
+		}
+		shareRefused(r, &res.ShareID, shareReasonBadPassword)
+		s.shareAccess(r, res.ShareID, share.ActionDenied)
+		WriteErr(w, r, http.StatusUnauthorized, CodeUnauthorized, "that password is not right")
+		return
+	}
+	s.mintOrReuseGuest(w, r, res.ShareID)
+}
+
+// shareRedirect is a 302 with no body and no Cache-Control write of its own:
+// the group's shareHeaders already marked every answer here private,
+// no-store, and a body would carry the URL onward.
+func shareRedirect(w http.ResponseWriter, to string) {
+	w.Header().Set("Location", to)
+	w.WriteHeader(http.StatusFound)
+}
+
+// GET /api/s/{token}/download -- a browser navigation, so every refusal is a
+// redirect back to the page, never JSON: a person following a link cannot
+// act on an error envelope. It cannot carry X-Drive-Client either, and
+// relies on SameSite=Lax plus once-per-session counting: a cross-site click
+// can spend a slot the victim's own session would have spent anyway --
+// accepted, and named in the protocol so nobody re-derives it.
+func (s *Server) shareDownload(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+	back := func(reason string) {
+		shareRedirect(w, "/s/"+url.PathEscape(token)+"?reason="+reason)
+	}
+
+	res, err := s.shares().Resolve(r.Context(), auth.HashToken(token))
+	switch {
+	case errors.Is(err, share.ErrNotFound):
+		shareRefused(r, nil, shareReasonNotFound)
+		back("gone")
+		return
+	case err != nil:
+		s.shareFailed(w, r, "resolving a link", err)
+		return
+	case res.State != share.StateLive:
+		shareRefused(r, &res.ShareID, string(res.State))
+		s.shareAccess(r, res.ShareID, share.ActionDenied)
+		back("gone")
+		return
+	}
+
+	g, raw, reason, err := s.guestFrom(r, res.ShareID)
+	if err != nil {
+		s.shareFailed(w, r, "reading the guest session", err)
+		return
+	}
+	if reason != "" {
+		shareRefused(r, &res.ShareID, reason)
+		back("session")
+		return
+	}
+
+	exhausted, err := s.shares().CountOnce(r.Context(), g.ID, res.ShareID)
+	if err != nil {
+		s.shareFailed(w, r, "counting the download", err)
+		return
+	}
+	if exhausted {
+		shareRefused(r, &res.ShareID, shareReasonExhausted)
+		s.shareAccess(r, res.ShareID, share.ActionDenied)
+		back("exhausted")
+		return
+	}
+
+	signed, err := s.presigner().GetURL(r.Context(), res.ObjectKey, res.Name)
+	if err != nil {
+		s.shareFailed(w, r, "presigning a share download", err)
+		return
+	}
+	s.shareAccess(r, res.ShareID, share.ActionDownload)
+	s.slideGuest(w, r, res.ShareID, g, raw)
+	LoggerFrom(r.Context()).Info("share download issued", "share_id", res.ShareID, "size", res.Size)
+	shareRedirect(w, signed.URL)
+}
+
+// GET /api/s/{token}/preview -- an XHR, so refusals are JSON. It requires
+// X-Drive-Client explicitly: RequireClientHeader exempts GETs, and this is a
+// state-touching GET (it issues a URL and slides the session), so the gate
+// is enforced here at no cost -- the SPA sends the header on GETs anyway.
+// It never increments the cap, but a spent link refuses any browser that has
+// not itself counted, so a dead budget cannot go on handing out bytes.
+func (s *Server) sharePreview(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get(ClientHeader) == "" {
+		WriteErr(w, r, http.StatusForbidden, CodeInvalid, "missing X-Drive-Client header")
+		return
+	}
+	res, ok := s.liveShare(w, r)
+	if !ok {
+		return
+	}
+	g, raw, reason, err := s.guestFrom(r, res.ShareID)
+	if err != nil {
+		s.shareFailed(w, r, "reading the guest session", err)
+		return
+	}
+	if reason != "" {
+		shareRefused(r, &res.ShareID, reason)
+		WriteErr(w, r, http.StatusUnauthorized, CodeUnauthorized, "no live session for this link")
+		return
+	}
+	// res.Mime is the uploader's claim and only ever a lookup key; what gets
+	// signed is the allowlist's own constant, and a share page's allowlist
+	// additionally refuses PDF -- a stranger's document in an unsandboxed
+	// frame is not the bargain the owner's own preview accepted.
+	contentType, previewable := upload.SharePreviewContentType(res.Mime)
+	if !previewable {
+		shareRefused(r, &res.ShareID, shareReasonUnsupportedPreview)
+		WriteErr(w, r, http.StatusUnsupportedMediaType, CodeUnsupported, "no preview for this file type")
+		return
+	}
+	if res.MaxDownloads != nil && res.DownloadCount >= *res.MaxDownloads && g.DownloadedAt == nil {
+		shareRefused(r, &res.ShareID, shareReasonExhausted)
+		s.shareAccess(r, res.ShareID, share.ActionDenied)
+		WriteErr(w, r, http.StatusForbidden, CodeExhausted, "this link has reached its download limit")
+		return
+	}
+	signed, err := s.presigner().PreviewURL(r.Context(), res.ObjectKey, res.Name, contentType)
+	if err != nil {
+		s.shareFailed(w, r, "presigning a share preview", err)
+		return
+	}
+	s.shareAccess(r, res.ShareID, share.ActionDownload)
+	s.slideGuest(w, r, res.ShareID, g, raw)
+	WriteJSON(w, http.StatusOK, previewLink{URL: signed.URL, ExpiresAt: signed.ExpiresAt, Mime: contentType})
 }

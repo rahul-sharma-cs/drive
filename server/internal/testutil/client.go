@@ -32,6 +32,7 @@ type Client struct {
 	t            testing.TB
 	http         *http.Client
 	clientHeader bool
+	extraHeaders http.Header
 }
 
 // NewUser signs a fresh account up, marks the address verified, and signs in.
@@ -153,6 +154,21 @@ func (c *Client) WithoutClientHeader() *Client {
 	return &clone
 }
 
+// WithHeader returns a copy that adds one fixed header to every request. The
+// authz matrix uses it to present a guest cookie on every path: the jar
+// honours the cookie's Path=/api/s/ rule, and a row that only ever sent the
+// cookie where a browser would would be an assertion about net/http, not
+// about Drive.
+func (c *Client) WithHeader(name, value string) *Client {
+	clone := *c
+	clone.extraHeaders = c.extraHeaders.Clone()
+	if clone.extraHeaders == nil {
+		clone.extraHeaders = http.Header{}
+	}
+	clone.extraHeaders.Set(name, value)
+	return &clone
+}
+
 // ----------------------------------------------------------------- requests --
 
 // Do sends a request and reads the whole response. body may be nil, a string or
@@ -187,6 +203,9 @@ func (c *Client) Do(t testing.TB, method, path string, body any) *Resp {
 		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 			req.Header.Set("X-Drive-Client", "web")
 		}
+	}
+	for name, values := range c.extraHeaders {
+		req.Header[name] = values
 	}
 
 	resp, err := c.http.Do(req)

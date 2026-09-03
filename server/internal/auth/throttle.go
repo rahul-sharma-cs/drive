@@ -64,6 +64,13 @@ const (
 	PasswordChangeFailLimit  = 10
 	PasswordChangeFailWindow = 15 * time.Minute
 
+	// The same allowance again for wrong passwords on a share link, spent per
+	// (share, address): the address is in the key so a stranger holding a
+	// public link cannot lock its real recipient out, and the share is in the
+	// key so guessing at one link does not lock every link.
+	SharePasswordFailLimit  = 10
+	SharePasswordFailWindow = 15 * time.Minute
+
 	EmailSendLimit  = 5
 	EmailSendWindow = time.Hour
 

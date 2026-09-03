@@ -1,9 +1,9 @@
 package api
 
-// The public share surface before it has any routes. The group's headers, its
-// bucket and the request logger's redaction are properties of the chain, and
-// they have to hold for an unmatched path before the first route lands --
-// otherwise the first route would also be the first test of them.
+// The public share surface's chain properties: the headers on everything
+// under /api/s (matched or not), the two buckets, and the request logger's
+// redaction. The five routes' own behaviour lives in share_routes_test.go;
+// what belongs here is what must hold whatever a handler does.
 
 import (
 	"bytes"
@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rahul-sharma-cs/drive/server/internal/config"
 )
@@ -35,19 +37,20 @@ func assertShareHeaders(t *testing.T, what string, h http.Header) {
 
 // debugLogServer builds a Server whose logger writes every level into the
 // returned buffer, so a test can assert what a whole round trip put in the log.
-func debugLogServer(t *testing.T, cfg *config.Config) (*Server, *bytes.Buffer) {
+func debugLogServer(t *testing.T, cfg *config.Config, pool *pgxpool.Pool) (*Server, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	return New(cfg, nil, logger, nil, nil, nil), &logs
+	return New(cfg, pool, logger, nil, nil, nil), &logs
 }
 
 // Every answer under /api/s carries the three headers, including the group's
-// own 404 for a path no route claims -- which is every path, today. The rest
-// of /api is untouched: its bare 404 and its real routes carry neither of the
-// two that would be wrong on a page the app itself navigates to.
+// own 404 for a path no route claims -- and unmatched subpaths still exist
+// beside the five real routes. The rest of /api is untouched: its bare 404
+// and its real routes carry neither of the two that would be wrong on a page
+// the app itself navigates to.
 func TestShareGroupAnswersEverythingWithTheShareHeaders(t *testing.T) {
-	h := newTestServer(t)
+	h := New(&config.Config{}, authTestPool(t), nil, nil, nil, nil).Routes()
 
 	for _, c := range []struct{ method, path string }{
 		{http.MethodGet, "/api/s/anything/nope"},
@@ -81,35 +84,49 @@ func TestShareGroupAnswersEverythingWithTheShareHeaders(t *testing.T) {
 	}
 }
 
-// The share bucket is its own: spent by /api/s and nothing else, refused with
-// the envelope and the headers, and its refusal line names no token.
+// The share bucket is its own: spent by the four page routes and nothing
+// else, refused with the envelope and the headers, and every refusal line
+// names the route pattern, never the token. /password sits in the AUTH
+// bucket instead -- it reaches Argon2 -- through the group's own wrapper,
+// because RateLimitAuth's line logs the path and this path carries the
+// credential.
 func TestShareBucketIsItsOwnAndNamesNoToken(t *testing.T) {
-	s, logs := debugLogServer(t, &config.Config{})
+	s, logs := debugLogServer(t, &config.Config{}, authTestPool(t))
 
 	// A small bucket on a frozen clock, so the refusal is deterministic and no
 	// refill can race the loop.
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	s.ShareRate = newIPLimiter(60, 2)
+	s.ShareRate = newIPLimiter(60, 4)
 	s.ShareRate.now = func() time.Time { return now }
 	h := s.Routes()
 
 	const token = "SECRETTOKEN0123456789abcdef"
-	do := func() *httptest.ResponseRecorder {
+	meta := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/s/"+token+"/meta", nil)
 		req.RemoteAddr = "203.0.113.9:41234"
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		return rec
 	}
+	password := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/s/"+token+"/password",
+			strings.NewReader(`{"password":"not the password"}`))
+		req.Header.Set(ClientHeader, "web")
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "203.0.113.9:41234"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
 
-	for i := 1; i <= 2; i++ {
-		if rec := do(); rec.Code != http.StatusNotFound {
+	for i := 1; i <= 4; i++ {
+		if rec := meta(); rec.Code != http.StatusNotFound {
 			t.Fatalf("request %d of the burst: status %d, want 404 (body %s)", i, rec.Code, rec.Body.String())
 		}
 	}
-	rec := do()
+	rec := meta()
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("third request: status %d, want 429 (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("fifth request: status %d, want 429 (body %s)", rec.Code, rec.Body.String())
 	}
 	if got := decodeErr(t, rec.Body.String()).Code; got != CodeRateLimited {
 		t.Errorf("code = %q, want %q", got, CodeRateLimited)
@@ -125,12 +142,37 @@ func TestShareBucketIsItsOwnAndNamesNoToken(t *testing.T) {
 		t.Error("the share requests spent from the auth bucket")
 	}
 
+	// /password is not in the share bucket: with that bucket empty it still
+	// reaches its handler (404 -- the token is nobody's), because its budget
+	// is the auth one.
+	if rec := password(); rec.Code != http.StatusNotFound {
+		t.Errorf("password with the share bucket empty: status %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+	// And with the auth bucket drained it is refused -- by AuthRate, through
+	// the group's own line.
+	for s.AuthRate.allow("203.0.113.9") { //nolint:revive // draining the bucket
+	}
+	rec = password()
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("password with the auth bucket empty: status %d, want 429 (body %s)", rec.Code, rec.Body.String())
+	}
+	assertShareHeaders(t, "the password refusal", rec.Header())
+
 	out := logs.String()
 	if !strings.Contains(out, "share request refused by the per-IP bucket") {
-		t.Fatalf("the refusal was not logged:\n%s", out)
+		t.Fatalf("the share refusal was not logged: %s", out)
+	}
+	if !strings.Contains(out, "route=/api/s/{token}/meta") {
+		t.Errorf("the share refusal does not name the route pattern: %s", out)
+	}
+	if !strings.Contains(out, "share password request refused by the per-IP bucket") {
+		t.Fatalf("the password refusal was not logged: %s", out)
+	}
+	if !strings.Contains(out, "route=/api/s/{token}/password") {
+		t.Errorf("the password refusal does not name the route pattern: %s", out)
 	}
 	if strings.Contains(out, token) {
-		t.Errorf("the token reached the log:\n%s", out)
+		t.Errorf("the token reached the log: %s", out)
 	}
 }
 
@@ -197,7 +239,7 @@ func TestRedactSharePath(t *testing.T) {
 // page's -- are redacted through the real chain, and the rest of the path
 // stays so the line still says which route it was.
 func TestRequestLoggerRedactsShareTokens(t *testing.T) {
-	s, logs := debugLogServer(t, &config.Config{})
+	s, logs := debugLogServer(t, &config.Config{}, authTestPool(t))
 	h := s.Routes()
 
 	const token = "SECRETTOKEN0123456789abcdef"
