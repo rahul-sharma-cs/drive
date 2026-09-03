@@ -28,6 +28,7 @@ import { ResetPage } from '../../auth/ResetPage'
 import { meKey } from '../../auth/session'
 import { FolderPage } from '../../browser/FolderPage'
 import { sharesKey } from '../queries'
+import { LINK_NOT_KEPT } from '../ShareDialog'
 import { shareUrls } from '../shareUrls'
 
 const user: Me = {
@@ -185,8 +186,11 @@ describe('making a link', () => {
     expect(link.readOnly).toBe(true)
     expect(within(dialog).getByRole('button', { name: 'Copy link' })).toBeTruthy()
     expect(
-      within(dialog).getByText("Copy it now — Drive doesn't keep a copy. You can make a new link any time."),
+      within(dialog).getByText(
+        'Drive keeps this link only in this browser — copy it somewhere safe. You can make a new link any time.',
+      ),
     ).toBeTruthy()
+    expect(within(dialog).queryByText(LINK_NOT_KEPT)).toBeNull()
     // The list on `/shared` is stale now, whichever key it was cached under.
     expect(client.getQueryState(sharesKey)?.isInvalidated).toBe(true)
   })
@@ -250,9 +254,10 @@ describe('a link that exists', () => {
     const dialog = await openDialog()
     expect(await within(dialog).findByText('Expires in 7 days · Password on · 1 of 2 downloads')).toBeTruthy()
     expect(within(dialog).getByText('In trash — the link is inert until you restore the file')).toBeTruthy()
-    // Never a disabled Copy: the URL is not here to copy.
+    // Never a disabled Copy: the URL is not here to copy — and the dialog says so.
     expect(within(dialog).queryByRole('button', { name: 'Copy link' })).toBeNull()
     expect(within(dialog).queryByLabelText('Link')).toBeNull()
+    expect(within(dialog).getByText(LINK_NOT_KEPT)).toBeTruthy()
     expect(within(dialog).getByRole('button', { name: 'New link' })).toBeTruthy()
     expect(within(dialog).getByRole('button', { name: 'Settings' })).toBeTruthy()
     expect(within(dialog).getByRole('button', { name: 'Stop sharing' })).toBeTruthy()

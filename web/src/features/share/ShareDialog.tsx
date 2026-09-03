@@ -24,14 +24,17 @@ import { copyShareUrl, useCreateShare, useShareCommands, useUpdateShareSettings 
  *
  * Keyed on the server's own answer to "is this file shared?" rather than on
  * anything the row knew, so two tabs cannot disagree about it. Four states:
- * no link (the form), a link whose URL this tab holds (the URL and Copy), a
- * link it does not (the facts and the actions), and the read having failed.
+ * no link (the form), a link whose URL this browser holds (the URL and Copy),
+ * a link it does not (the facts and the actions), and the read having failed.
  *
- * The URL is shown once, here, and kept only in this tab's memory — the server
+ * The URL is shown once, here, and kept only in this browser — the server
  * keeps a hash and cannot show it again. That is why the line under the input
- * says so, and why a tab that does not hold the URL is offered New link where
- * Copy would be, never a disabled Copy.
+ * says so, and why a browser that does not hold the URL is told so and offered
+ * New link where Copy would be, never a disabled Copy.
  */
+
+/** Under the facts, wherever this browser has no URL for a link that exists. */
+export const LINK_NOT_KEPT = 'Link not kept in this browser — copy it where you made it, or make a new one.'
 export function ShareDialog({ node, onClose }: { node: DriveNode; onClose: () => void }) {
   const share = useShareForNode(node.id)
   const commands = useShareCommands()
@@ -98,13 +101,15 @@ function Existing({ share, commands, onEdit }: { share: Share; commands: ReturnT
         )}
       </div>
 
-      {url !== undefined && (
+      {url !== undefined ? (
         <div className="flex flex-col gap-2">
           <LinkField url={url} />
           <p className="text-[13px] text-ink-3">
-            Copy it now — Drive doesn't keep a copy. You can make a new link any time.
+            Drive keeps this link only in this browser — copy it somewhere safe. You can make a new link any time.
           </p>
         </div>
+      ) : (
+        <p className="text-[13px] text-ink-3">{LINK_NOT_KEPT}</p>
       )}
 
       <div className="flex flex-wrap justify-end gap-2">

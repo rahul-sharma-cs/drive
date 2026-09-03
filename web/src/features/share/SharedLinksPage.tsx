@@ -8,7 +8,7 @@ import { Card, EmptyState, SkeletonRows } from '../../ui/controls'
 import { FileIcon } from '../../ui/FileIcon'
 import { formatUntil, formatWhen } from '../../ui/when'
 import { useShares } from './queries'
-import { LinkField } from './ShareDialog'
+import { LINK_NOT_KEPT, LinkField } from './ShareDialog'
 import { useShareUrl } from './shareUrls'
 import { useShareCommands, type ShareCommands } from './useShareCommands'
 
@@ -18,9 +18,10 @@ import { useShareCommands, type ShareCommands } from './useShareCommands'
  * One row per active share: the file (a link into its folder with the viewer
  * open), when the link was made, when it stops, how many downloads against
  * what cap, and whether a password or the trash stands in front of it. The
- * actions are the dialog's — New link, Stop sharing — through the same
- * `useShareCommands`, and Copy appears only on a row whose URL this tab
- * minted, because no other tab can ever hold it.
+ * actions are the dialog's — Settings, New link, Stop sharing — through the
+ * same `useShareCommands`, and Copy appears only on a row whose URL this
+ * browser minted, because the server cannot hand it out again; any other row
+ * says so.
  *
  * Paged like a folder and the trash, with the same Load more: a single-page
  * list that quietly showed "some" would be the second such finding, not a
@@ -129,10 +130,12 @@ function ShareRow({ share, commands }: { share: Share; commands: ShareCommands }
           {share.has_password && <Badge>Password</Badge>}
           {!share.node_live && <Badge tone="warn">In trash</Badge>}
         </div>
-        {url !== undefined && (
+        {url !== undefined ? (
           <div className="mt-2 max-w-md">
             <LinkField url={url} />
           </div>
+        ) : (
+          <p className="mt-1 text-[13px] text-ink-3">{LINK_NOT_KEPT}</p>
         )}
       </td>
       <td className="hidden px-3 py-3 text-[13px] text-ink-3 md:table-cell">{formatWhen(share.created_at)}</td>

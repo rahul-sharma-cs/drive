@@ -15,6 +15,7 @@ import type { Me, Share } from '../../../lib/api'
 import { renderApp, stubFetch, type StubRoute } from '../../../test/render'
 import App from '../../../App'
 import { meKey } from '../../auth/session'
+import { LINK_NOT_KEPT } from '../ShareDialog'
 import { SharedLinksPage } from '../SharedLinksPage'
 import { shareUrls } from '../shareUrls'
 
@@ -161,7 +162,9 @@ describe('the actions', () => {
     const [held, other] = rows()
     expect((within(held).getByLabelText('Link') as HTMLInputElement).value).toBe(URL_1)
     expect(within(held).getByRole('button', { name: 'Copy link' })).toBeTruthy()
+    expect(within(held).queryByText(LINK_NOT_KEPT)).toBeNull()
     expect(within(other).queryByRole('button', { name: 'Copy link' })).toBeNull()
+    expect(within(other).getByText(LINK_NOT_KEPT)).toBeTruthy()
     expect(within(other).getByRole('button', { name: 'New link' })).toBeTruthy()
   })
 
