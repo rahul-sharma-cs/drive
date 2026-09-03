@@ -7,6 +7,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -48,6 +49,25 @@ func (s *Server) rateLimitShare(next http.Handler) http.Handler {
 				"client_ip", ip, "route", chi.RouteContext(r.Context()).RoutePattern())
 			WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
 				"too many requests. Try again in a minute.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// rateLimitShareDownload is rateLimitShare for the one browser navigation in
+// the group -- rateLimitBrowser's shape: the same bucket and the same line,
+// refused with a redirect back to the page instead of the envelope, because
+// a person following a link cannot act on JSON. No reason on the redirect:
+// the page's own /meta fetch meets the same bucket and draws the
+// rate-limited card, or the file once the address has a token again.
+func (s *Server) rateLimitShareDownload(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := ClientIP(r)
+		if s.ShareRate != nil && !s.ShareRate.allow(ip) {
+			LoggerFrom(r.Context()).Warn("share request refused by the per-IP bucket",
+				"client_ip", ip, "route", chi.RouteContext(r.Context()).RoutePattern())
+			shareRedirect(w, "/s/"+url.PathEscape(chi.URLParam(r, "token")))
 			return
 		}
 		next.ServeHTTP(w, r)

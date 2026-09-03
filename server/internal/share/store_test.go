@@ -447,6 +447,35 @@ func TestCountOnceStopsAtTheCapAndCountsASessionOnce(t *testing.T) {
 			t.Errorf("download_count = %d after three calls from one session, want 1", n)
 		}
 	})
+
+	// A session that is gone by the time the count runs -- deleted by a
+	// revoke, a regenerate, a password change or the sweep, or simply
+	// lapsed -- is ErrNotFound, never "already counted": a download issued
+	// against it would be one the owner never sees.
+	t.Run("a session that is gone", func(t *testing.T) {
+		fileID, _ := f.file("gone.txt")
+		sh, _ := f.create(fileID, Settings{})
+		_, deleted := f.mint(sh.ID)
+		_, lapsed := f.mint(sh.ID)
+		if _, err := f.pool.Exec(f.ctx, `DELETE FROM share_guest_sessions WHERE id = $1`, deleted.ID); err != nil {
+			t.Fatalf("deleting the session: %v", err)
+		}
+		if _, err := f.pool.Exec(f.ctx,
+			`UPDATE share_guest_sessions SET expires_at = now() - interval '1 second' WHERE id = $1`, lapsed.ID); err != nil {
+			t.Fatalf("lapsing the session: %v", err)
+		}
+		for _, c := range []struct {
+			what string
+			g    Guest
+		}{{"deleted", deleted}, {"lapsed", lapsed}} {
+			if _, err := f.store.CountOnce(f.ctx, c.g.ID, sh.ID); !errors.Is(err, ErrNotFound) {
+				t.Errorf("a %s session: CountOnce err = %v, want ErrNotFound", c.what, err)
+			}
+		}
+		if n := f.downloadCount(sh.ID); n != 0 {
+			t.Errorf("download_count = %d, want 0 -- a gone session was counted", n)
+		}
+	})
 }
 
 // ----------------------------------------------------------------- guests ----

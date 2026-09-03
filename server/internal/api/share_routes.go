@@ -373,16 +373,17 @@ func (s *Server) revokeShare(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------- recipients --
 
 // mountShareGuest registers the five public routes into mountShare's /api/s
-// group. The share bucket sits in front of the four page routes;
-// /password is the one unauthenticated route here that reaches Argon2, so it
-// spends the auth allowance instead, exactly like login -- through its own
-// wrapper, because RateLimitAuth's refusal line logs the path and this path
-// carries the credential.
+// group. The share bucket sits in front of the four page routes -- refusing
+// /download, the one browser navigation, with a redirect rather than the
+// envelope; /password is the one unauthenticated route here that reaches
+// Argon2, so it spends the auth allowance instead, exactly like login --
+// through its own wrapper, because RateLimitAuth's refusal line logs the
+// path and this path carries the credential.
 func (s *Server) mountShareGuest(r chi.Router) {
 	r.With(s.rateLimitShare).Get("/{token}/meta", s.shareMeta)
 	r.With(s.rateLimitShare).Post("/{token}/session", s.shareSession)
 	r.With(s.rateLimitSharePassword).Post("/{token}/password", s.sharePassword)
-	r.With(s.rateLimitShare).Get("/{token}/download", s.shareDownload)
+	r.With(s.rateLimitShareDownload).Get("/{token}/download", s.shareDownload)
 	r.With(s.rateLimitShare).Get("/{token}/preview", s.sharePreview)
 }
 
@@ -733,6 +734,14 @@ func (s *Server) shareDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	exhausted, err := s.shares().CountOnce(r.Context(), g.ID, res.ShareID)
+	if errors.Is(err, share.ErrNotFound) {
+		// The row went between guestFrom and the count's lock -- a revoke,
+		// a regenerate, a password change or the sweep -- so there is no
+		// session to count against and nothing is issued.
+		shareRefused(r, &res.ShareID, shareReasonForeignSession)
+		back("session")
+		return
+	}
 	if err != nil {
 		s.shareFailed(w, r, "counting the download", err)
 		return

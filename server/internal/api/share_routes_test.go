@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rahul-sharma-cs/drive/server/internal/auth"
+	"github.com/rahul-sharma-cs/drive/server/internal/config"
 	"github.com/rahul-sharma-cs/drive/server/internal/share"
 	"github.com/rahul-sharma-cs/drive/server/internal/upload"
 )
@@ -920,6 +921,21 @@ func TestShareSession(t *testing.T) {
 	rec = shareDoBare(t, h, http.MethodPost, "/api/s/"+token+"/session", nil, false)
 	nodeWant(t, rec, http.StatusForbidden, CodeInvalid)
 
+	// Secure follows the env rule, through the helper the session cookie
+	// uses: not under the test's plain-http base URL, set under an https one
+	// -- which takes a second server to see.
+	if cookie.Secure {
+		t.Error("the guest cookie is Secure under a plain-http base URL")
+	}
+	secure := New(&config.Config{BaseURL: "https://drive.example"}, pool, nil, nil, nil, nil).Routes()
+	rec = shareDo(t, secure, http.MethodPost, "/api/s/"+token+"/session", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("POST /session under an https base URL: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !shareGuestCookie(t, rec, id).Secure {
+		t.Error("the guest cookie is not Secure under an https base URL")
+	}
+
 	// A dead link answers the one 404 and writes the denied row.
 	if rec := authDo(t, h, http.MethodDelete, "/api/shares/"+id.String(), nil, owner.Cookie); rec.Code != http.StatusNoContent {
 		t.Fatalf("revoking: %d %s", rec.Code, rec.Body.String())
@@ -1271,7 +1287,7 @@ func TestSharePreview(t *testing.T) {
 	}
 
 	// No PDF and no SVG for a stranger, whatever the owner's own preview
-	// dialog accepts.
+	// dialog accepts -- and /meta says so up front, so the page never asks.
 	for _, c := range []struct{ name, mime string }{
 		{"doc.pdf", "application/pdf"},
 		{"vec.svg", "image/svg+xml"},
@@ -1282,6 +1298,16 @@ func TestSharePreview(t *testing.T) {
 		ck := shareMint(t, h, tok, resp.Share.ID)
 		rec := shareDo(t, h, http.MethodGet, "/api/s/"+tok+"/preview", nil, ck)
 		nodeWant(t, rec, http.StatusUnsupportedMediaType, CodeUnsupported)
+
+		rec = shareDo(t, h, http.MethodGet, "/api/s/"+tok+"/meta", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s /meta: status %d, body %s", c.name, rec.Code, rec.Body.String())
+		}
+		var meta shareMetaBody
+		nodeDecode(t, rec, &meta)
+		if meta.Preview {
+			t.Errorf("%s: /meta says preview, and /preview refuses it", c.name)
+		}
 	}
 
 	// A spent cap refuses a session that has not itself counted -- 403
@@ -1396,9 +1422,28 @@ func TestShareRoundTripLogsNoToken(t *testing.T) {
 	if rec := shareDo(t, h, http.MethodGet, "/api/s/"+token+"/meta", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("the revoked 404: %d", rec.Code)
 	}
+	// Argon2's ceiling on a password share answers through this group's own
+	// line: authBusy's logs r.URL.Path, and this path carries the credential.
+	pwID, _ := nodeMkFile(t, pool, owner, owner.RootID, "trip-pw.txt")
+	hash, err := auth.HashPassword(authTestPassword)
+	if err != nil {
+		t.Fatalf("hashing the password: %v", err)
+	}
+	_, pwToken, err := store.Create(context.Background(), owner.ID, pwID,
+		share.Settings{Password: share.PasswordChange{Set: true, Hash: &hash}})
+	if err != nil {
+		t.Fatalf("creating the password share: %v", err)
+	}
+	s.Argon2 = auth.NewLimiter(1)
+	if !s.Argon2.Acquire() {
+		t.Fatal("could not take the single Argon2 slot")
+	}
+	t.Cleanup(s.Argon2.Release)
+	rec = shareDo(t, h, http.MethodPost, "/api/s/"+pwToken+"/password", map[string]any{"password": authTestPassword})
+	nodeWant(t, rec, http.StatusTooManyRequests, CodeRateLimited)
 
 	out := logs.String()
-	if strings.Contains(out, token) {
+	if strings.Contains(out, token) || strings.Contains(out, pwToken) {
 		t.Fatalf("the raw token reached the log: %s", out)
 	}
 	if strings.Contains(out, cookie.Value) {
@@ -1407,6 +1452,7 @@ func TestShareRoundTripLogsNoToken(t *testing.T) {
 	for _, want := range []string{
 		"reason=no_session",
 		"reason=revoked",
+		"reason=busy",
 		"share request refused by the per-IP bucket",
 		"path=/api/s/{redacted}/meta",
 	} {

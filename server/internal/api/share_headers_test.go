@@ -85,11 +85,11 @@ func TestShareGroupAnswersEverythingWithTheShareHeaders(t *testing.T) {
 }
 
 // The share bucket is its own: spent by the four page routes and nothing
-// else, refused with the envelope and the headers, and every refusal line
-// names the route pattern, never the token. /password sits in the AUTH
-// bucket instead -- it reaches Argon2 -- through the group's own wrapper,
-// because RateLimitAuth's line logs the path and this path carries the
-// credential.
+// else, refused with the envelope and the headers -- a redirect back to the
+// page on /download, the one navigation -- and every refusal line names the
+// route pattern, never the token. /password sits in the AUTH bucket instead
+// -- it reaches Argon2 -- through the group's own wrapper, because
+// RateLimitAuth's line logs the path and this path carries the credential.
 func TestShareBucketIsItsOwnAndNamesNoToken(t *testing.T) {
 	s, logs := debugLogServer(t, &config.Config{}, authTestPool(t))
 
@@ -133,6 +133,21 @@ func TestShareBucketIsItsOwnAndNamesNoToken(t *testing.T) {
 	}
 	assertShareHeaders(t, "the refusal", rec.Header())
 
+	// /download with the bucket still empty: the same refusal, but a
+	// redirect back to the page -- a person following a link cannot act on
+	// the envelope.
+	req := httptest.NewRequest(http.MethodGet, "/api/s/"+token+"/download", nil)
+	req.RemoteAddr = "203.0.113.9:41234"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("download with the share bucket empty: status %d, want 302 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Location"); got != "/s/"+token {
+		t.Errorf("download refusal: Location = %q, want /s/%s", got, token)
+	}
+	assertShareHeaders(t, "the download refusal", rec.Header())
+
 	// The auth bucket never saw the address: a share page load must not spend
 	// the sign-in allowance of whoever shares the NAT.
 	s.AuthRate.mu.Lock()
@@ -164,6 +179,9 @@ func TestShareBucketIsItsOwnAndNamesNoToken(t *testing.T) {
 	}
 	if !strings.Contains(out, "route=/api/s/{token}/meta") {
 		t.Errorf("the share refusal does not name the route pattern: %s", out)
+	}
+	if !strings.Contains(out, "route=/api/s/{token}/download") {
+		t.Errorf("the download refusal does not name the route pattern: %s", out)
 	}
 	if !strings.Contains(out, "share password request refused by the per-IP bucket") {
 		t.Fatalf("the password refusal was not logged: %s", out)
