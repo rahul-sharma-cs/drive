@@ -36,6 +36,7 @@ const meta = (over: Partial<ShareMeta> = {}): ShareMeta => ({
   expires_at: null,
   exhausted: false,
   preview: true,
+  session: false,
   ...over,
 })
 
@@ -262,6 +263,42 @@ describe('the file', () => {
     expect(screen.getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/api/s/tok-1/download')
     expect(document.querySelector('iframe')).toBeNull()
     expect(asked(calls, PREVIEW)).toHaveLength(0)
+  })
+})
+
+describe('a session this browser already holds', () => {
+  const gated = (session: boolean) => meta({ requires_password: true, session })
+
+  it('opens a gated link straight to the file, asking for no password and minting nothing', async () => {
+    const { calls } = renderShare([{ path: META, body: gated(true) }, signed])
+
+    // A reload after the password: the cookie is still there, `/meta` says so.
+    expect(await screen.findByRole('img', { name: 'shot.png' })).toBeTruthy()
+    expect(screen.queryByLabelText('Password')).toBeNull()
+    expect(asked(calls, PREVIEW)).toHaveLength(1)
+    expect(sessions(calls)).toHaveLength(0)
+    expect(asked(calls, PASSWORD)).toHaveLength(0)
+  })
+
+  it('shows the gate when /meta says this browser holds none', async () => {
+    const { calls } = renderShare([{ path: META, body: gated(false) }, signed])
+
+    expect(await screen.findByLabelText('Password')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Download' })).toBeNull()
+    expect(asked(calls, PREVIEW)).toHaveLength(0)
+  })
+
+  it('brings the gate back when the preview says the session has gone', async () => {
+    const { calls } = renderShare([{ path: META, body: gated(true) }, signed], {
+      firstPreview: { status: 401, body: { code: 'unauthorized', message: 'no session' } },
+    })
+
+    // `/meta` was read a moment ago and said yes; the store's answer is newer.
+    // The gate wins over the stale read, and nothing is minted behind it.
+    expect(await screen.findByLabelText('Password')).toBeTruthy()
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(asked(calls, PREVIEW)).toHaveLength(1)
+    expect(sessions(calls)).toHaveLength(0)
   })
 })
 

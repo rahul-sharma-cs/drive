@@ -401,6 +401,8 @@ export interface ShareMeta {
   exhausted: boolean
   /** The server will sign an inline link for this type — images, video, audio, text. */
   preview: boolean
+  /** This browser holds a live guest session for this link, so a password gate is not shown again. */
+  session: boolean
 }
 
 /** A share with the one copy of its URL anyone will ever be given. */

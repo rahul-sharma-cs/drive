@@ -88,7 +88,14 @@ export default function SharePage() {
       if (err instanceof ApiError && (err.status === 401 || err.status === 404)) void refetchMeta()
     },
   })
-  const [gatePassed, setGatePassed] = useState(false)
+  // What the person has done at the gate on this page — nothing yet, until
+  // they act — and until then `/meta`'s word on whether this browser already
+  // holds a live session is what opens a gated file, so a reload does not
+  // ask for the password again. An answer given here beats the read: a 401
+  // from `/preview` has to bring the gate back over a `session: true` that
+  // has gone stale since it was read.
+  const [gateAnswer, setGateAnswer] = useState<boolean | null>(null)
+  const gatePassed = gateAnswer ?? m?.session === true
 
   // One mint per token, and only for a link that is live, open and not spent.
   // The ref is what makes StrictMode's double effect a single request; the
@@ -120,7 +127,7 @@ export default function SharePage() {
     if (!(previewError instanceof ApiError) || previewError.status !== 401 || remintTried.current) return
     remintTried.current = true
     if (gated) {
-      setGatePassed(false)
+      setGateAnswer(false)
       return
     }
     mintSession(undefined, { onSuccess: () => void client.invalidateQueries({ queryKey: previewKey(token) }) })
@@ -144,7 +151,7 @@ export default function SharePage() {
         token={token}
         onPassed={() => {
           remintTried.current = false
-          setGatePassed(true)
+          setGateAnswer(true)
         }}
         onGone={() => void refetchMeta()}
       />
