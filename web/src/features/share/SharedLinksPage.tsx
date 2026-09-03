@@ -145,6 +145,9 @@ function ShareRow({ share, commands }: { share: Share; commands: ShareCommands }
       </td>
       <td className="px-3 py-2 sm:px-4">
         <div className="flex justify-end gap-1">
+          <Button variant="ghost" size="sm" onClick={() => commands.settings(share)}>
+            Settings
+          </Button>
           <Button variant="ghost" size="sm" disabled={commands.busy} onClick={() => commands.newLink(share)}>
             New link
           </Button>

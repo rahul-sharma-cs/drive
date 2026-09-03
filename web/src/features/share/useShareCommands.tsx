@@ -24,6 +24,7 @@ import {
 } from '../../lib/api'
 import { FormError } from '../../ui/controls'
 import { sharesKey } from './queries'
+import { ShareDialog } from './ShareDialog'
 import { shareUrls } from './shareUrls'
 
 /**
@@ -33,7 +34,10 @@ import { shareUrls } from './shareUrls'
  * Both the dialog and `/shared` offer New link and Stop sharing, and neither is
  * undoable — a replaced link is one the owner can no longer even read — so the
  * confirms live here once, in the confirm-then-toast shape `IdentitiesSection`
- * uses, and the screens render `dialogs` wherever suits them.
+ * uses, and the screens render `dialogs` wherever suits them. `/shared` also
+ * opens the file's own Share dialog from a row, for Settings; it is rendered
+ * here too, so the list needs nothing of its own. (The dialog and this hook
+ * import each other; both are function declarations, so the cycle is safe.)
  *
  * Every mutation invalidates the `['shares']` prefix, never an exact key: the
  * dialog reads `['shares','node',id]` and the list reads `['shares']`, and a
@@ -109,9 +113,11 @@ export interface ShareCommands {
   newLink: (share: Share) => void
   /** Asks first; on yes, the link stops and the row leaves every list. */
   stopSharing: (share: Share) => void
+  /** Opens the file's Share dialog: its settings form, and the link when this browser holds it. */
+  settings: (share: Share) => void
   /** One of the two is in flight. */
   busy: boolean
-  /** The two confirms. The screen renders this somewhere. */
+  /** The two confirms and the Share dialog. The screen renders this somewhere. */
   dialogs: ReactNode
 }
 
@@ -122,6 +128,7 @@ export function useShareCommands(): ShareCommands {
   const revoke = useRevokeShare()
   const invalidate = useInvalidateShares()
   const [confirm, setConfirm] = useState<Confirm>(null)
+  const [settings, setSettings] = useState<Share | null>(null)
 
   const close = () => {
     regenerate.reset()
@@ -142,80 +149,84 @@ export function useShareCommands(): ShareCommands {
   }
 
   const dialogs = (
-    <Dialog
-      open={confirm !== null}
-      onOpenChange={(open) => {
-        if (!open) close()
-      }}
-    >
-      <DialogContent className="sm:max-w-md">
-        {confirm?.kind === 'regenerate' && (
-          <>
-            <DialogHeader>
-              <DialogTitle>Make a new link?</DialogTitle>
-              <DialogDescription>
-                The current link stops working, and the download count starts again at zero.
-              </DialogDescription>
-            </DialogHeader>
-            <FormError error={regenerate.error} />
-            <DialogFooter>
-              <Button variant="outline" onClick={close}>
-                Cancel
-              </Button>
-              <Button
-                disabled={regenerate.isPending}
-                onClick={() =>
-                  regenerate.mutate(confirm.share.id, {
-                    onSuccess: () => {
-                      close()
-                      toast.success('New link made — copy it now')
-                    },
-                    onError: gone,
-                  })
-                }
-              >
-                {regenerate.isPending ? 'Making…' : 'New link'}
-              </Button>
-            </DialogFooter>
-          </>
-        )}
+    <>
+      {settings !== null && <ShareDialog node={settings.node} onClose={() => setSettings(null)} />}
+      <Dialog
+        open={confirm !== null}
+        onOpenChange={(open) => {
+          if (!open) close()
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          {confirm?.kind === 'regenerate' && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Make a new link?</DialogTitle>
+                <DialogDescription>
+                  The current link stops working, and the download count starts again at zero.
+                </DialogDescription>
+              </DialogHeader>
+              <FormError error={regenerate.error} />
+              <DialogFooter>
+                <Button variant="outline" onClick={close}>
+                  Cancel
+                </Button>
+                <Button
+                  disabled={regenerate.isPending}
+                  onClick={() =>
+                    regenerate.mutate(confirm.share.id, {
+                      onSuccess: () => {
+                        close()
+                        toast.success('New link made — copy it now')
+                      },
+                      onError: gone,
+                    })
+                  }
+                >
+                  {regenerate.isPending ? 'Making…' : 'New link'}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
 
-        {confirm?.kind === 'revoke' && (
-          <>
-            <DialogHeader>
-              <DialogTitle>Stop sharing?</DialogTitle>
-              <DialogDescription>Anyone with the link loses access; downloads already started finish.</DialogDescription>
-            </DialogHeader>
-            <FormError error={revoke.error} />
-            <DialogFooter>
-              <Button variant="outline" onClick={close}>
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                disabled={revoke.isPending}
-                onClick={() =>
-                  revoke.mutate(confirm.share.id, {
-                    onSuccess: () => {
-                      close()
-                      toast.success('Sharing stopped')
-                    },
-                    onError: gone,
-                  })
-                }
-              >
-                {revoke.isPending ? 'Stopping…' : 'Stop sharing'}
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+          {confirm?.kind === 'revoke' && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Stop sharing?</DialogTitle>
+                <DialogDescription>Anyone with the link loses access; downloads already started finish.</DialogDescription>
+              </DialogHeader>
+              <FormError error={revoke.error} />
+              <DialogFooter>
+                <Button variant="outline" onClick={close}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={revoke.isPending}
+                  onClick={() =>
+                    revoke.mutate(confirm.share.id, {
+                      onSuccess: () => {
+                        close()
+                        toast.success('Sharing stopped')
+                      },
+                      onError: gone,
+                    })
+                  }
+                >
+                  {revoke.isPending ? 'Stopping…' : 'Stop sharing'}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   )
 
   return {
     newLink: (share) => setConfirm({ kind: 'regenerate', share }),
     stopSharing: (share) => setConfirm({ kind: 'revoke', share }),
+    settings: setSettings,
     busy: regenerate.isPending || revoke.isPending,
     dialogs,
   }

@@ -35,7 +35,10 @@ import { copyShareUrl, useCreateShare, useShareCommands, useUpdateShareSettings 
 
 /** Under the facts, wherever this browser has no URL for a link that exists. */
 export const LINK_NOT_KEPT = 'Link not kept in this browser — copy it where you made it, or make a new one.'
-export function ShareDialog({ node, onClose }: { node: DriveNode; onClose: () => void }) {
+/** All the dialog needs of the file — a row's `DriveNode` and a share's `ShareNode` both carry it. */
+type Named = Pick<DriveNode, 'id' | 'name'>
+
+export function ShareDialog({ node, onClose }: { node: Named; onClose: () => void }) {
   const share = useShareForNode(node.id)
   const commands = useShareCommands()
   const [editing, setEditing] = useState(false)
@@ -336,7 +339,7 @@ function usePasswordJudged(fields: Fields) {
   return { bad, acceptable, judge: () => setJudged(true) }
 }
 
-function CreateForm({ node }: { node: DriveNode }) {
+function CreateForm({ node }: { node: Named }) {
   const client = useQueryClient()
   const create = useCreateShare()
   const [fields, setFields] = useState<Fields>({ expiry: '7d', date: '', password: '', showPassword: false, limit: '' })

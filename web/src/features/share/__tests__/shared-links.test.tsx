@@ -168,6 +168,33 @@ describe('the actions', () => {
     expect(within(other).getByRole('button', { name: 'New link' })).toBeTruthy()
   })
 
+  it('Settings opens the file’s own Share dialog, on that share, at its settings form', async () => {
+    const { calls } = renderList([
+      { path: '/api/shares', body: { items: [share(), share({ id: 's2', node: { ...share().node, id: 'f3', name: 'two.txt' } })], next_cursor: null } },
+      { path: '/api/shares?node_id=f3', body: { items: [share({ id: 's2', max_downloads: 5, download_count: 0 })], next_cursor: null } },
+    ])
+
+    await screen.findAllByRole('link', { name: 'notes.txt' })
+    await userEvent.click(within(rows()[1]).getByRole('button', { name: 'Settings' }))
+
+    // The dialog the row menu opens, read from the server for this file.
+    const dialog = await screen.findByRole('dialog', { name: 'Share "two.txt"' })
+    expect(await within(dialog).findByText('Expires in 7 days · Password on · 0 of 5 downloads')).toBeTruthy()
+    expect(calls.some((c) => c.url === '/api/shares?node_id=f3')).toBe(true)
+    // No URL in this browser, and the dialog says so rather than offering Copy.
+    expect(within(dialog).getByText(LINK_NOT_KEPT)).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: 'Copy link' })).toBeNull()
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Settings' }))
+    expect((within(dialog).getByLabelText('Download limit') as HTMLInputElement).value).toBe('5')
+    expect(within(dialog).getByRole('button', { name: 'Save settings' })).toBeTruthy()
+
+    // Closing it leaves the list where it was.
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Share "two.txt"' })).toBeNull())
+    expect(rows()).toHaveLength(2)
+  })
+
   it('New link asks, then regenerates and shows the new URL on the row', async () => {
     const URL_2 = 'https://drive.example/s/fedcba9876543210fedcba9876543210fedcba98765'
     const { calls } = renderList([
