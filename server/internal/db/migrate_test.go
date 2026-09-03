@@ -1,8 +1,9 @@
 package db
 
-// Migration 0006's indexes, exercised rather than inspected: the partial
-// unique one IS the "one active link per file" rule, and a create that leans
-// on ON CONFLICT against it is exactly as right as the index is.
+// The share migrations' indexes. 0006's are exercised rather than inspected:
+// the partial unique one IS the "one active link per file" rule, and a create
+// that leans on ON CONFLICT against it is exactly as right as the index is.
+// 0007's three are plain accelerators, pinned by definition.
 
 import (
 	"context"
@@ -123,6 +124,30 @@ func TestOneActiveSharePerNode(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("the node has %d shares, want 2 -- the revoked one must still be there", n)
+	}
+}
+
+// 0007's three indexes, one per sweep: deleteGuests on share_id, the GC's
+// guest sweep on expires_at, the GC's access-log sweep on at. Each is a plain
+// btree on the one column the query filters by.
+func TestShareSweepIndexesExist(t *testing.T) {
+	pool := testPool(t)
+
+	for _, c := range []struct{ name, table, cols string }{
+		{"share_guest_sessions_share_id_idx", "share_guest_sessions", "(share_id)"},
+		{"share_guest_sessions_expires_at_idx", "share_guest_sessions", "(expires_at)"},
+		{"share_access_log_at_idx", "share_access_log", "(at)"},
+	} {
+		var def string
+		err := pool.QueryRow(context.Background(),
+			`SELECT indexdef FROM pg_indexes WHERE indexname = $1`, c.name).Scan(&def)
+		if err != nil {
+			t.Errorf("reading %s: %v", c.name, err)
+			continue
+		}
+		if want := " ON public." + c.table + " USING btree " + c.cols; !strings.HasSuffix(def, want) {
+			t.Errorf("%s = %q, want it to end with %q", c.name, def, want)
+		}
 	}
 }
 

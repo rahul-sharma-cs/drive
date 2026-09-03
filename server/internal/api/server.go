@@ -177,9 +177,11 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, sender mail.S
 //
 // Chain order is fixed: request id, then the slog request logger (so every
 // line carries request_id), then panic recovery, then -- inside /api only --
-// the X-Drive-Client check and the session loader. The session loader does not
-// reject anonymous requests; RequireAuth does, which is what lets the public
-// share routes share this chain.
+// the share headers for what lies under /api/s, the X-Drive-Client check and
+// the session loader. The headers go first so the two refusals the next pair
+// can write carry them. The session loader does not reject anonymous
+// requests; RequireAuth does, which is what lets the public share routes
+// share this chain.
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -190,6 +192,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/livez", s.livez)
 
 	r.Route("/api", func(r chi.Router) {
+		r.Use(shareHeadersUnderAPI)
 		r.Use(RequireClientHeader)
 		r.Use(s.sessionLoader)
 

@@ -1,13 +1,14 @@
 package api
 
 // The public share surface's chain: the headers every answer under /api/s
-// carries and the bucket in front of it. Both are properties of the router
-// group rather than of any handler, so that a refusal written by WriteErr --
+// carries and the bucket in front of it. Both are properties of the chain
+// rather than of any handler, so that a refusal written by WriteErr --
 // and the group's own 404 for a path no route claims -- carries them too.
 
 import (
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -26,6 +27,23 @@ func shareHeaders(next http.Handler) http.Handler {
 		h.Set("Cache-Control", "private, no-store")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Robots-Tag", "noindex, nofollow")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// shareHeadersUnderAPI is shareHeaders on the /api chain, for the paths the
+// share group claims: /api/s and everything below it. It sits above
+// RequireClientHeader and sessionLoader because two answers are written
+// there -- the 403 for a share POST without X-Drive-Client, and the 503 when
+// a drive_session cookie cannot be looked up -- and applied at the group they
+// would go out bare. Every other /api path passes through untouched.
+func shareHeadersUnderAPI(next http.Handler) http.Handler {
+	marked := shareHeaders(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p := r.URL.Path; p == "/api/s" || strings.HasPrefix(p, "/api/s/") {
+			marked.ServeHTTP(w, r)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -93,10 +111,10 @@ func (s *Server) rateLimitSharePassword(next http.Handler) http.Handler {
 	})
 }
 
-// mountShare is the /api/s group, where the public share routes live. It
-// carries shareHeaders on everything under it, including its own 404 and
-// 405, so an unmatched subpath cannot fall through to /api's bare JSON 404
-// without the headers.
+// mountShare is the /api/s group, where the public share routes live. Its
+// own 404 and 405 are here so an unmatched subpath cannot fall through to
+// /api's bare JSON 404; the headers on all of it, those included, come from
+// shareHeadersUnderAPI at the top of the /api chain.
 //
 // The buckets are attached per route in mountShareGuest rather than here:
 // group middleware runs before the subrouter has matched anything, so a
@@ -104,8 +122,6 @@ func (s *Server) rateLimitSharePassword(next http.Handler) http.Handler {
 // line names the real pattern, and the token still never appears.
 func (s *Server) mountShare(r chi.Router) {
 	r.Route("/s", func(r chi.Router) {
-		r.Use(shareHeaders)
-
 		s.mountShareGuest(r)
 
 		unmatched := func(w http.ResponseWriter, r *http.Request) {

@@ -7,6 +7,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -46,9 +47,10 @@ func debugLogServer(t *testing.T, cfg *config.Config, pool *pgxpool.Pool) (*Serv
 
 // Every answer under /api/s carries the three headers, including the group's
 // own 404 for a path no route claims -- and unmatched subpaths still exist
-// beside the five real routes. The rest of /api is untouched: its bare 404
-// and its real routes carry neither of the two that would be wrong on a page
-// the app itself navigates to.
+// beside the five real routes -- and the two written above the group: the
+// X-Drive-Client 403 and the session loader's 503. The rest of /api is
+// untouched: its bare 404 and its real routes carry neither of the two that
+// would be wrong on a page the app itself navigates to.
 func TestShareGroupAnswersEverythingWithTheShareHeaders(t *testing.T) {
 	h := New(&config.Config{}, authTestPool(t), nil, nil, nil, nil).Routes()
 
@@ -72,6 +74,36 @@ func TestShareGroupAnswersEverythingWithTheShareHeaders(t *testing.T) {
 		}
 		assertShareHeaders(t, what, rec.Header())
 	}
+
+	// A share POST without X-Drive-Client: refused by RequireClientHeader,
+	// before the group's own middleware would have run.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/s/anything/session", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("a share POST without the header: status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := decodeErr(t, rec.Body.String()).Code; got != CodeInvalid {
+		t.Errorf("a share POST without the header: code = %q, want %q", got, CodeInvalid)
+	}
+	assertShareHeaders(t, "the X-Drive-Client refusal", rec.Header())
+
+	// A drive_session cookie the loader cannot look up: a pool pointed at a
+	// port nothing listens on, which pgxpool opens lazily, so the first query
+	// is what fails -- and it fails inside sessionLoader, whose 503 is the
+	// other answer written above the group.
+	dead, err := pgxpool.New(context.Background(), "postgres://nobody@127.0.0.1:1/nowhere?sslmode=disable")
+	if err != nil {
+		t.Fatalf("building the unreachable pool: %v", err)
+	}
+	t.Cleanup(dead.Close)
+	req := httptest.NewRequest(http.MethodGet, "/api/s/anything/meta", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: "a cookie nobody can check"})
+	rec = httptest.NewRecorder()
+	New(&config.Config{}, dead, nil, nil, nil, nil).Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("a share GET with a cookie and no database: status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	assertShareHeaders(t, "the session-lookup 503", rec.Header())
 
 	for _, path := range []string{"/api/nope", "/api/nodes/nope", "/api/shares"} {
 		rec := httptest.NewRecorder()
