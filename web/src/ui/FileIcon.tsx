@@ -11,12 +11,16 @@
  * and OneDrive both do it, and it is the only thing that stays legible at the
  * 22px a dense list can spend.
  *
- * There is deliberately no extension tag drawn inside the glyph. It was tried:
- * three bold letters over the ruled lines of a 22px page is a smudge, not a
- * label, and the name beside it already ends in `.pdf`.
+ * A file also carries its extension as a tag — `PDF`, `JPEG` — in the same
+ * hue, the second half of the original decision (per-type glyphs *with* an
+ * extension tag), which the design pass had dropped. The tag sits beside the
+ * glyph, not inside it: three letters over the ruled lines of a 22px page
+ * were tried and smudged, so it is a tiny mono label to the right, inside the
+ * icon's own inline-flex so it can never wrap the name. Folders and files of
+ * no known type get none, and neither does a name with no extension.
  *
  * Purely decorative: a row renders the file's name as text next to this, so
- * the glyph carries no information a screen reader needs.
+ * neither the glyph nor the tag carries information a screen reader needs.
  */
 
 import type { LucideIcon } from 'lucide-react'
@@ -262,16 +266,35 @@ export interface FileIconProps {
   className?: string
 }
 
+/**
+ * The tag beside a file glyph: the last extension in upper case, when it is
+ * two to four plain characters — `PDF`, `JPEG`, the `GZ` of `.tar.gz`. A
+ * longer or odder extension is not a type anyone reads at a glance, and the
+ * name beside it spells it out anyway.
+ */
+export function extensionTag(name: string): string | null {
+  const ext = extractExtension(name)?.split('.').pop()
+  return ext !== undefined && /^[a-z0-9]{2,4}$/.test(ext) ? ext.toUpperCase() : null
+}
+
 export function FileIcon({ kind, name, mime, size = 20, className = '' }: FileIconProps) {
   const spec = classify(kind, name, mime)
   const Icon = spec.icon
+  const tag = spec === FOLDER_SPEC || spec === GENERIC_SPEC ? null : extensionTag(name)
 
   return (
-    <Icon
-      aria-hidden="true"
-      size={size}
-      className={`shrink-0 ${spec.colorClass} ${className}`}
-      {...(spec.filled ? { fill: 'currentColor' } : {})}
-    />
+    <span className={`inline-flex shrink-0 items-center gap-1 ${className}`}>
+      <Icon
+        aria-hidden="true"
+        size={size}
+        className={`shrink-0 ${spec.colorClass}`}
+        {...(spec.filled ? { fill: 'currentColor' } : {})}
+      />
+      {tag !== null && (
+        <span aria-hidden="true" className={`font-mono text-[10px] leading-none tracking-wide ${spec.colorClass}`}>
+          {tag}
+        </span>
+      )}
+    </span>
   )
 }

@@ -3,7 +3,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import { FILE_ICON_TABLE, FileIcon, fileCategory } from '../FileIcon'
+import { FILE_ICON_TABLE, FileIcon, extensionTag, fileCategory } from '../FileIcon'
 
 const svgOf = (container: HTMLElement) => container.querySelector('svg')!
 
@@ -98,17 +98,45 @@ describe('FileIcon', () => {
     expect(svgOf(file.container).getAttribute('fill')).not.toBe('currentColor')
   })
 
-  it('draws no lettering inside the glyph at any size', () => {
-    // Three bold letters over the ruled lines of a small page is a smudge, not
-    // a label — and the row already spells the extension out in the name. The
-    // glyph and its hue carry the type on their own.
-    for (const size of [20, 22, 24, 40]) {
-      const { container, unmount } = render(
-        <FileIcon kind="file" name="lease-signed.pdf" mime="application/pdf" size={size} />,
-      )
-      expect(container.textContent).toBe('')
-      unmount()
-    }
+  it('tags a file with its extension beside the glyph, in the glyph’s hue, decoratively', () => {
+    const { container } = render(<FileIcon kind="file" name="report.pdf" mime="application/pdf" size={22} />)
+    const tag = screen.getByText('PDF')
+    expect(tag.getAttribute('aria-hidden')).toBe('true')
+    expect(tag.getAttribute('class')).toContain('text-danger')
+    // Beside, not inside: lettering over the ruled lines of a 22px page smudged.
+    expect(svgOf(container).textContent).toBe('')
+    expect(tag.parentElement).toBe(svgOf(container).parentElement)
+  })
+
+  it('tags with the whole extension when it is short enough to read', () => {
+    render(<FileIcon kind="file" name="holiday.jpeg" mime="image/jpeg" />)
+    expect(screen.getByText('JPEG')).toBeTruthy()
+  })
+
+  it('tags neither a folder, nor a name without an extension, nor a type it does not know', () => {
+    const folder = render(<FileIcon kind="folder" name="Invoices.pdf" />)
+    expect(folder.container.textContent).toBe('')
+    folder.unmount()
+
+    const bare = render(<FileIcon kind="file" name="report" mime="application/pdf" />)
+    expect(bare.container.textContent).toBe('')
+    bare.unmount()
+
+    const unknown = render(<FileIcon kind="file" name="mystery.xyz" mime={null} />)
+    expect(unknown.container.textContent).toBe('')
+  })
+})
+
+describe('extensionTag', () => {
+  it('keeps two to four plain characters of the last extension, upper-cased', () => {
+    expect(extensionTag('report.pdf')).toBe('PDF')
+    expect(extensionTag('holiday.jpeg')).toBe('JPEG')
+    expect(extensionTag('backup.tar.gz')).toBe('GZ')
+    expect(extensionTag('report')).toBeNull()
+    expect(extensionTag('.env')).toBeNull()
+    expect(extensionTag('main.c')).toBeNull()
+    expect(extensionTag('mystery.xyz123')).toBeNull()
+    expect(extensionTag('notes.final draft')).toBeNull()
   })
 })
 
