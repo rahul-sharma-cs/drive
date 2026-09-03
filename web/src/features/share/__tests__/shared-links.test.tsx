@@ -153,20 +153,36 @@ describe('the rows', () => {
 })
 
 describe('the actions', () => {
-  it('offers Copy only on a row whose URL this tab minted', async () => {
+  it('offers Copy only on a row whose URL this tab minted, and says so once above the table', async () => {
     shareUrls.set('s1', URL_1)
     renderList([
-      { path: '/api/shares', body: { items: [share(), share({ id: 's2' })], next_cursor: null } },
+      { path: '/api/shares', body: { items: [share(), share({ id: 's2' }), share({ id: 's3' })], next_cursor: null } },
     ])
 
     await screen.findAllByRole('link', { name: 'notes.txt' })
-    const [held, other] = rows()
+    const [held, other, another] = rows()
     expect((within(held).getByLabelText('Link') as HTMLInputElement).value).toBe(URL_1)
     expect(within(held).getByRole('button', { name: 'Copy link' })).toBeTruthy()
-    expect(within(held).queryByText(LINK_NOT_KEPT)).toBeNull()
     expect(within(other).queryByRole('button', { name: 'Copy link' })).toBeNull()
-    expect(within(other).getByText(LINK_NOT_KEPT)).toBeTruthy()
+    expect(within(another).queryByRole('button', { name: 'Copy link' })).toBeNull()
     expect(within(other).getByRole('button', { name: 'New link' })).toBeTruthy()
+
+    // Two rows lack a URL; the line is one fact about this browser, not one
+    // complaint per row, and it sits above the table rather than inside it.
+    const notes = screen.getAllByText(LINK_NOT_KEPT)
+    expect(notes).toHaveLength(1)
+    expect(notes[0].closest('table')).toBeNull()
+    expect(within(held).queryByText(LINK_NOT_KEPT)).toBeNull()
+    expect(within(other).queryByText(LINK_NOT_KEPT)).toBeNull()
+  })
+
+  it('says nothing about kept links when this tab holds every URL listed', async () => {
+    shareUrls.set('s1', URL_1)
+    renderList([{ path: '/api/shares', body: { items: [share()], next_cursor: null } }])
+
+    await screen.findByRole('link', { name: 'notes.txt' })
+    expect(screen.getByRole('button', { name: 'Copy link' })).toBeTruthy()
+    expect(screen.queryByText(LINK_NOT_KEPT)).toBeNull()
   })
 
   it('Settings opens the file’s own Share dialog, on that share, at its settings form', async () => {

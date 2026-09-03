@@ -9,7 +9,7 @@ import { FileIcon } from '../../ui/FileIcon'
 import { formatUntil, formatWhen } from '../../ui/when'
 import { useShares } from './queries'
 import { LINK_NOT_KEPT, LinkField } from './ShareDialog'
-import { useShareUrl } from './shareUrls'
+import { useShareUrl, useShareUrlLookup } from './shareUrls'
 import { useShareCommands, type ShareCommands } from './useShareCommands'
 
 /**
@@ -20,8 +20,9 @@ import { useShareCommands, type ShareCommands } from './useShareCommands'
  * what cap, and whether a password or the trash stands in front of it. The
  * actions are the dialog's — Settings, New link, Stop sharing — through the
  * same `useShareCommands`, and Copy appears only on a row whose URL this
- * browser minted, because the server cannot hand it out again; any other row
- * says so.
+ * browser minted, because the server cannot hand it out again. One line
+ * above the table says so for every row that lacks one — repeated per row it
+ * read as a fault in each link rather than a fact about this browser.
  *
  * Paged like a folder and the trash, with the same Load more: a single-page
  * list that quietly showed "some" would be the second such finding, not a
@@ -30,8 +31,10 @@ import { useShareCommands, type ShareCommands } from './useShareCommands'
 export function SharedLinksPage() {
   const shares = useShares()
   const commands = useShareCommands()
+  const urlOf = useShareUrlLookup()
 
   const items = shares.data?.pages.flatMap((page) => page.items) ?? []
+  const someNotKept = items.some((share) => urlOf(share.id) === undefined)
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-4 py-5 sm:px-6 sm:py-6">
@@ -60,6 +63,10 @@ export function SharedLinksPage() {
             title="No share links yet."
             hint="Share a file from its row menu and the link turns up here."
           />
+        )}
+
+        {items.length > 0 && someNotKept && (
+          <p className="border-b border-line px-4 py-2.5 text-[13px] text-ink-3">{LINK_NOT_KEPT}</p>
         )}
 
         {items.length > 0 && (
@@ -130,12 +137,10 @@ function ShareRow({ share, commands }: { share: Share; commands: ShareCommands }
           {share.has_password && <Badge>Password</Badge>}
           {!share.node_live && <Badge tone="warn">In trash</Badge>}
         </div>
-        {url !== undefined ? (
+        {url !== undefined && (
           <div className="mt-2 max-w-md">
             <LinkField key={url} url={url} />
           </div>
-        ) : (
-          <p className="mt-1 text-[13px] text-ink-3">{LINK_NOT_KEPT}</p>
         )}
       </td>
       <td className="hidden px-3 py-3 text-[13px] text-ink-3 md:table-cell">{formatWhen(share.created_at)}</td>

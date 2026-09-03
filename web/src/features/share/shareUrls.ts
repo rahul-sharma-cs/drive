@@ -106,3 +106,9 @@ export function useShareUrl(shareId: string): string | undefined {
   useSyncExternalStore(subscribe, () => version)
   return urls.get(shareId)
 }
+
+/** The same lookup over any id, for a list deciding something about all its rows at once. */
+export function useShareUrlLookup(): (shareId: string) => string | undefined {
+  useSyncExternalStore(subscribe, () => version)
+  return (shareId) => urls.get(shareId)
+}
