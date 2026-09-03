@@ -80,6 +80,7 @@ const rows = () => screen.getAllByTestId('share-row')
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
   shareUrls.clear()
   toast.dismiss()
 })
@@ -211,6 +212,29 @@ describe('the actions', () => {
     await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1))
     expect(calls.find((c) => c.method === 'PATCH')!.body).toEqual({ action: 'regenerate' })
     await waitFor(() => expect((within(rows()[0]).getByLabelText('Link') as HTMLInputElement).value).toBe(URL_2))
+  })
+
+  it('never carries Copied from the old link over to the new one', async () => {
+    const URL_2 = 'https://drive.example/s/fedcba9876543210fedcba9876543210fedcba98765'
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn(() => Promise.resolve()) }, configurable: true })
+    shareUrls.set('s1', URL_1)
+    renderList([
+      { path: '/api/shares', body: { items: [share()], next_cursor: null } },
+      { method: 'PATCH', path: '/api/shares/s1', body: { share: share(), url: URL_2 } },
+    ])
+
+    await screen.findByRole('link', { name: 'notes.txt' })
+    await userEvent.click(within(rows()[0]).getByRole('button', { name: 'Copy link' }))
+    expect(await within(rows()[0]).findByRole('button', { name: 'Copied' })).toBeTruthy()
+
+    // New link, confirmed, inside the two seconds Copied would otherwise stand.
+    await userEvent.click(within(rows()[0]).getByRole('button', { name: 'New link' }))
+    const ask = await screen.findByRole('dialog', { name: 'Make a new link?' })
+    await userEvent.click(within(ask).getByRole('button', { name: 'New link' }))
+
+    await waitFor(() => expect((within(rows()[0]).getByLabelText('Link') as HTMLInputElement).value).toBe(URL_2))
+    expect(within(rows()[0]).getByRole('button', { name: 'Copy link' })).toBeTruthy()
+    expect(within(rows()[0]).queryByRole('button', { name: 'Copied' })).toBeNull()
   })
 
   it('Stop sharing asks, then revokes and the row leaves', async () => {

@@ -39,6 +39,19 @@ describe('the stored copy', () => {
     expect(reloaded.get('s2')).toBe(URL_2)
   })
 
+  it('is merged on every write, so two tabs minting links keep both', async () => {
+    // Both tabs open before either link exists, so each holds only its own.
+    const tabA = await fresh()
+    const tabB = await fresh()
+    tabA.set('s1', URL_1)
+    tabB.set('s2', URL_2)
+
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ s1: URL_1, s2: URL_2 })
+    const reloaded = await fresh()
+    expect(reloaded.get('s1')).toBe(URL_1)
+    expect(reloaded.get('s2')).toBe(URL_2)
+  })
+
   it('is removed by clear, so the next load holds nothing', async () => {
     const before = await fresh()
     before.set('s1', URL_1)

@@ -9,16 +9,20 @@
  * and `/shared`'s do not share an ancestor below the router.
  *
  * The map is mirrored to `localStorage` so that a reload comes back to it:
- * read once when the module loads, written on every `set`, removed on
- * `clear`. Every touch of storage sits in a `try/catch` — private mode, a
- * full store, no storage at all — and degrades to the in-memory map, which is
- * what there was before. The owner's own browser holding the owner's own
- * links is the clipboard's posture; the server-side posture (hash only) is
- * unchanged, so a database leak still leaks no link.
+ * read once when the module loads, merged into the stored map on every `set`
+ * (two tabs minting links each hold only their own, and the second to write
+ * must not erase the first's), removed on `clear`. Every touch of storage
+ * sits in a `try/catch` — private mode, a full store, no storage at all — and
+ * degrades to the in-memory map, which is what there was before. The owner's
+ * own browser holding the owner's own links is the clipboard's posture; the
+ * server-side posture (hash only) is unchanged, so a database leak still
+ * leaks no link.
  *
  * A share URL is a credential, so `AccountMenu` empties this wherever it
  * empties the query cache on sign-out — and emptying it removes the stored
- * copy too.
+ * copy too. A sign-out that did not happen in this browser (a lapsed session,
+ * "Sign out everywhere" from another device) arrives as a 401 on `/auth/me`,
+ * and `useMe` empties it there.
  */
 
 import { useSyncExternalStore } from 'react'
@@ -41,7 +45,10 @@ function load(): Map<string, string> {
 
 function persist() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(urls)))
+    // What another tab has kept since this one loaded, with this tab's on top.
+    const merged = load()
+    for (const [id, url] of urls) merged.set(id, url)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(merged)))
   } catch {
     // Nowhere to keep it: this tab still holds the URL for as long as it lives.
   }

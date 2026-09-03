@@ -132,7 +132,7 @@ function ShareRow({ share, commands }: { share: Share; commands: ShareCommands }
         </div>
         {url !== undefined ? (
           <div className="mt-2 max-w-md">
-            <LinkField url={url} />
+            <LinkField key={url} url={url} />
           </div>
         ) : (
           <p className="mt-1 text-[13px] text-ink-3">{LINK_NOT_KEPT}</p>

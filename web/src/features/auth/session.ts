@@ -16,6 +16,7 @@
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 
 import { ApiError, me, type Me } from '../../lib/api'
+import { shareUrls } from '../share/shareUrls'
 
 export const meKey = ['me'] as const
 
@@ -28,7 +29,14 @@ export function useMe() {
       } catch (e) {
         // Anonymous is an answer, not a failure: 401 is what the server says
         // to a browser with no cookie, and it must not surface as an error.
-        if (e instanceof ApiError && e.status === 401) return null
+        if (e instanceof ApiError && e.status === 401) {
+          // No session in this browser means no share links kept in it. This
+          // is the one place a sign-out that happened elsewhere — the session
+          // lapsing, "Sign out everywhere" from another device — reaches this
+          // browser, and the in-browser sign-outs already clear on their own.
+          shareUrls.clear()
+          return null
+        }
         throw e
       }
     },

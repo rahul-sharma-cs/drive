@@ -106,7 +106,7 @@ function Existing({ share, commands, onEdit }: { share: Share; commands: ReturnT
 
       {url !== undefined ? (
         <div className="flex flex-col gap-2">
-          <LinkField url={url} />
+          <LinkField key={url} url={url} />
           <p className="text-[13px] text-ink-3">
             Drive keeps this link only in this browser — copy it somewhere safe. You can make a new link any time.
           </p>
@@ -152,6 +152,9 @@ const COPIED_MS = 2_000
  * change is announced. Where the clipboard is not there or refuses, the text
  * is selected and the button becomes a hint — the person copies it the way
  * they would anywhere else, and nothing has claimed to have done it for them.
+ *
+ * Both callers key it on the URL, so a replaced link starts over: neither
+ * Copied nor the hint stands beside a URL nobody has copied.
  */
 export function LinkField({ url }: { url: string }) {
   const input = useRef<HTMLInputElement>(null)

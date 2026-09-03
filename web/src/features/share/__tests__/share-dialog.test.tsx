@@ -416,6 +416,24 @@ describe('Copy', () => {
     expect(within(dialog).queryByRole('button', { name: 'Copied' })).toBeNull()
   })
 
+  it('drops Copied the moment the link under it is replaced', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn(() => Promise.resolve()) }, configurable: true })
+    shareUrls.set('s1', URL_1)
+    renderFolder([{ path: FOR_NODE, body: { items: [share()], next_cursor: null } }])
+
+    const dialog = await openDialog()
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Copy link' }))
+    expect(await within(dialog).findByRole('button', { name: 'Copied' })).toBeTruthy()
+
+    // A new link lands — what New link's confirm does once the server answers
+    // — well inside the two seconds. Nobody has copied this one.
+    act(() => shareUrls.set('s1', URL_2))
+
+    expect((within(dialog).getByLabelText('Link') as HTMLInputElement).value).toBe(URL_2)
+    expect(within(dialog).getByRole('button', { name: 'Copy link' })).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: 'Copied' })).toBeNull()
+  })
+
   it('selects the URL and swaps the button for a hint where there is no clipboard', async () => {
     noClipboard()
     shareUrls.set('s1', URL_1)
@@ -536,6 +554,28 @@ describe('the URLs this tab holds', () => {
 
     await screen.findByText('login')
     expect(shareUrls.get('s1')).toBeUndefined()
+  })
+
+  it('are emptied, stored copy included, when the server says there is no session', async () => {
+    // A session that lapsed, or was ended by "Sign out everywhere" on another
+    // device: no sign-out was clicked in this browser, so nothing else clears
+    // the links it kept — and the next load is told 401 by /auth/me.
+    shareUrls.set('s1', URL_1)
+    expect(localStorage.getItem('drive.share-urls')).not.toBeNull()
+    stubFetch([{ path: '/api/auth/me', status: 401, body: { code: 'unauthorized', message: 'sign in' } }])
+    renderApp(
+      <Routes>
+        <Route element={<RequireAuth />}>
+          <Route path="/" element={<p>inside</p>} />
+        </Route>
+        <Route path="/login" element={<p>login</p>} />
+      </Routes>,
+    )
+
+    await screen.findByText('login')
+    expect(screen.queryByText('inside')).toBeNull()
+    expect(shareUrls.get('s1')).toBeUndefined()
+    expect(localStorage.getItem('drive.share-urls')).toBeNull()
   })
 
   it('are emptied by a password reset completed in a signed-in tab', async () => {
