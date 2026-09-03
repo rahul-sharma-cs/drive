@@ -26,6 +26,7 @@ One Go binary serves the API and the React app. File bytes never pass through it
 - **Sortable columns and folder counts.** Name, Modified or Size, either direction, with folders always ranked above files; the sort lives in the URL, so a sorted folder survives a reload and can be handed to somebody else. A folder row says how many things are in it rather than pretending to have a size.
 - **A trash that empties.** Select rows or take the whole page, then restore or delete forever in one command; a row that can't go back because something already holds its name says so and stays put. Empty trash takes everything, not just what's on screen, and names the count when it has one — it's the one action here that can't be walked back.
 - **Previews** for images, video, audio, text and PDF, opened by clicking a file's name — the viewer is a URL, so it's linkable, and Back closes it. Bytes come straight from the object store over a short-lived link that expires and is quietly replaced while the viewer is open. Which types may be shown inline is decided by an allowlist on the *server*, never by the type the browser declared at upload: SVG and HTML are refused outright and get an honest "no preview, here's the download" card instead of a script running on the store's origin. No thumbnails — the list shows type icons, not the file itself.
+- **Share links** — one link per file, anyone with it can open; optional password, expiry and download limit; revoke or replace it any time; recipients preview images, video, audio and text in the page and download anything.
 - **Garbage collection** of unreferenced blobs and abandoned multipart uploads, on an in-process hourly ticker with a pass at startup.
 - **Storage limits** that actually bind: a per-file maximum, a per-user quota, and a service-wide stored-bytes cap checked before a session is created. On the deployment above those are 2 GB, 3 GB and 8 GB — the last one is the object store's spend control, since the store itself has none.
 
@@ -33,12 +34,12 @@ One Go binary serves the API and the React app. File bytes never pass through it
 
 Named plainly, because a portfolio project that overstates itself is worse than a small one:
 
-- **No sharing.** No share links, no public pages, no permissions beyond "the owner". The schema has tables for it; there are no endpoints and no UI.
+- **No restricted sharing yet:** links are 'anyone with the link'. No folder links. No permissions beyond the owner and a link holder.
 - **No thumbnails.** The list shows a type icon; previews open the file itself.
 - **No grid view.**
 - **No mobile app, no CLI, no public API tokens.**
 
-Sharing is the next thing worth building. Nothing above is stubbed or half-wired — it is simply not there.
+Restricted sharing — a link that only named addresses can open — is the next thing worth building. Nothing above is stubbed or half-wired — it is simply not there.
 
 ## How the resume actually works
 
