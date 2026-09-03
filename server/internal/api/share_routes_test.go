@@ -706,6 +706,7 @@ type shareMetaBody struct {
 	RequiresPassword bool       `json:"requires_password"`
 	ExpiresAt        *time.Time `json:"expires_at"`
 	Exhausted        bool       `json:"exhausted"`
+	Session          bool       `json:"session"`
 	Preview          bool       `json:"preview"`
 }
 
@@ -737,6 +738,9 @@ func TestShareMeta(t *testing.T) {
 	if meta.RequiresPassword || meta.Exhausted || !meta.Preview {
 		t.Errorf("meta = %+v, want passwordless, not exhausted, previewable", meta)
 	}
+	if meta.Session {
+		t.Error("session = true with no cookie")
+	}
 	if meta.ExpiresAt == nil || !meta.ExpiresAt.Equal(until) {
 		t.Errorf("meta.expires_at = %v, want %v", meta.ExpiresAt, until)
 	}
@@ -757,6 +761,71 @@ func TestShareMeta(t *testing.T) {
 	nodeDecode(t, rec, &meta)
 	if !meta.RequiresPassword {
 		t.Error("requires_password = false on a password share")
+	}
+	if meta.Session {
+		t.Error("session = true on a password share nobody has passed")
+	}
+
+	// session is the cookie RESOLVING to a live session of this share, not
+	// the cookie being there: true after /session on the open link and after
+	// the right password on the gated one; false for one share's cookie at
+	// the other, under its own name or forged under this share's; false
+	// again once a password change has ended the sessions. Reading it sets
+	// nothing, slides nothing and logs nothing.
+	metaWith := func(tok string, cookies ...*http.Cookie) shareMetaBody {
+		t.Helper()
+		rec := shareDo(t, h, http.MethodGet, "/api/s/"+tok+"/meta", nil, cookies...)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /meta with a cookie: status %d, body %s", rec.Code, rec.Body.String())
+		}
+		if n := len(rec.Result().Cookies()); n != 0 {
+			t.Errorf("/meta with a cookie set %d cookies, want none", n)
+		}
+		var m shareMetaBody
+		nodeDecode(t, rec, &m)
+		return m
+	}
+	sessionExpiry := func(shareID uuid.UUID) time.Time {
+		t.Helper()
+		var at time.Time
+		if err := pool.QueryRow(ctx, `SELECT expires_at FROM share_guest_sessions WHERE share_id = $1`, shareID).Scan(&at); err != nil {
+			t.Fatalf("reading the session's expiry: %v", err)
+		}
+		return at
+	}
+	openCookie := shareMint(t, h, token, created.Share.ID)
+	openExpiry := sessionExpiry(created.Share.ID)
+	if m := metaWith(token, openCookie); !m.Session {
+		t.Error("session = false after /session on the passwordless link")
+	}
+	if got := sessionExpiry(created.Share.ID); !got.Equal(openExpiry) {
+		t.Errorf("/meta slid the session (%v -> %v)", openExpiry, got)
+	}
+	if n := shareAccessCount(t, pool, created.Share.ID, share.ActionView); n != 1 {
+		t.Errorf("%d view rows after /meta with a cookie, want the mint's 1", n)
+	}
+	pwToken := shareToken(t, pwResp.URL)
+	rec = shareDo(t, h, http.MethodPost, "/api/s/"+pwToken+"/password", map[string]any{"password": authTestPassword})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("passing the gate: %d %s", rec.Code, rec.Body.String())
+	}
+	pwCookie := shareGuestCookie(t, rec, pwResp.Share.ID)
+	if m := metaWith(pwToken, pwCookie); !m.Session {
+		t.Error("session = false after the right password on the gated link")
+	}
+	if m := metaWith(pwToken, openCookie); m.Session {
+		t.Error("session = true for the open link's cookie presented at the gated one")
+	}
+	forged := &http.Cookie{Name: pwCookie.Name, Value: openCookie.Value}
+	if m := metaWith(pwToken, forged); m.Session {
+		t.Error("session = true for the open link's session forged under the gated link's cookie name")
+	}
+	if rec := authDo(t, h, http.MethodPatch, "/api/shares/"+pwResp.Share.ID.String(),
+		map[string]any{"expires_at": nil, "max_downloads": nil, "password": "another password"}, owner.Cookie); rec.Code != http.StatusOK {
+		t.Fatalf("changing the password: %d %s", rec.Code, rec.Body.String())
+	}
+	if m := metaWith(pwToken, pwCookie); m.Session {
+		t.Error("session = true after a password change ended the sessions")
 	}
 
 	// The five identical 404s: four dead states with a share row, each owed
@@ -979,11 +1048,19 @@ func TestSharePassword(t *testing.T) {
 	if err != nil || spent != 1 {
 		t.Errorf("budget for the key = (%d, %v), want 1 spent", spent, err)
 	}
+	spentShare, err := auth.Count(ctx, pool, auth.ScopeSharePasswordShare, id.String(), auth.SharePasswordFailWindow)
+	if err != nil || spentShare != 1 {
+		t.Errorf("budget for the share = (%d, %v), want 1 spent", spentShare, err)
+	}
 
-	// Right, inside the window but under the limit: a session and one view.
+	// Right, inside the window but under the limit: a session and one view,
+	// and neither budget refunded.
 	rec = shareDo(t, h, http.MethodPost, path, map[string]any{"password": authTestPassword})
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("the right password: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if n, err := auth.Count(ctx, pool, auth.ScopeSharePasswordShare, id.String(), auth.SharePasswordFailWindow); err != nil || n != 1 {
+		t.Errorf("budget for the share after the right password = (%d, %v), want still 1", n, err)
 	}
 	cookie := shareGuestCookie(t, rec, id)
 	if n := shareGuests(t, pool, id); n != 1 {
@@ -1049,6 +1126,37 @@ func TestSharePassword(t *testing.T) {
 	}
 	rec = shareDo(t, h, http.MethodPost, "/api/s/"+shareToken(t, phcResp.URL)+"/password", map[string]any{"password": authTestPassword})
 	nodeWant(t, rec, http.StatusTooManyRequests, CodeRateLimited)
+
+	// The per-share ceiling: wrong guesses on one link from any addresses,
+	// 100 in the window, lock its gate for every address. One under it, a
+	// fresh address with the right password is let in; at it, another fresh
+	// address with the right password is 429 with a denied row and no hash
+	// run -- the malformed hash again, so a Verify would have been a 500.
+	ceilFile, _ := nodeMkFile(t, pool, owner, owner.RootID, "gate-ceiling.txt")
+	ceilResp := sharePost(t, h, owner, map[string]any{"node_id": ceilFile, "password": authTestPassword})
+	ceilPath := "/api/s/" + shareToken(t, ceilResp.URL) + "/password"
+	ceilID := ceilResp.Share.ID
+	for range auth.SharePasswordShareFailLimit - 1 {
+		if _, err := auth.Bump(ctx, pool, auth.ScopeSharePasswordShare, ceilID.String(), auth.SharePasswordFailWindow); err != nil {
+			t.Fatalf("seeding the per-share budget: %v", err)
+		}
+	}
+	rec = abuseDo(t, h, http.MethodPost, ceilPath, map[string]any{"password": authTestPassword}, "198.51.100.10")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("one under the per-share ceiling: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if _, err := auth.Bump(ctx, pool, auth.ScopeSharePasswordShare, ceilID.String(), auth.SharePasswordFailWindow); err != nil {
+		t.Fatalf("seeding the per-share budget: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE shares SET password_hash = 'not-a-phc-hash' WHERE id = $1`, ceilID); err != nil {
+		t.Fatalf("breaking the hash: %v", err)
+	}
+	deniedBefore := shareAccessCount(t, pool, ceilID, share.ActionDenied)
+	rec = abuseDo(t, h, http.MethodPost, ceilPath, map[string]any{"password": authTestPassword}, "198.51.100.11")
+	nodeWant(t, rec, http.StatusTooManyRequests, CodeRateLimited)
+	if n := shareAccessCount(t, pool, ceilID, share.ActionDenied); n != deniedBefore+1 {
+		t.Errorf("%d denied rows after the per-share lockout, want %d", n, deniedBefore+1)
+	}
 
 	// A passwordless link given a password is a 422, not a hash run.
 	openFile, _ := nodeMkFile(t, pool, owner, owner.RootID, "gate-open.txt")

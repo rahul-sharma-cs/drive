@@ -25,6 +25,11 @@ const (
 	// share_id:ip -- the share alone would let anyone holding the link lock
 	// its real recipient out.
 	ScopeSharePassword = "share_password"
+	// ScopeSharePasswordShare counts the same wrong passwords keyed by the
+	// share alone. The per-address key bounds one address; this one bounds
+	// every address together, so a guesser rotating addresses still meets a
+	// ceiling per link.
+	ScopeSharePasswordShare = "share_password_share"
 	// ScopeEmailSend counts outbound mail, keyed by recipient address. It is
 	// signup's budget; the two purposes below have their own.
 	ScopeEmailSend = "email_send"
@@ -70,6 +75,14 @@ const (
 	// key so guessing at one link does not lock every link.
 	SharePasswordFailLimit  = 10
 	SharePasswordFailWindow = 15 * time.Minute
+
+	// The ceiling for the share as a whole over the same window, whatever
+	// addresses the guesses came from: 100 in 15 minutes bounds a rotating
+	// guesser to ~9,600 tries a day per link and sits far above anything a
+	// real recipient mistypes. The residual is accepted and named: anyone
+	// holding the link can lock its gate for a window by failing 100 times,
+	// and the owner's answer is a new link.
+	SharePasswordShareFailLimit = 100
 
 	EmailSendLimit  = 5
 	EmailSendWindow = time.Hour

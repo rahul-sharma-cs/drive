@@ -564,9 +564,11 @@ func (s *Server) mintOrReuseGuest(w http.ResponseWriter, r *http.Request, shareI
 
 // shareMetaResponse is GET /meta's body: what the page shows before any
 // gate. preview is the server's answer for this file on a share page -- the
-// allowlist minus PDF -- and exhausted is the cap's state for THIS browser,
-// so the person who legitimately spent the one allowed download is not
-// locked out of their own page by a reload.
+// allowlist minus PDF -- and the two per-browser answers: session, whether
+// this browser already holds a live guest session of this share (a reload
+// of a gated page skips the gate), and exhausted, the cap's state for THIS
+// browser, so the person who legitimately spent the one allowed download is
+// not locked out of their own page by a reload.
 type shareMetaResponse struct {
 	Name             string     `json:"name"`
 	Size             int64      `json:"size"`
@@ -574,27 +576,29 @@ type shareMetaResponse struct {
 	RequiresPassword bool       `json:"requires_password"`
 	ExpiresAt        *time.Time `json:"expires_at"`
 	Exhausted        bool       `json:"exhausted"`
+	Session          bool       `json:"session"`
 	Preview          bool       `json:"preview"`
 }
 
-// GET /api/s/{token}/meta. It never sets a cookie and never logs a view --
-// the page's own load must cost the visitor nothing -- but it may READ the
-// guest cookie, because exhausted is a per-browser answer.
+// GET /api/s/{token}/meta. It never sets a cookie, never slides one and
+// never logs a view -- the page's own load must cost the visitor nothing --
+// but it may READ the guest cookie, because session and exhausted are
+// per-browser answers. One lookup serves both: session is the cookie
+// resolving to a live session of this share, not the cookie being there.
 func (s *Server) shareMeta(w http.ResponseWriter, r *http.Request) {
 	res, ok := s.liveShare(w, r)
 	if !ok {
 		return
 	}
+	g, _, reason, err := s.guestFrom(r, res.ShareID)
+	if err != nil {
+		s.shareFailed(w, r, "reading the guest session", err)
+		return
+	}
+	session := reason == ""
 	exhausted := res.MaxDownloads != nil && res.DownloadCount >= *res.MaxDownloads
-	if exhausted {
-		g, _, reason, err := s.guestFrom(r, res.ShareID)
-		if err != nil {
-			s.shareFailed(w, r, "reading the guest session", err)
-			return
-		}
-		if reason == "" && g.DownloadedAt != nil {
-			exhausted = false
-		}
+	if exhausted && session && g.DownloadedAt != nil {
+		exhausted = false
 	}
 	_, preview := upload.SharePreviewContentType(res.Mime)
 	WriteJSON(w, http.StatusOK, shareMetaResponse{
@@ -604,6 +608,7 @@ func (s *Server) shareMeta(w http.ResponseWriter, r *http.Request) {
 		RequiresPassword: res.PasswordHash != nil,
 		ExpiresAt:        res.ExpiresAt,
 		Exhausted:        exhausted,
+		Session:          session,
 		Preview:          preview,
 	})
 }
@@ -623,11 +628,13 @@ func (s *Server) shareSession(w http.ResponseWriter, r *http.Request) {
 	s.mintOrReuseGuest(w, r, res.ShareID)
 }
 
-// POST /api/s/{token}/password. The durable budget is consulted before
-// Argon2 runs -- a locked caller must not cost a hash -- and it is keyed
-// share_id:ip: keyed on the share alone, anyone holding a public link could
-// lock its real recipient out for as long as they cared to keep sending
-// wrong passwords.
+// POST /api/s/{token}/password. Two durable budgets are consulted before
+// Argon2 runs -- a locked caller must not cost a hash -- and a wrong guess
+// charges both. share_id:ip is the recipient's: keyed on the share alone,
+// anyone holding a public link could lock its real recipient out with ten
+// wrong passwords. share_id alone is the ceiling: without it a guesser
+// rotating addresses meets no per-link bound at all. A right guess clears
+// neither -- the windows lapse on their own.
 func (s *Server) sharePassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Password string `json:"password"`
@@ -646,19 +653,26 @@ func (s *Server) sharePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	key := res.ShareID.String() + ":" + ClientIP(r)
-	allowed, err := auth.Allowed(ctx, s.DB, auth.ScopeSharePassword, key,
-		auth.SharePasswordFailLimit, auth.SharePasswordFailWindow)
-	if err != nil {
-		s.shareFailed(w, r, "checking the password budget", err)
-		return
+	budgets := []struct {
+		scope, key string
+		limit      int
+	}{
+		{auth.ScopeSharePasswordShare, res.ShareID.String(), auth.SharePasswordShareFailLimit},
+		{auth.ScopeSharePassword, res.ShareID.String() + ":" + ClientIP(r), auth.SharePasswordFailLimit},
 	}
-	if !allowed {
-		shareRefused(r, &res.ShareID, shareReasonLocked)
-		s.shareAccess(r, res.ShareID, share.ActionDenied)
-		WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
-			"too many attempts. Try again in a few minutes.")
-		return
+	for _, b := range budgets {
+		allowed, err := auth.Allowed(ctx, s.DB, b.scope, b.key, b.limit, auth.SharePasswordFailWindow)
+		if err != nil {
+			s.shareFailed(w, r, "checking the password budget", err)
+			return
+		}
+		if !allowed {
+			shareRefused(r, &res.ShareID, shareReasonLocked)
+			s.shareAccess(r, res.ShareID, share.ActionDenied)
+			WriteErr(w, r, http.StatusTooManyRequests, CodeRateLimited,
+				"too many attempts. Try again in a few minutes.")
+			return
+		}
 	}
 
 	right, err := s.Argon2.Verify(*res.PasswordHash, req.Password)
@@ -675,8 +689,10 @@ func (s *Server) sharePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !right {
-		if _, err := auth.Bump(ctx, s.DB, auth.ScopeSharePassword, key, auth.SharePasswordFailWindow); err != nil {
-			LoggerFrom(ctx).Error("charging the share password budget", "error", err)
+		for _, b := range budgets {
+			if _, err := auth.Bump(ctx, s.DB, b.scope, b.key, auth.SharePasswordFailWindow); err != nil {
+				LoggerFrom(ctx).Error("charging the share password budget", "error", err, "scope", b.scope)
+			}
 		}
 		shareRefused(r, &res.ShareID, shareReasonBadPassword)
 		s.shareAccess(r, res.ShareID, share.ActionDenied)
