@@ -410,31 +410,48 @@ func (s *Store) ReuseGuest(ctx context.Context, guestID uuid.UUID) (Guest, error
 }
 
 // CountOnce spends one download on a guest session and reports whether the
-// cap refused it. It is the cap transaction -- the two statements, behind a
-// lock that makes their answers unambiguous:
+// cap refused it. It is the cap transaction -- the two statements, behind
+// locks that make their answers unambiguous:
 //
-//  0. lock the session row FOR UPDATE, live and belonging to this share. No
+//  0. lock the shares row FOR UPDATE. The lock order is shares, then the
+//     session: that is the order Settings, Revoke, Regenerate and purge take
+//     (the shares row, then deleteGuests or the cascade), and taking the
+//     session first would let a download landing in the same instant as a
+//     Stop sharing deadlock against it -- each holding the row the other
+//     wants, one of them a 500 after deadlock_timeout. Queued behind the
+//     revoke instead, this transaction finds the session gone. No shares row
+//     is ErrNotFound: the share was purged, and its sessions with it;
+//  1. lock the session row FOR UPDATE, live and belonging to this share. No
 //     row is ErrNotFound: it lapsed or was deleted between the handler's
 //     read and this call, and a download issued against it would never be
 //     counted;
-//  1. a row already stamped is a re-issue -- reloads, Range re-requests and
+//  2. a row already stamped is a re-issue -- reloads, Range re-requests and
 //     double clicks never count twice -- and nothing is written;
-//  2. otherwise stamp the session's downloaded_at and add one to the share's
+//  3. otherwise stamp the session's downloaded_at and add one to the share's
 //     download_count, only while it is under max_downloads -- and zero rows
 //     there rolls both back, so a refused session keeps its NULL stamp and
 //     can try again after the owner raises the cap.
 //
 // Two sessions racing for the last slot serialise on the shares row, and the
-// loser re-evaluates the predicate against the winner's count. The lock is
-// what tells "already stamped" from "gone": on the stamp alone both are zero
-// rows, and a session the owner's revoke had just deleted would read as
-// counted.
+// loser re-evaluates the predicate against the winner's count. The session
+// lock is what tells "already stamped" from "gone": on the stamp alone both
+// are zero rows, and a session the owner's revoke had just deleted would
+// read as counted.
 func (s *Store) CountOnce(ctx context.Context, sessionID, shareID uuid.UUID) (exhausted bool, err error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("share: counting download: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
+
+	const lockShare = `SELECT 1 FROM shares WHERE id = $1 FOR UPDATE`
+	var one int
+	if err := tx.QueryRow(ctx, lockShare, shareID).Scan(&one); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, ErrNotFound
+		}
+		return false, fmt.Errorf("share: counting download: %w", err)
+	}
 
 	const lock = `
 		SELECT downloaded_at FROM share_guest_sessions

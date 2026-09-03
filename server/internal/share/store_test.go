@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rahul-sharma-cs/drive/server/internal/auth"
@@ -177,6 +178,16 @@ func (f *fixture) mint(shareID uuid.UUID) (string, Guest) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// sqlState is the SQLSTATE behind err, or "" when no Postgres error is in
+// its chain.
+func sqlState(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return ""
+}
 
 // ---------------------------------------------------------------- resolve ----
 
@@ -476,6 +487,68 @@ func TestCountOnceStopsAtTheCapAndCountsASessionOnce(t *testing.T) {
 			t.Errorf("download_count = %d, want 0 -- a gone session was counted", n)
 		}
 	})
+}
+
+// The cap transaction takes its locks in the order every other writer does
+// -- the shares row, then the session rows -- so a download landing in the
+// same instant as a revoke queues behind it rather than deadlocking against
+// it. Tx A is the revoke, held open across CountOnce's start: with the
+// shares row first, CountOnce blocks on it, A ends the sessions and commits,
+// and CountOnce then finds no session -- ErrNotFound, and no 40P01 on either
+// side. With the session row first, A's DELETE waits on CountOnce while
+// CountOnce waits on A, and Postgres aborts one of them after
+// deadlock_timeout.
+func TestCountOnceQueuesBehindARevoke(t *testing.T) {
+	f := newFixture(t)
+	fileID, _ := f.file("racing.txt")
+	sh, _ := f.create(fileID, Settings{})
+	_, g := f.mint(sh.ID)
+
+	a, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		t.Fatalf("beginning the revoke: %v", err)
+	}
+	defer a.Rollback(f.ctx) //nolint:errcheck // rollback after commit is a no-op
+	if _, err := a.Exec(f.ctx, `UPDATE shares SET revoked_at = now() WHERE id = $1`, sh.ID); err != nil {
+		t.Fatalf("revoking in A: %v", err)
+	}
+
+	type result struct {
+		exhausted bool
+		err       error
+	}
+	done := make(chan result, 1)
+	go func() {
+		exhausted, err := f.store.CountOnce(f.ctx, g.ID, sh.ID)
+		done <- result{exhausted, err}
+	}()
+
+	// CountOnce gets time to reach its first lock and block there. It cannot
+	// return while A holds the shares row.
+	select {
+	case r := <-done:
+		t.Fatalf("CountOnce returned (%v, %v) while the revoke still held the shares row -- it did not queue on it", r.exhausted, r.err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if _, err := a.Exec(f.ctx, `DELETE FROM share_guest_sessions WHERE share_id = $1`, sh.ID); err != nil {
+		t.Fatalf("ending the sessions in A: %v (SQLSTATE %q)", err, sqlState(err))
+	}
+	if err := a.Commit(f.ctx); err != nil {
+		t.Fatalf("committing A: %v (SQLSTATE %q)", err, sqlState(err))
+	}
+
+	select {
+	case r := <-done:
+		if !errors.Is(r.err, ErrNotFound) {
+			t.Fatalf("CountOnce after the revoke = (%v, %v; SQLSTATE %q), want ErrNotFound", r.exhausted, r.err, sqlState(r.err))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("CountOnce did not return within 5 s of the revoke committing")
+	}
+	if n := f.downloadCount(sh.ID); n != 0 {
+		t.Errorf("download_count = %d, want 0 -- a session the revoke ended was counted", n)
+	}
 }
 
 // ----------------------------------------------------------------- guests ----
