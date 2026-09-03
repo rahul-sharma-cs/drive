@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -141,19 +141,27 @@ function downloads(share: Share): string {
   return `${n} ${n === 1 ? 'download' : 'downloads'}`
 }
 
+/** How long the button says Copied before it offers Copy link again. */
+const COPIED_MS = 2_000
+
 /**
  * The URL, read-only, with Copy beside it.
  *
- * Where the clipboard is not there or refuses, the text is selected and the
- * button becomes a hint — the person copies it the way they would anywhere
- * else, and nothing has claimed to have done it for them.
+ * A copy that landed says so on the button itself — Copied, for two seconds —
+ * as well as in the toast, and the field is a polite live region so the
+ * change is announced. Where the clipboard is not there or refuses, the text
+ * is selected and the button becomes a hint — the person copies it the way
+ * they would anywhere else, and nothing has claimed to have done it for them.
  */
 export function LinkField({ url }: { url: string }) {
   const input = useRef<HTMLInputElement>(null)
   const [manual, setManual] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const revert = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(revert.current), [])
 
   return (
-    <div className="flex items-end gap-2">
+    <div aria-live="polite" className="flex items-end gap-2">
       <label className={`${fieldClass} min-w-0 flex-1`}>
         Link
         <Input
@@ -172,15 +180,20 @@ export function LinkField({ url }: { url: string }) {
           variant="outline"
           className="shrink-0"
           onClick={() =>
-            void copyShareUrl(url).then((copied) => {
-              if (copied) return
+            void copyShareUrl(url).then((landed) => {
+              if (landed) {
+                setCopied(true)
+                clearTimeout(revert.current)
+                revert.current = setTimeout(() => setCopied(false), COPIED_MS)
+                return
+              }
               setManual(true)
               input.current?.focus()
               input.current?.select()
             })
           }
         >
-          Copy link
+          {copied ? 'Copied' : 'Copy link'}
         </Button>
       )}
     </div>

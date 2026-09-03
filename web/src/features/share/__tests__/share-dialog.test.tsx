@@ -12,7 +12,7 @@
  */
 
 import { notifyManager } from '@tanstack/react-query'
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { toast, Toaster } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -378,6 +378,42 @@ describe('Copy', () => {
 
     land()
     expect(await screen.findByText('Link copied')).toBeTruthy()
+  })
+
+  it('says Copied on the button for two seconds, then offers Copy link again', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn(() => Promise.resolve()) }, configurable: true })
+    shareUrls.set('s1', URL_1)
+    renderFolder([{ path: FOR_NODE, body: { items: [share()], next_cursor: null } }])
+
+    const dialog = await openDialog()
+    const button = await within(dialog).findByRole('button', { name: 'Copy link' })
+    // The change is announced: the field is a polite live region.
+    expect(button.closest('[aria-live="polite"]')).not.toBeNull()
+
+    // The clock is faked only from here: getting the dialog open waits on real
+    // timers, and from the click on, the settling is done by hand — Testing
+    // Library's own waiting looks for Jest to decide whether time is faked,
+    // and userEvent's own delays would sit on the faked clock, so the click is
+    // the plain event.
+    vi.useFakeTimers()
+    fireEvent.click(button)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(within(dialog).getByRole('button', { name: 'Copied' })).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: 'Copy link' })).toBeNull()
+    expect(screen.getByText('Link copied')).toBeTruthy()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_999)
+    })
+    expect(within(dialog).getByRole('button', { name: 'Copied' })).toBeTruthy()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(within(dialog).getByRole('button', { name: 'Copy link' })).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: 'Copied' })).toBeNull()
   })
 
   it('selects the URL and swaps the button for a hint where there is no clipboard', async () => {
